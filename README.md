@@ -4,7 +4,14 @@
 
 MesoVibe is a free, open-source companion for MapleStory Classic World. It reads the game window the way a stream viewer sees it and shows your EXP per hour, time to level, session history and chat, in a panel beside the game or a small overlay on it.
 
-Download it from the [latest release](https://github.com/danielfang7/MesoVibe/releases/latest): `MesoVibe.dmg` for macOS 12.3 or later on Apple silicon, `MesoVibe-Setup.exe` for Windows 10 (1903) or later. MesoVibe updates itself, and every release lists its files' checksums in `SHA256SUMS`.
+## Download
+
+Get the installer from the [latest release](https://github.com/danielfang7/MesoVibe/releases/latest). It has everything MesoVibe needs, and MesoVibe updates itself after that.
+
+- **macOS** 12.3 or later, Apple silicon: open `MesoVibe.dmg` and drag MesoVibe to Applications.
+- **Windows** 10 (1903) or later: run `MesoVibe-Setup.exe`. It isn't code-signed yet, so Windows may warn first: choose "More info", then "Run anyway".
+
+Every release lists its files' checksums in `SHA256SUMS`.
 
 ## Fair play
 
@@ -23,9 +30,9 @@ MesoVibe is not affiliated with or endorsed by Nexon. MapleStory is a trademark 
 - [scripts](scripts/) - build checks, tests and release scripts
 - [web](web/) - the project website
 
-## Usage
+## Building from source
 
-You need Rust stable ([rustup](https://rustup.rs)), Node 24 and pnpm 12. On Windows, also the Visual Studio Build Tools with the C++ workload.
+This is only needed to work on MesoVibe itself. You need Rust stable ([rustup](https://rustup.rs)), Node 24 and pnpm 12. On Windows, also the Visual Studio Build Tools with the C++ workload.
 
 ```sh
 pnpm install
