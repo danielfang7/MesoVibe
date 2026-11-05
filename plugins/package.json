@@ -1,0 +1,15 @@
+{
+  "name": "@mesovibe/plugins",
+  "version": "0.0.0",
+  "private": true,
+  "license": "BSD-2-Clause",
+  "type": "module",
+  "scripts": {
+    "build": "node ../scripts/check-plugin-imports.mjs src && tsc --noEmit -p tsconfig.json && node build.mjs"
+  },
+  "devDependencies": {
+    "@mesovibe/sdk": "workspace:*",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

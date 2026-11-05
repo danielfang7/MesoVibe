@@ -1,0 +1,564 @@
+/* MesoVibe site. Light "web-*" colors by default, the app's
+   colors when the OS is in dark mode. The product pictures always use the app's dark colors. */
+
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("fonts/atkinson-hyperlegible-next.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  src: url("fonts/atkinson-hyperlegible-mono.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Pixelify Sans";
+  src: url("fonts/pixelify-sans.woff2") format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+:root {
+  --paper: #f3f4ef;
+  --ink: #1e1f1b;
+  --ink-muted: #5c5b52;
+  --line: #d6d7cf;
+  --accent: #2f6b53;
+  --on-accent: #f3f4ef;
+  --visited: #6b5b3e;
+  --control-border: #77756a;
+  --panel-edge: transparent;
+
+  /* The app's own colors, for the product pictures. */
+  --app-surface: #1e1f1b;
+  --app-raised: #272822;
+  --app-line: #3a3b34;
+  --app-text: #ece8dc;
+  --app-muted: #a9a596;
+  --app-accent: #8cc5a8;
+  --app-on-accent: #14231b;
+
+  --font-body: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --font-mono: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+  --font-pixel: "Pixelify Sans", var(--font-body);
+  --step: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1e1f1b;
+    --ink: #ece8dc;
+    --ink-muted: #a9a596;
+    --line: #3a3b34;
+    --accent: #8cc5a8;
+    --on-accent: #14231b;
+    --visited: #c9b48a;
+    --panel-edge: #3a3b34;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 1.125rem;
+  line-height: 1.6;
+}
+
+::selection {
+  background: #24302a;
+  color: #ece8dc;
+}
+
+h1,
+h2,
+p,
+ul,
+ol {
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.15em;
+}
+a:visited {
+  color: var(--visited);
+}
+a:focus-visible,
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.icon {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  fill: currentColor;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
+/* Header */
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 72px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.brand:visited {
+  color: var(--ink);
+}
+
+.wordmark {
+  font-family: var(--font-pixel);
+  font-weight: 600;
+  font-size: 1.25rem;
+  letter-spacing: 0.01em;
+}
+
+.header-link,
+.header-link:visited {
+  color: var(--ink);
+  font-weight: 500;
+  font-size: 1rem;
+  text-decoration: none;
+}
+.header-link:hover {
+  text-decoration: underline;
+}
+
+/* Hero */
+
+.hero {
+  padding-block: 64px 72px;
+}
+
+h1 {
+  max-width: 18em;
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.lede {
+  max-width: 34em;
+  margin-top: 16px;
+  color: var(--ink-muted);
+  font-size: 1.25rem;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 24px;
+  margin-top: 32px;
+}
+
+.downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 20px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background-color 80ms ease-out;
+}
+.button.primary,
+.button.primary:visited {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.button.primary:hover {
+  background: color-mix(in srgb, var(--accent) 86%, var(--ink));
+}
+.button.secondary,
+.button.secondary:visited {
+  border-color: var(--control-border);
+  color: var(--ink);
+}
+.button.secondary:hover {
+  background: var(--line);
+}
+
+.source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+.source-link,
+.source-link:visited {
+  color: var(--ink);
+}
+
+.meta {
+  margin-top: 20px;
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+}
+
+/* Features */
+
+.feature-lead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+  gap: 48px 64px;
+  align-items: center;
+  padding-block: 64px;
+  border-top: 1px solid var(--line);
+}
+
+.feature h2 {
+  font-size: 1.375rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.feature-lead h2 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.feature p {
+  max-width: 36em;
+  margin-top: 12px;
+}
+
+.points {
+  max-width: 36em;
+  margin-top: 20px;
+  padding-left: 1.25em;
+  list-style: square;
+}
+.points li + li {
+  margin-top: 8px;
+}
+.points li::marker {
+  color: var(--ink-muted);
+}
+
+.feature-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 48px 64px;
+  padding-block: 64px;
+  border-top: 1px solid var(--line);
+}
+.feature-pair .panel {
+  margin-bottom: 24px;
+}
+
+.chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--control-border);
+  border-radius: 2px;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  vertical-align: 0.2em;
+  white-space: nowrap;
+}
+
+/* Product pictures: the app's own panel, drawn in HTML. */
+
+.panel {
+  position: relative;
+  padding: 16px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  font-size: 1rem;
+  line-height: 1.45;
+  clip-path: var(--step);
+  box-shadow: inset 0 0 0 1px var(--panel-edge);
+}
+
+.panel-label {
+  color: var(--app-muted);
+  font-family: var(--font-pixel);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+  border-bottom: 1px solid var(--app-line);
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 36px;
+  margin: 0 0 -1px;
+  padding: 4px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--app-muted);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: color 80ms ease-out;
+}
+.tab:hover {
+  color: var(--app-text);
+}
+.tab:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
+.tab[aria-selected="true"] {
+  border-bottom-color: var(--app-accent);
+  color: var(--app-text);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The tabs' message lists share one grid cell, so switching tabs never changes the panel's height. */
+.chat-body {
+  display: grid;
+}
+.chat-body > .chat-lines {
+  grid-area: 1 / 1;
+}
+.chat-body > .chat-lines[hidden] {
+  display: flex;
+  visibility: hidden;
+}
+.count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background: var(--app-accent);
+  color: var(--app-on-accent);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+.chat-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 0;
+  list-style: none;
+}
+.chat-lines li {
+  overflow-wrap: anywhere;
+}
+.who {
+  color: var(--app-muted);
+}
+
+/* Same height side by side, so the headings below them line up. */
+.mock-exp,
+.mock-radar {
+  min-height: 188px;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--app-muted);
+  font-size: 0.875rem;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--app-accent);
+}
+
+.rate {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+}
+.rate-number {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.rate-unit {
+  color: var(--app-muted);
+  font-size: 1rem;
+}
+
+.to-level {
+  margin-top: 4px;
+  color: var(--app-muted);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+.bar {
+  height: 6px;
+  margin-top: 12px;
+  background: var(--app-raised);
+  box-shadow: inset 0 0 0 1px var(--app-line);
+}
+.bar span {
+  display: block;
+  height: 100%;
+  background: var(--app-accent);
+}
+
+.channels {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 0;
+  list-style: none;
+}
+.channels li {
+  display: grid;
+  grid-template-columns: 3.25em minmax(0, 1fr) 2ch 3.5em;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.875rem;
+}
+.ch {
+  color: var(--app-muted);
+}
+.track {
+  height: 6px;
+  background: var(--app-raised);
+}
+.track span {
+  display: block;
+  height: 100%;
+  background: var(--app-muted);
+}
+.n {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  text-align: right;
+}
+.note {
+  color: var(--app-accent);
+}
+
+/* Footer */
+
+.site-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-block: 32px 48px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+}
+.site-footer a,
+.site-footer a:visited {
+  color: var(--ink-muted);
+}
+
+/* Small screens */
+
+@media (max-width: 860px) {
+  .feature-lead,
+  .feature-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .feature-lead .panel {
+    max-width: 420px;
+  }
+}
+
+@media (max-width: 560px) {
+  .wrap {
+    padding-inline: 16px;
+  }
+  .site-header {
+    min-height: 64px;
+  }
+  .hero {
+    padding-block: 40px 56px;
+  }
+  h1 {
+    font-size: 2rem;
+  }
+  .lede {
+    font-size: 1.125rem;
+  }
+  .downloads,
+  .button {
+    width: 100%;
+  }
+  .button {
+    justify-content: center;
+  }
+  .feature-lead,
+  .feature-pair {
+    padding-block: 48px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

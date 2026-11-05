@@ -1,0 +1,355 @@
+// Hide the console window on Windows release builds.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+// Only the Tauri CLI embeds the UI. A plain `cargo build --release` would make an app that
+// loads the dev server and shows nothing. tauri-build sets `dev` unless the CLI built us.
+#[cfg(all(dev, not(debug_assertions)))]
+compile_error!("Release builds must go through `pnpm tauri build`, which embeds the UI.");
+
+mod chat;
+mod dock;
+mod engine;
+mod presence;
+mod store;
+mod updater;
+
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use serde::Serialize;
+use serde_json::Value;
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
+
+use engine::{Command, Engine};
+use store::{ChatChannels, Settings, Store};
+
+fn main() {
+    // Tauri creates the windows inside its event loop and panics if that fails, so a
+    // missing WebView2 runtime arrives as a panic, not as the Err below.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        report_fatal_error("MesoVibe stopped because of an error.", &info.to_string());
+        default_hook(info);
+    }));
+    // Started by the login item: no window until the game appears (presence.rs).
+    let background = std::env::args().any(|arg| arg == presence::BACKGROUND_ARG);
+    let app = tauri::Builder::default()
+        // First, so a second MesoVibe hands over to this one before it starts anything: one
+        // engine, one Session Tracker writing the session.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            presence::open_from_event(app);
+        }))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name(presence::LOGIN_ITEM)
+                .arg(presence::BACKGROUND_ARG)
+                .build(),
+        )
+        // Signed updates from GitHub Releases; updater.rs decides when to look and install.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(move |app| {
+            let store = Store::open(app.path().app_data_dir()?);
+            let settings = store.settings();
+            // Nothing is captured before the first-run disclosure is accepted, or in Safe mode.
+            let reading = settings.disclosure_accepted && !settings.safe_mode;
+            // Before the engine starts: it reads the display settings every tick.
+            app.manage(store);
+            app.manage(dock::Latest::default());
+            app.manage(chat::ChatLog::default());
+            app.manage(Engine::start(app.handle().clone(), reading));
+            presence::start(app.handle(), background);
+            // After the store: it waits for the first-run disclosure before its first look.
+            app.manage(updater::Updates::start(app.handle()));
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == dock::PANEL
+            {
+                presence::close_requested(window.app_handle(), api);
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            get_settings,
+            accept_disclosure,
+            set_safe_mode,
+            retry_capture,
+            watch_capture,
+            open_privacy_settings,
+            plugin_storage_get,
+            plugin_storage_set,
+            set_display,
+            share_summary,
+            hud_summary,
+            chat_history,
+            set_chat_overlay,
+            get_startup,
+            set_startup,
+            update_status,
+            check_for_updates,
+            install_update,
+        ])
+        .build(tauri::generate_context!());
+    match app {
+        Ok(app) => app.run(|app, event| {
+            if let RunEvent::ExitRequested { code, api, .. } = &event {
+                presence::exit_requested(app, *code, api);
+            }
+            // The Dock icon, or opening MesoVibe again from Finder while it waits in the tray.
+            #[cfg(target_os = "macos")]
+            {
+                if let RunEvent::Reopen { .. } = event {
+                    presence::open_from_event(app);
+                }
+            }
+        }),
+        Err(error) => {
+            report_fatal_error("MesoVibe could not start.", &error.to_string());
+            std::process::exit(1);
+        }
+    }
+}
+
+// MARK: commands the panel may call (allow-listed in capabilities/default.json)
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppInfo {
+    version: &'static str,
+    os: &'static str,
+    event_schema: u32,
+}
+
+#[tauri::command]
+fn app_info() -> AppInfo {
+    AppInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        os: std::env::consts::OS,
+        event_schema: mesovibe_engine::events::SCHEMA_VERSION,
+    }
+}
+
+#[tauri::command]
+fn get_settings(store: State<'_, Store>) -> Settings {
+    store.settings()
+}
+
+/// The player read the first-run disclosure and chose to start reading, or Safe mode, and
+/// whether MesoVibe opens with the game.
+#[tauri::command]
+fn accept_disclosure(
+    safe_mode: bool,
+    open_with_game: bool,
+    app: AppHandle,
+    store: State<'_, Store>,
+    engine: State<'_, Engine>,
+) -> Result<Settings, String> {
+    let settings = store.update(|s| {
+        s.disclosure_accepted = true;
+        s.safe_mode = safe_mode;
+    })?;
+    engine.send(Command::SetReading(!safe_mode));
+    // Accepted whatever the login item does; Settings shows the switch as it really is.
+    let _ = presence::set_startup(&app, open_with_game);
+    Ok(settings)
+}
+
+/// "Open with MapleStory Classic" (Settings > Reading): the OS login item.
+#[tauri::command]
+fn get_startup(app: AppHandle) -> presence::Startup {
+    presence::startup(&app)
+}
+
+#[tauri::command]
+fn set_startup(on: bool, app: AppHandle) -> Result<presence::Startup, String> {
+    presence::set_startup(&app, on)
+}
+
+/// Where updating stands, for the panel's update line and Settings > About.
+#[tauri::command]
+fn update_status(updates: State<'_, updater::Updates>) -> updater::UpdateStatus {
+    updates.status()
+}
+
+/// "Check now" in Settings > About.
+#[tauri::command]
+fn check_for_updates(updates: State<'_, updater::Updates>) {
+    updates.check_now();
+}
+
+/// "Restart to update": the player's click is the only thing that installs an update. Async, so
+/// replacing the app and restarting run off the main thread.
+#[tauri::command]
+async fn install_update(
+    app: AppHandle,
+    updates: State<'_, updater::Updates>,
+) -> Result<(), String> {
+    updates.install(&app)
+}
+
+#[tauri::command]
+fn set_safe_mode(
+    on: bool,
+    store: State<'_, Store>,
+    engine: State<'_, Engine>,
+) -> Result<Settings, String> {
+    let settings = store.update(|s| s.safe_mode = on)?;
+    engine.send(Command::SetReading(settings.disclosure_accepted && !on));
+    Ok(settings)
+}
+
+#[tauri::command]
+fn retry_capture(engine: State<'_, Engine>) {
+    engine.send(Command::Retry);
+}
+
+/// The "What MesoVibe sees" view opened or closed: thumbnails only flow while it's open.
+#[tauri::command]
+fn watch_capture(on: bool, engine: State<'_, Engine>) {
+    engine.send(Command::Watch(on));
+}
+
+/// Opens the system's Screen Recording settings (macOS), where the player turns MesoVibe on.
+#[tauri::command]
+fn open_privacy_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("There's no capture permission to set on this system.".to_string())
+    }
+}
+
+#[tauri::command]
+fn plugin_storage_get(plugin: String, store: State<'_, Store>) -> Result<Value, String> {
+    store.plugin_get(&plugin)
+}
+
+#[tauri::command]
+fn plugin_storage_set(plugin: String, value: Value, store: State<'_, Store>) -> Result<(), String> {
+    store.plugin_set(&plugin, &value)
+}
+
+/// The player's display choices (Settings > Display). Docking follows them from the engine's
+/// next tick.
+#[tauri::command]
+fn set_display(
+    dock: bool,
+    mini_hud: bool,
+    corner: dock::Corner,
+    store: State<'_, Store>,
+) -> Result<Settings, String> {
+    store.update(|s| {
+        s.dock = dock;
+        s.mini_hud = mini_hud;
+        s.mini_hud_corner = corner;
+    })
+}
+
+/// The panel's latest session summary, passed on to the mini-HUD.
+#[tauri::command]
+fn share_summary(summary: Option<dock::Summary>, app: AppHandle, latest: State<'_, dock::Latest>) {
+    latest.set(summary.clone());
+    let _ = app.emit_to(dock::HUD, "hud://summary", summary);
+}
+
+/// The latest session summary, for a mini-HUD that has just opened (capabilities/hud.json).
+#[tauri::command]
+fn hud_summary(latest: State<'_, dock::Latest>) -> Option<dock::Summary> {
+    latest.get()
+}
+
+/// The Chat Hub's lines so far this run, for a panel or chat overlay that has just opened. They
+/// stay in MesoVibe's own windows.
+#[tauri::command]
+fn chat_history(log: State<'_, chat::ChatLog>) -> Vec<chat::ChatEntry> {
+    log.history()
+}
+
+/// The chat overlay turned on or off, and the chat types it shows. The overlay appears or goes
+/// on the engine's next tick (dock.rs).
+#[tauri::command]
+fn set_chat_overlay(
+    on: bool,
+    channels: ChatChannels,
+    app: AppHandle,
+    store: State<'_, Store>,
+) -> Result<Settings, String> {
+    let settings = store.update(|s| {
+        s.chat_overlay = on;
+        s.chat_overlay_channels = channels;
+    })?;
+    let _ = app.emit_to(
+        dock::CHAT,
+        "chat://channels",
+        settings.chat_overlay_channels,
+    );
+    Ok(settings)
+}
+
+static REPORTED: AtomicBool = AtomicBool::new(false);
+
+/// A release build has no console, so a fatal error (a missing WebView2 runtime, say) would
+/// otherwise vanish. Print it, keep a copy in the app's log folder, and show it on Windows.
+/// Reports once: an error while reporting must not report again.
+fn report_fatal_error(headline: &str, detail: &str) {
+    if REPORTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let message = format!(
+        "{headline}\n\n{detail}\n\n\
+         If this mentions WebView2, install the Microsoft Edge WebView2 Runtime and try again."
+    );
+    // Not eprintln!: it panics if stderr is closed, which would panic inside the hook.
+    let _ = writeln!(std::io::stderr(), "{message}");
+    if let Some(dir) = log_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("last-error.log"), &message);
+    }
+    show_error_box(&message);
+}
+
+fn log_dir() -> Option<std::path::PathBuf> {
+    use std::{env, path::PathBuf};
+    if cfg!(windows) {
+        env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("MesoVibe").join("logs"))
+    } else if cfg!(target_os = "macos") {
+        env::var_os("HOME").map(|dir| PathBuf::from(dir).join("Library/Logs/MesoVibe"))
+    } else {
+        env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|dir| PathBuf::from(dir).join(".local/state")))
+            .map(|dir| dir.join("mesovibe"))
+    }
+}
+
+#[cfg(windows)]
+fn show_error_box(message: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    let wide = |text: &str| {
+        text.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let (text, title) = (wide(message), wide("MesoVibe"));
+    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call; a null owner window is allowed.
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+// macOS and Linux keep stderr and the log file; a WebView failure there is rare.
+#[cfg(not(windows))]
+fn show_error_box(_message: &str) {}

@@ -1,0 +1,16 @@
+{
+  "name": "mesovibe",
+  "private": true,
+  "license": "BSD-2-Clause",
+  "packageManager": "pnpm@12.16.1",
+  "scripts": {
+    "build": "pnpm -r --workspace-concurrency=1 build",
+    "test": "node --test \"scripts/*.test.mjs\"",
+    "check:imports": "node scripts/check-plugin-imports.mjs plugins/src",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "typescript": "^7.0.2"
+  }
+}

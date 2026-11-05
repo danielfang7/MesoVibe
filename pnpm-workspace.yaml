@@ -1,0 +1,8 @@
+packages:
+  - sdk
+  - ui
+  - plugins
+# pnpm 12 refuses to install while a dependency's install script is neither allowed nor denied.
+# esbuild's script checks that its platform binary is in place; plugins/build.mjs depends on it.
+allowBuilds:
+  esbuild: true

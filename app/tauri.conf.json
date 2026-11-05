@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MesoVibe",
+  "identifier": "com.mesovibe.desktop",
+  "build": {
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm --filter @mesovibe/ui dev",
+    "beforeBuildCommand": "pnpm --filter @mesovibe/ui build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "panel",
+        "create": false,
+        "title": "MesoVibe",
+        "width": 360,
+        "height": 720,
+        "minWidth": 300,
+        "maxWidth": 480,
+        "resizable": true,
+        "backgroundThrottling": "disabled"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis"
+    ],
+    "category": "Utility",
+    "shortDescription": "A read-only companion for MapleStory Classic World.",
+    "longDescription": "MesoVibe reads the MapleStory Classic World window the way a stream viewer sees it and shows your EXP per hour and time to level. It never sends input to the game, never reads or writes game memory or files, and never touches network traffic. Not affiliated with or endorsed by Nexon.",
+    "copyright": "Copyright the MesoVibe contributors. BSD-2-Clause.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.3",
+      "hardenedRuntime": true
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDAzODc0Q0FGRUE0MkVBOUYKUldTZjZrTHFyMHlIQXpxeXAwYVJ6bVg4ZjVYNUZ2bklnVkhLYklTVkE3WWFyVU1qdTI0NEFsT3IK",
+      "endpoints": [
+        "https://github.com/danielfang7/MesoVibe/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

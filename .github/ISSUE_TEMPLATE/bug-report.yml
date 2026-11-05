@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in MesoVibe doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start MapleStory Classic World windowed at 1024x768
+        2. Open MesoVibe
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: MesoVibe version
+      description: Shown in Settings > About.
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version and game window size
+      placeholder: Windows 11 24H2, game at 1366x768
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Optional. Crop or blur other players' names and chat.

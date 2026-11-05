@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "hud",
+  "description": "Allow-listed IPC for the mini-HUD window: listening to the engine's status and the session summary, and asking for the latest summary. Nothing else.",
+  "windows": ["hud"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-hud-summary"
+  ]
+}

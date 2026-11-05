@@ -1,0 +1,133 @@
+// The mini-HUD: a small card over a corner of the game, for when the panel has no
+// room beside the game window. It shows the session's EXP/hr, time to level and level progress
+// from the panel's Session Tracker, and a word when the engine can't read. The host places it,
+// keeps it click-through and never lets it take the keyboard (app/src/dock.rs). Every word is a
+// text node, never parsed HTML.
+import { formatCompact, formatDigits, formatMinutes, formatPercent } from "@mesovibe/sdk";
+
+import { h, replace } from "./dom.js";
+import { connectHud } from "./ipc.js";
+import type { HudSummary, Status } from "./ipc.js";
+import { fill } from "./plugins.js";
+
+/** After this long without a reading, the numbers dim, as in the session strip. */
+const STALE_MS = 15_000;
+
+const root = document.getElementById("hud") as HTMLElement;
+
+interface Hud {
+  status: Status | null;
+  summary: HudSummary | null;
+  lastReadAt: number | null;
+}
+
+/** A word for when the numbers can't be trusted right now, in the strip's terms. */
+function problem(status: Status | null): { text: string; tone: "live" | "idle" | "warn" | "danger" } | null {
+  // No status yet: the engine's first tick is on its way, and nothing is wrong.
+  if (status === null) return null;
+  if (!status.reading) return { text: "Not reading", tone: "idle" };
+  switch (status.state) {
+    case "blocked":
+      return { text: "Can't capture the game", tone: "danger" };
+    case "paused":
+    case "off":
+    case "no_game":
+      return { text: "Paused", tone: "idle" };
+    case "capturing":
+      break;
+  }
+  switch (status.unreadable) {
+    case "learning":
+    case "not_calibrated":
+      return { text: "Learning your EXP bar…", tone: "live" };
+    case "hud_not_found":
+    case "no_text":
+    case "unknown_glyph":
+    case "garbled":
+      return { text: "Can't see the EXP bar", tone: "warn" };
+    case "unsupported_size":
+    case "unsupported_scale":
+      return { text: "Can't read this game size", tone: "warn" };
+    default:
+      return null;
+  }
+}
+
+function paint(hud: Hud): void {
+  const { status, summary } = hud;
+  const issue = problem(status);
+  const stale = hud.lastReadAt !== null && (status?.atMs ?? Date.now()) - hud.lastReadAt > STALE_MS;
+  const rate = summary?.expPerHour ?? null;
+  const rows: Node[] = [];
+  rows.push(
+    h(
+      "div",
+      { class: "hud-top" },
+      h("span", { class: `dot ${issue?.tone ?? "live"}`, attrs: { "aria-hidden": "true" } }),
+      rate === null
+        ? h("span", { class: "hud-note" }, issue?.text ?? "Earn EXP to start")
+        : h(
+            "span",
+            { class: "hud-rate-box", attrs: { title: `${formatDigits(rate)} EXP per hour` } },
+            h("span", { class: "number hud-rate" }, formatCompact(rate)),
+            h("span", { class: "hud-unit" }, "EXP/hr"),
+          ),
+    ),
+  );
+  if (rate !== null && issue !== null && issue.tone !== "live") {
+    rows.push(h("p", { class: "hud-line hud-issue" }, issue.text));
+  } else if (summary?.level != null) {
+    const minutes = summary.minutesToLevel;
+    rows.push(
+      h(
+        "p",
+        { class: "hud-line" },
+        minutes === null ? `Lv ${summary.level}` : `Lv ${summary.level} → ${summary.level + 1} in ${formatMinutes(minutes)}`,
+      ),
+    );
+  }
+  if (summary?.pctHundredths != null) {
+    rows.push(
+      h(
+        "div",
+        { class: "hud-progress" },
+        h(
+          "div",
+          {
+            class: "progress",
+            attrs: {
+              role: "progressbar",
+              "aria-label": "Level progress",
+              "aria-valuemin": "0",
+              "aria-valuemax": "100",
+              "aria-valuenow": String(Math.round(summary.pctHundredths / 100)),
+            },
+          },
+          fill(summary.pctHundredths / 10_000),
+        ),
+        h("span", { class: "number" }, formatPercent(summary.pctHundredths)),
+      ),
+    );
+  }
+  const card = h("div", { class: stale ? "hud dim" : "hud", attrs: { role: "status", "aria-label": "MesoVibe" } }, ...rows);
+  replace(root, h("div", { class: "hud-frame" }, card));
+}
+
+async function boot(): Promise<void> {
+  const host = await connectHud();
+  const hud: Hud = { status: null, summary: null, lastReadAt: null };
+  paint(hud);
+  void host.onStatus((status) => {
+    hud.status = status;
+    if (status.exp?.confirmed) hud.lastReadAt = status.atMs;
+    paint(hud);
+  });
+  void host.onSummary((summary) => {
+    hud.summary = summary;
+    paint(hud);
+  });
+  hud.summary = await host.latestSummary();
+  paint(hud);
+}
+
+void boot();

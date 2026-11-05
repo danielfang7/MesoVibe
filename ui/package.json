@@ -1,0 +1,20 @@
+{
+  "name": "@mesovibe/ui",
+  "version": "0.0.0",
+  "private": true,
+  "license": "BSD-2-Clause",
+  "type": "module",
+  "scripts": {
+    "dev": "node copy-plugins.mjs && vite",
+    "build": "node copy-plugins.mjs && tsc --noEmit -p tsconfig.json && vite build"
+  },
+  "devDependencies": {
+    "@mesovibe/plugins": "workspace:*",
+    "@mesovibe/sdk": "workspace:*",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4"
+  }
+}

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MesoVibe: read-only companion for MapleStory Classic World</title>
+  <meta name="description" content="Free, open-source companion for MapleStory Classic World. Whispers, party and friend chat in their own tabs, EXP tracking, and more. It reads your screen and never touches the game.">
+  <link rel="canonical" href="https://mesovibe.com/">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://mesovibe.com/">
+  <meta property="og:title" content="MesoVibe">
+  <meta property="og:description" content="A read-only companion for MapleStory Classic World. Free and open source.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/atkinson-hyperlegible-next.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "MesoVibe",
+    "description": "A read-only companion for MapleStory Classic World.",
+    "applicationCategory": "GameApplication",
+    "operatingSystem": "Windows 10, Windows 11, macOS 12.3 or later",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "license": "https://opensource.org/license/bsd-2-clause",
+    "url": "https://mesovibe.com/"
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header wrap">
+    <a class="brand" href="/" aria-label="MesoVibe home">
+      <img class="mark" src="favicon.svg" alt="" width="32" height="32">
+      <span class="wordmark">MesoVibe</span>
+    </a>
+    <a class="header-link" href="https://github.com/danielfang7/MesoVibe">GitHub</a>
+  </header>
+
+  <main>
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <h1 id="hero-title">A read-only companion for MapleStory Classic&nbsp;World.</h1>
+      <p class="lede">It reads your screen the way a stream viewer would. It never touches the game.</p>
+
+      <div class="actions">
+        <div class="downloads" id="downloads">
+          <!-- Stable "latest" links: each release must upload these exact file names. -->
+          <a class="button primary" data-os="windows" href="https://github.com/danielfang7/MesoVibe/releases/latest/download/MesoVibe-Setup.exe">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1h2v8.6l2.8-2.8 1.4 1.4L8 13.4 2.8 8.2l1.4-1.4L7 9.6V1zM2 14h12v2H2z"/></svg>
+            Download for Windows
+          </a>
+          <a class="button secondary" data-os="mac" href="https://github.com/danielfang7/MesoVibe/releases/latest/download/MesoVibe.dmg">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1h2v8.6l2.8-2.8 1.4 1.4L8 13.4 2.8 8.2l1.4-1.4L7 9.6V1zM2 14h12v2H2z"/></svg>
+            Download for macOS
+          </a>
+        </div>
+        <script src="main.js"></script>
+        <a class="source-link" href="https://github.com/danielfang7/MesoVibe">
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          Read the source on GitHub
+        </a>
+      </div>
+      <p class="meta">Free and open source · Windows 10 or 11 · macOS 12.3 or later</p>
+    </section>
+
+    <section class="feature feature-lead wrap" aria-labelledby="chat-title">
+      <div class="feature-text">
+        <h2 id="chat-title">Never miss a whisper</h2>
+        <p>Megaphones and crowded towns bury the messages meant for you. MesoVibe pulls whispers, party chat and friend chat out of the game's chat box and gives each one its own tab.</p>
+        <ul class="points">
+          <li>Each tab counts what came in while you were away.</li>
+          <li>An optional overlay at the edge of the game shows the newest messages. Clicks pass straight through it.</li>
+          <li>Chat stays in memory on your computer and is gone when you quit.</li>
+        </ul>
+      </div>
+      <div class="panel mock-chat" role="group" aria-label="Example of the Chat view">
+        <p class="panel-label" aria-hidden="true">Chat</p>
+        <div class="tabs" role="tablist" aria-label="Chat types">
+          <button type="button" class="tab" role="tab" id="tab-whispers" aria-controls="chat-whispers" aria-selected="true">Whispers</button>
+          <button type="button" class="tab" role="tab" id="tab-party" aria-controls="chat-party" aria-selected="false" tabindex="-1">Party <span class="count">3<span class="sr-only"> unread</span></span></button>
+          <button type="button" class="tab" role="tab" id="tab-friends" aria-controls="chat-friends" aria-selected="false" tabindex="-1">Friends <span class="count">1<span class="sr-only"> unread</span></span></button>
+        </div>
+        <div class="chat-body">
+          <ol class="chat-lines" id="chat-whispers" role="tabpanel" aria-labelledby="tab-whispers">
+            <li><span class="who">Fernwick&gt;&gt;</span> still need one more for the ant tunnel?</li>
+            <li><span class="who">Fernwick&gt;&gt;</span> i can bring pots</li>
+            <li><span class="who">Fernwick&lt;&lt;</span> yes! omw, ch 4</li>
+            <li><span class="who">Quillbeck&gt;&gt;</span> thanks for the party earlier</li>
+          </ol>
+          <ol class="chat-lines" id="chat-party" role="tabpanel" aria-labelledby="tab-party" hidden>
+            <li><span class="who">Sorrelbee :</span> pots ready, heading left</li>
+            <li><span class="who">Fernwick :</span> need 2 more horns for my quest</li>
+            <li><span class="who">Thistlewren :</span> brb 1 min</li>
+            <li><span class="who">Sorrelbee :</span> np, we'll hold the spot</li>
+          </ol>
+          <ol class="chat-lines" id="chat-friends" role="tabpanel" aria-labelledby="tab-friends" hidden>
+            <li><span class="who">Mossbell :</span> anyone up for a party quest tonight?</li>
+            <li><span class="who">Tinkerfern :</span> i'm in after dinner</li>
+            <li><span class="who">Mossbell :</span> 8pm, ch 2</li>
+            <li><span class="who">Quillbeck :</span> count me in</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <div class="feature-pair wrap">
+      <section class="feature" aria-labelledby="exp-title">
+        <div class="panel mock-exp" role="img" aria-label="The session strip: 1.85M EXP per hour, level 41 to 42 in 38 minutes, with a progress bar about two-thirds full.">
+          <p class="status"><span class="dot"></span>Reading game</p>
+          <p class="rate"><span class="rate-number">1.85M</span> <span class="rate-unit">EXP/hr</span></p>
+          <p class="to-level">Lv 41 → 42 in 38m</p>
+          <div class="bar"><span style="width: 64%"></span></div>
+        </div>
+        <h2 id="exp-title">Track your EXP and loot</h2>
+        <p>See your EXP per hour, the time to your next level, and how every session went. Loot tracking, with the items and mesos you pick up, is coming next.</p>
+      </section>
+
+      <section class="feature" aria-labelledby="radar-title">
+        <div class="panel mock-radar" role="img" aria-label="An example of channel crowding for Ant Tunnel: channel 1 has 12 players, channel 2 has 2 and is quiet, channel 3 has 6, channel 4 has 1 and is quiet.">
+          <p class="panel-label">Ant Tunnel</p>
+          <ul class="channels">
+            <li><span class="ch">Ch 1</span><span class="track"><span style="width: 100%"></span></span><span class="n">12</span><span class="note"></span></li>
+            <li><span class="ch">Ch 2</span><span class="track"><span style="width: 17%"></span></span><span class="n">2</span><span class="note">quiet</span></li>
+            <li><span class="ch">Ch 3</span><span class="track"><span style="width: 50%"></span></span><span class="n">6</span><span class="note"></span></li>
+            <li><span class="ch">Ch 4</span><span class="track"><span style="width: 8%"></span></span><span class="n">1</span><span class="note">quiet</span></li>
+          </ul>
+        </div>
+        <h2 id="radar-title">Find a quiet channel <span class="chip">In progress</span></h2>
+        <p>MesoVibe will count the players on your minimap as you change channels, so you can tell which ones are crowded before you settle in.</p>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer wrap">
+    <p>Free and open source under the <a href="https://github.com/danielfang7/MesoVibe/blob/main/LICENSE">BSD-2-Clause license</a>. <a href="https://github.com/danielfang7/MesoVibe">GitHub</a></p>
+    <p class="disclaimer">Not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon.</p>
+  </footer>
+</body>
+</html>

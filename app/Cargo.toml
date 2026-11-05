@@ -1,0 +1,31 @@
+[package]
+name = "mesovibe-app"
+description = "MesoVibe desktop shell (Tauri 2): side panel, mini-HUD, settings and host services."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# tray-icon: the tray (menu bar) icon MesoVibe waits in. image-png: that icon's file.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# Opening at login, and one MesoVibe at a time (presence.rs).
+tauri-plugin-autostart = "2.7"
+tauri-plugin-single-instance = "2.5"
+# Signed updates from GitHub Releases (updater.rs).
+tauri-plugin-updater = "2.14"
+mesovibe-engine = { path = "../engine" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
+# The "What MesoVibe sees" thumbnail.
+png = "0.18"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_UI_WindowsAndMessaging",
+] }

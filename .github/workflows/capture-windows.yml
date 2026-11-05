@@ -1,0 +1,43 @@
+# Builds the Windows capture helper (tools/capture/windows) so it can run on a Windows PC without a
+# Rust toolchain. Download the exe from the run's artifacts.
+name: Windows capture helper
+
+on:
+  pull_request:
+    paths:
+      - "tools/capture/windows/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/capture-windows.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tools/capture/windows/**"
+      - ".github/workflows/capture-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release --locked -p mesovibe-capture-windows
+      - name: Lint
+        run: |
+          rustup component add clippy
+          cargo clippy --locked -p mesovibe-capture-windows --all-targets -- -D warnings
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-capture | Out-Null
+          Copy-Item target/release/mesovibe-capture.exe dist-capture/
+          Copy-Item tools/capture/README.md dist-capture/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesovibe-capture-windows
+          path: dist-capture/
+          retention-days: 30

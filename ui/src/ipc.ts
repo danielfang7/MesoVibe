@@ -1,0 +1,252 @@
+// The panel's, the mini-HUD's and the chat overlay's only ways to talk to the host: the
+// allow-listed commands and events each window may use (app/capabilities/). In a development browser
+// session with `?mock=<scenario>` in the URL, a scripted stand-in plays the host instead
+// (./mock.ts), so every state can be looked at without the game. Release builds leave it out.
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { Event as GameEvent, SessionSummary } from "@mesovibe/sdk";
+
+/** A corner of the game area, for the mini-HUD (app/src/dock.rs). */
+export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
+/** The chat types the Chat Hub splits out (engine/src/recognizers/chat.rs). */
+export type ChatChannel = "whisper" | "party" | "friend";
+
+export interface ChatChannels {
+  whisper: boolean;
+  party: boolean;
+  friend: boolean;
+}
+
+/** One whisper, party or friend line, as a picture of its text (app/src/chat.rs). */
+export interface ChatLine {
+  id: number;
+  channel: ChatChannel;
+  atMs: number;
+  /** The indented rest of the line before it. */
+  continues: boolean;
+  /** How often the reader had lost track of the chat box by then; a change means lines may be missing. */
+  gaps: number;
+  width: number;
+  height: number;
+  /** A PNG data URL whose alpha is the text. */
+  png: string;
+  /** Each word's columns, [from, to). */
+  words: [number, number][];
+}
+
+export interface Settings {
+  disclosureAccepted: boolean;
+  safeMode: boolean;
+  /** Keep MesoVibe with the game: docked beside it, or the mini-HUD. */
+  dock: boolean;
+  /** The mini-HUD may sit over the game when the panel has no room. */
+  miniHud: boolean;
+  miniHudCorner: Corner;
+  /** The chat overlay over the game's right edge. */
+  chatOverlay: boolean;
+  chatOverlayChannels: ChatChannels;
+}
+
+/** "Open with MapleStory Classic": the OS login item (app/src/presence.rs). */
+export interface Startup {
+  /** MesoVibe opens at login and waits for the game. */
+  on: boolean;
+  /** Why it can't be turned on from where MesoVibe is now, in words the player can act on. */
+  problem: string | null;
+}
+
+/** Where updating stands (app/src/updater.rs). */
+export type UpdateState = "idle" | "checking" | "upToDate" | "downloading" | "ready" | "installing" | "failed" | "off";
+
+export interface UpdateStatus {
+  state: UpdateState;
+  /** This copy's version. */
+  current: string;
+  /** The new version while it downloads, is ready or installs. */
+  version: string | null;
+  /** Why the last look failed, in words the player can act on. */
+  error: string | null;
+  /** When GitHub last answered a look, in ms since the epoch. */
+  checkedAtMs: number | null;
+}
+
+export interface Display {
+  dock: boolean;
+  miniHud: boolean;
+  corner: Corner;
+}
+
+/** What the mini-HUD shows of the session: part of the panel's SessionSummary. */
+export interface HudSummary {
+  expPerHour: number | null;
+  level: number | null;
+  pctHundredths: number | null;
+  minutesToLevel: number | null;
+}
+
+export interface AppInfo {
+  version: string;
+  os: string;
+  eventSchema: number;
+}
+
+export type State = "off" | "no_game" | "capturing" | "paused" | "blocked";
+
+export interface Reading {
+  level: number | null;
+  exp: number;
+  pctHundredths: number;
+  needed: number | null;
+  confirmed: boolean;
+}
+
+/** What the engine saw and did on its last tick (app/src/engine.rs). */
+export interface Status {
+  reading: boolean;
+  state: State;
+  game: { width: number; height: number; scale: number } | null;
+  exp: Reading | null;
+  unreadable: string | null;
+  error: string | null;
+  /** The chat box this tick, while capturing. */
+  chat: "reading" | "not_found" | "scrolled_back" | "unsupported" | null;
+  calibration: "learning" | "provisional" | "confirmed";
+  stale: boolean;
+  atMs: number;
+}
+
+export interface Host {
+  appInfo(): Promise<AppInfo>;
+  settings(): Promise<Settings>;
+  /** The first-run choice: start reading or Safe mode, and whether MesoVibe opens with the game. */
+  acceptDisclosure(safeMode: boolean, openWithGame: boolean): Promise<Settings>;
+  startup(): Promise<Startup>;
+  /** Turns the login item on or off; rejects with the reason when it can't. */
+  setStartup(on: boolean): Promise<Startup>;
+  setSafeMode(on: boolean): Promise<Settings>;
+  retry(): Promise<void>;
+  watch(on: boolean): Promise<void>;
+  openPrivacySettings(): Promise<void>;
+  storageGet(plugin: string): Promise<unknown>;
+  storageSet(plugin: string, value: unknown): Promise<void>;
+  setDisplay(display: Display): Promise<Settings>;
+  /** Passes the session strip's summary on to the mini-HUD. */
+  shareSummary(summary: SessionSummary | null): Promise<void>;
+  onStatus(handler: (status: Status) => void): Promise<unknown>;
+  onGameEvent(handler: (event: GameEvent, atMs: number) => void): Promise<unknown>;
+  onSnapshot(handler: (png: string) => void): Promise<unknown>;
+  /** The Chat Hub's lines so far this run. */
+  chatHistory(): Promise<ChatLine[]>;
+  onChat(handler: (lines: ChatLine[]) => void): Promise<unknown>;
+  setChatOverlay(on: boolean, channels: ChatChannels): Promise<Settings>;
+  updateStatus(): Promise<UpdateStatus>;
+  onUpdateStatus(handler: (status: UpdateStatus) => void): Promise<unknown>;
+  /** "Check now": a look at GitHub at once. */
+  checkForUpdates(): Promise<void>;
+  /** "Restart to update": installs the ready update and restarts; rejects with the reason when it can't. */
+  installUpdate(): Promise<void>;
+}
+
+const tauri: Host = {
+  appInfo: () => invoke<AppInfo>("app_info"),
+  settings: () => invoke<Settings>("get_settings"),
+  acceptDisclosure: (safeMode, openWithGame) => invoke<Settings>("accept_disclosure", { safeMode, openWithGame }),
+  startup: () => invoke<Startup>("get_startup"),
+  setStartup: (on) => invoke<Startup>("set_startup", { on }),
+  setSafeMode: (on) => invoke<Settings>("set_safe_mode", { on }),
+  retry: () => invoke<void>("retry_capture"),
+  watch: (on) => invoke<void>("watch_capture", { on }),
+  openPrivacySettings: () => invoke<void>("open_privacy_settings"),
+  storageGet: (plugin) => invoke<unknown>("plugin_storage_get", { plugin }),
+  storageSet: (plugin, value) => invoke<void>("plugin_storage_set", { plugin, value }),
+  setDisplay: ({ dock, miniHud, corner }) => invoke<Settings>("set_display", { dock, miniHud, corner }),
+  shareSummary: (summary) => invoke<void>("share_summary", { summary: summary === null ? null : hudSummary(summary) }),
+  onStatus: (handler) => listen<Status>("engine://status", (message) => handler(message.payload)),
+  onGameEvent: (handler) =>
+    listen<{ atMs: number; event: GameEvent }>("engine://event", (message) =>
+      handler(message.payload.event, message.payload.atMs),
+    ),
+  onSnapshot: (handler) => listen<string>("engine://snapshot", (message) => handler(message.payload)),
+  chatHistory: () => invoke<ChatLine[]>("chat_history"),
+  onChat: (handler) => listen<ChatLine[]>("engine://chat", (message) => handler(message.payload)),
+  setChatOverlay: (on, channels) => invoke<Settings>("set_chat_overlay", { on, channels }),
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  onUpdateStatus: (handler) => listen<UpdateStatus>("updates://status", (message) => handler(message.payload)),
+  checkForUpdates: () => invoke<void>("check_for_updates"),
+  installUpdate: () => invoke<void>("install_update"),
+};
+
+/** Only what the mini-HUD shows, in the shape the host checks. */
+export function hudSummary(summary: SessionSummary): HudSummary {
+  const whole = (n: number | null) => (n === null ? null : Math.round(n));
+  return {
+    expPerHour: summary.expPerHour,
+    level: whole(summary.level),
+    pctHundredths: whole(summary.pctHundredths),
+    minutesToLevel: summary.minutesToLevel,
+  };
+}
+
+/** The mini-HUD's host: it listens and asks for the latest summary, nothing else. */
+export interface HudHost {
+  latestSummary(): Promise<HudSummary | null>;
+  onStatus(handler: (status: Status) => void): Promise<unknown>;
+  onSummary(handler: (summary: HudSummary | null) => void): Promise<unknown>;
+}
+
+const tauriHud: HudHost = {
+  latestSummary: () => invoke<HudSummary | null>("hud_summary"),
+  onStatus: tauri.onStatus,
+  onSummary: (handler) => listen<HudSummary | null>("hud://summary", (message) => handler(message.payload)),
+};
+
+/** The chat overlay's host: it reads the settings and the lines so far, and listens. */
+export interface ChatHost {
+  settings(): Promise<Settings>;
+  chatHistory(): Promise<ChatLine[]>;
+  onChat(handler: (lines: ChatLine[]) => void): Promise<unknown>;
+  onChannels(handler: (channels: ChatChannels) => void): Promise<unknown>;
+}
+
+const tauriChat: ChatHost = {
+  settings: tauri.settings,
+  chatHistory: tauri.chatHistory,
+  onChat: tauri.onChat,
+  onChannels: (handler) => listen<ChatChannels>("chat://channels", (message) => handler(message.payload)),
+};
+
+/** The development stand-in's scenario, when the URL asks for one outside the app. */
+function mockScenario(): string | null {
+  if ("__TAURI_INTERNALS__" in window) return null;
+  return new URLSearchParams(location.search).get("mock");
+}
+
+// Each `import.meta.env.DEV` check stays inline, so release builds drop the stand-in entirely.
+
+/** The host to use: the real one, or in development the stand-in when the URL asks for it. */
+export async function connect(): Promise<Host> {
+  if (import.meta.env.DEV) {
+    const scenario = mockScenario();
+    if (scenario !== null) return (await import("./mock.js")).mockHost(scenario);
+  }
+  return tauri;
+}
+
+/** The mini-HUD's host, real or (in development) the stand-in. */
+export async function connectHud(): Promise<HudHost> {
+  if (import.meta.env.DEV) {
+    const scenario = mockScenario();
+    if (scenario !== null) return (await import("./mock.js")).mockHudHost(scenario);
+  }
+  return tauriHud;
+}
+
+/** The chat overlay's host, real or (in development) the stand-in. */
+export async function connectChat(): Promise<ChatHost> {
+  if (import.meta.env.DEV) {
+    const scenario = mockScenario();
+    if (scenario !== null) return (await import("./mock.js")).mockChatHost(scenario);
+  }
+  return tauriChat;
+}

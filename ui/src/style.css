@@ -1,0 +1,1007 @@
+/* MesoVibe panel styles. The design tokens (colors, spacing, radii, fonts and motion timings) are
+   defined in :root below. The fonts are bundled (the CSP allows only 'self'); their OFL texts are
+   in /fonts/licenses. */
+
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("/fonts/atkinson-hyperlegible-next.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  src: url("/fonts/atkinson-hyperlegible-mono.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Pixelify Sans";
+  src: url("/fonts/pixelify-sans.woff2") format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+  --surface: #1e1f1b;
+  --surface-raised: #272822;
+  --line: #3a3b34;
+  --control-border: #77756a;
+  --text: #ece8dc;
+  --text-muted: #a9a596;
+  --accent: #8cc5a8;
+  --on-accent: #14231b;
+  --warn: #e6b450;
+  --danger: #f08070;
+  --on-danger: #2a0e0a;
+  --match-tint: #24302a;
+
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+
+  --radius-sm: 2px;
+  --radius-md: 4px;
+
+  --font-body: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, sans-serif;
+  --font-mono: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+  --font-pixel: "Pixelify Sans", var(--font-body);
+
+  --micro: 80ms;
+  --short: 160ms;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--surface);
+  color: var(--text);
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+h1,
+h2,
+p,
+ul,
+dl {
+  margin: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The browser's own surfaces in the panel's colors, not the OS defaults. */
+::selection {
+  background: var(--match-tint);
+  color: var(--text);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--control-border) var(--line);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--line);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--control-border);
+  border-radius: 9999px;
+}
+
+.number,
+.number-hero,
+.stat-value,
+.table td.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  font-family: var(--font-pixel);
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  text-transform: none;
+}
+
+.wordmark {
+  font-family: var(--font-pixel);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: 0.01em;
+  color: var(--accent);
+}
+
+.text.muted,
+.muted {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* MARK: layout: the strip and one view, with the 48px rail on the outer edge. */
+
+.app {
+  display: grid;
+  grid-template-columns: 1fr 48px;
+  height: 100%;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* The signature 2px stepped corners. */
+  clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
+}
+
+.view {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  outline: none;
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) 0;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--line);
+}
+
+.rail-spacer {
+  flex: 1;
+}
+
+.rail-item {
+  height: 44px;
+  margin: 0 var(--space-xs);
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  cursor: pointer;
+  position: relative;
+}
+
+.rail-item:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.rail-item[aria-current="page"] {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.rail-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--accent);
+}
+
+.icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* MARK: the session strip */
+
+.strip {
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--line);
+  padding: var(--space-md) var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.strip-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.status-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--text-muted);
+  flex: none;
+}
+
+.dot.live {
+  background: var(--accent);
+}
+
+.dot.warn {
+  background: var(--warn);
+}
+
+.dot.danger {
+  background: var(--danger);
+}
+
+.strip-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: 44px;
+}
+
+.hero {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
+
+.hero.arrive {
+  animation: arrive 400ms ease-out both;
+}
+
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.number-hero {
+  font-weight: 600;
+  font-size: 32px;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+
+.hero-unit {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.hero[hidden] {
+  display: none;
+}
+
+.hero-empty:empty {
+  display: none;
+}
+
+.hero-empty {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Reset above End, the same width, quieter than the hero. */
+.strip-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  flex: none;
+}
+
+.strip-actions[hidden] {
+  display: none;
+}
+
+.strip:focus-visible {
+  outline-offset: -2px;
+}
+
+.to-level {
+  font-size: 14px;
+  color: var(--text);
+  min-height: 1em;
+}
+
+.to-level:empty {
+  display: none;
+}
+
+.strip-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 14px;
+}
+
+.strip-progress:empty {
+  display: none;
+}
+
+.strip.dim .number-hero,
+.strip.dim .strip-progress,
+.strip.dim .to-level {
+  color: var(--text-muted);
+}
+
+.notice-body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 14px;
+}
+
+.notice-body span {
+  flex: 1;
+}
+
+.help-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  font-size: 14px;
+}
+
+/* MARK: controls */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.button,
+.icon-button {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  min-height: 32px;
+  padding: 0 var(--space-md);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--micro) ease-out;
+}
+
+.button.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid var(--accent);
+}
+
+.button.primary:hover {
+  background: #9dd1b6;
+}
+
+.button.secondary,
+.icon-button {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--control-border);
+}
+
+.button.secondary:hover,
+.icon-button:hover {
+  background: var(--surface);
+}
+
+.button.danger {
+  background: var(--danger);
+  color: var(--on-danger);
+  border: 1px solid var(--danger);
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.icon-button .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.danger-link {
+  font: inherit;
+  font-size: 14px;
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--danger);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.switch {
+  font: inherit;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.switch-track {
+  width: 32px;
+  height: 18px;
+  border-radius: 9999px;
+  border: 1px solid var(--control-border);
+  background: var(--surface);
+  position: relative;
+  transition: background var(--short) ease-in-out;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: var(--text-muted);
+  transition: transform var(--short) ease-in-out;
+}
+
+.switch[aria-checked="true"] .switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch[aria-checked="true"] .switch-knob {
+  background: var(--on-accent);
+  transform: translateX(14px);
+}
+
+.switch:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.switch:disabled .switch-track {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.startup,
+.update-settings {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+/* Error copy: danger for the subject only, the rest in text. */
+.error-subject {
+  color: var(--danger);
+}
+
+/* MARK: plugin components */
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.stat-value {
+  font-size: 16px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stat.accent .stat-value {
+  color: var(--accent);
+}
+
+.progress-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: 14px;
+}
+
+.progress {
+  flex: none;
+  height: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.strip .progress {
+  flex: 1;
+  background: var(--surface);
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.key-value {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-xs) var(--space-md);
+  font-size: 14px;
+}
+
+.key-value dt {
+  color: var(--text-muted);
+}
+
+.key-value dd {
+  margin: 0;
+  text-align: right;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  white-space: nowrap;
+}
+
+.table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--line);
+  padding: var(--space-xs) 0;
+}
+
+.table td {
+  padding: var(--space-xs) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* The first cell may wrap where its text allows, so four columns fit the 300px panel. */
+.table td:first-child {
+  white-space: normal;
+}
+
+/* A row's second line under its first cell, like a past session's levels. */
+.cell-detail {
+  display: block;
+  color: var(--text-muted);
+}
+
+.table .num {
+  text-align: right;
+  padding-left: var(--space-sm);
+}
+
+.divider {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 0;
+}
+
+.state {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.state.error {
+  color: var(--text);
+}
+
+.thumbnail {
+  width: 100%;
+  image-rendering: pixelated;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.reading-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
+/* MARK: first run */
+
+.disclosure {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: var(--space-xl) var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.disclosure h1 {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+/* MARK: dialogs */
+
+.dialog {
+  max-width: 340px;
+  background: var(--surface-raised);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: var(--space-lg);
+  font-size: 14px;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.dialog h2 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: var(--space-sm);
+}
+
+.dialog ul {
+  padding-left: var(--space-lg);
+  margin-bottom: var(--space-sm);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
+  }
+}
+
+/* MARK: settings, display */
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-xs);
+}
+
+.segment {
+  font: inherit;
+  font-size: 14px;
+  min-height: 32px;
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.segment[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--match-tint);
+}
+
+/* MARK: the mini-HUD (hud.html) */
+
+/* The window is see-through: only the card shows over the game. */
+html.hud-page,
+html.hud-page body {
+  background: transparent;
+  overflow: hidden;
+}
+
+.hud-frame {
+  position: fixed;
+  inset: 8px;
+  /* The one offset shadow, outside the card's clipped corners. */
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
+}
+
+.hud {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: 10px var(--space-md);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
+  cursor: default;
+  user-select: none;
+}
+
+.hud-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.hud-rate-box {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+}
+
+.hud-rate {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.hud-unit {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.hud-note {
+  font-size: 13px;
+}
+
+.hud-line {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-issue {
+  color: var(--warn);
+}
+
+.hud-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 12px;
+}
+
+.hud-progress .progress {
+  flex: 1;
+}
+
+.hud.dim .hud-rate,
+.hud.dim .hud-line,
+.hud.dim .hud-progress {
+  color: var(--text-muted);
+}
+
+/* MARK: the Chat Hub */
+
+.rail-badge {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.rail-badge[hidden] {
+  display: none;
+}
+
+.chat-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-xs);
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-tab {
+  font: inherit;
+  font-size: 14px;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+
+.chat-tab:hover {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+.chat-tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.chat-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.chat-log {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin: 0;
+  padding: 0;
+}
+
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-time {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+/* A message's words, cut from its pictures, wrap like text. */
+.chat-text {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  color: var(--text);
+}
+
+.chat-word {
+  display: inline-block;
+  flex: none;
+  background-color: currentColor;
+}
+
+.chat-gap {
+  font-size: 14px;
+  color: var(--text-muted);
+  border-top: 1px dashed var(--line);
+  padding-top: var(--space-xs);
+}
+
+.segment[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--match-tint);
+}
+
+.segmented.chat-picks {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* MARK: the chat overlay (chat.html): newest at the bottom; the oldest leave the top. */
+
+.chat-frame {
+  position: fixed;
+  inset: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  /* The one offset shadow, outside the box's clipped corners. */
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
+}
+
+.chat-overlay {
+  list-style: none;
+  margin: 0;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
+  cursor: default;
+  user-select: none;
+}
+
+.chat-overlay-line {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-tag {
+  color: var(--text-muted);
+}
