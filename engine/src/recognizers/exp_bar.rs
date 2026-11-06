@@ -1298,8 +1298,8 @@ pub(crate) mod test_support {
     }
 
     impl Font {
-        /// Every column holds ink in the top row, so segmentation never splits a glyph and no digit
-        /// looks like punctuation. Rows 1-6 differ for every pair of characters in every column
+        /// Every column of a digit or letter holds ink in the top row, so segmentation never splits
+        /// a glyph and no digit looks like punctuation. Rows 1-6 differ for every pair of characters in every column
         /// (37 and 63 share no factor), and `seed` gives a different face.
         pub(crate) fn new(chars: &str, seed: u32) -> Font {
             let glyphs = chars
@@ -1309,6 +1309,9 @@ pub(crate) mod test_support {
                     let columns = match c {
                         ',' => vec![0b110_0000],
                         '.' => vec![0b100_0000],
+                        // As in the game's chat: a blank space, and a colon of two dots.
+                        ' ' => vec![0, 0, 0],
+                        ':' => vec![0b010_0100],
                         '[' => vec![0b111_1111, 0b100_0001],
                         ']' => vec![0b100_0001, 0b111_1111],
                         _ => {
