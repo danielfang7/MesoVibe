@@ -38,11 +38,13 @@ pub struct Settings {
     pub mini_hud: bool,
     /// The corner of the game area the mini-HUD sits in.
     pub mini_hud_corner: Corner,
-    /// The chat overlay: the latest whisper, party and friend lines over the game's right edge
-    /// (Chat Hub). Off until the player turns it on.
+    /// The chat overlay: the latest whisper, party and friend lines just above the game's chat
+    /// box (Chat Hub). Off until the player turns it on.
     pub chat_overlay: bool,
     /// Which chat types the overlay shows.
     pub chat_overlay_channels: ChatChannels,
+    /// The color of each chat type's text in the overlay.
+    pub chat_overlay_colors: ChatColors,
     /// Where the panel was when it last closed, so it comes back there and keeps the width the
     /// player gave it (presence.rs rebuilds the panel for each play session).
     pub panel: Option<PanelFrame>,
@@ -77,6 +79,57 @@ impl Default for ChatChannels {
     }
 }
 
+/// A text color for each chat type, as `#rrggbb`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatColors {
+    pub whisper: String,
+    pub party: String,
+    pub friend: String,
+}
+
+/// Cyan: bright against the game's scenes, and none of the chat box's own colors.
+const CHAT_COLOR: &str = "#00ffff";
+
+impl Default for ChatColors {
+    fn default() -> ChatColors {
+        ChatColors {
+            whisper: CHAT_COLOR.into(),
+            party: CHAT_COLOR.into(),
+            friend: CHAT_COLOR.into(),
+        }
+    }
+}
+
+/// `#` and six lowercase hex digits.
+fn is_color(color: &str) -> bool {
+    color.len() == 7
+        && color.starts_with('#')
+        && color[1..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+impl ChatColors {
+    /// Every color is `#` and six lowercase hex digits, so nothing else reaches a page's styles.
+    pub fn valid(&self) -> bool {
+        [&self.whisper, &self.party, &self.friend]
+            .iter()
+            .all(|color| is_color(color))
+    }
+
+    /// The same colors, with any that isn't `#rrggbb` (from a hand-edited or damaged settings
+    /// file) back to the default.
+    fn repaired(mut self) -> ChatColors {
+        for color in [&mut self.whisper, &mut self.party, &mut self.friend] {
+            if !is_color(color) {
+                *color = CHAT_COLOR.into();
+            }
+        }
+        self
+    }
+}
+
 impl Default for Settings {
     fn default() -> Settings {
         Settings {
@@ -87,6 +140,7 @@ impl Default for Settings {
             mini_hud_corner: Corner::TopRight,
             chat_overlay: false,
             chat_overlay_channels: ChatChannels::default(),
+            chat_overlay_colors: ChatColors::default(),
             panel: None,
         }
     }
@@ -101,7 +155,10 @@ impl Store {
     /// Opens the store in `dir`, creating it if needed.
     pub fn open(dir: PathBuf) -> Store {
         let _ = std::fs::create_dir_all(dir.join("plugins"));
-        let settings = read_json(&dir.join("settings.json")).unwrap_or_default();
+        let mut settings: Settings = read_json(&dir.join("settings.json")).unwrap_or_default();
+        // A bad color kept as it is would be refused with every change to the chat overlay's
+        // settings (set_chat_overlay), leaving the player unable to change them.
+        settings.chat_overlay_colors = settings.chat_overlay_colors.repaired();
         Store {
             dir,
             settings: Mutex::new(settings),
@@ -275,6 +332,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // Chat colors reach the overlay page's styles, so only plain #rrggbb colors are kept. Fails
+    // if anything else gets through, or the default stops being valid.
+    #[test]
+    fn chat_colors_are_plain_hex_colors() {
+        assert!(ChatColors::default().valid());
+        let with = |color: &str| ChatColors {
+            party: color.into(),
+            ..ChatColors::default()
+        };
+        assert!(with("#ff99cc").valid());
+        for bad in [
+            "#FF99CC",
+            "#ff99c",
+            "ff99cc0",
+            "#ff99cg",
+            "red",
+            "#ff99cc;x",
+            "",
+        ] {
+            assert!(!with(bad).valid(), "{bad}");
+        }
+    }
+
     #[test]
     fn settings_survive_a_restart() {
         let dir = temp_dir("settings");
@@ -307,6 +387,29 @@ mod tests {
         assert!(settings.dock && settings.mini_hud);
         assert_eq!(settings.mini_hud_corner, Corner::TopRight);
         assert_eq!(settings.panel, None);
+        assert_eq!(settings.chat_overlay_colors, ChatColors::default());
+        assert!(!dir.join("settings.json.corrupt").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // A hand-edited or damaged chat color must not break the overlay or lose other settings.
+    // Fails if the bad color is kept, or the whole file is set aside as corrupt.
+    #[test]
+    fn a_bad_chat_color_in_the_file_falls_back_to_cyan() {
+        let dir = temp_dir("bad-color");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("settings.json"),
+            r##"{ "disclosureAccepted": true, "chatOverlayColors": { "whisper": "#ffffff", "party": "red", "friend": "#ff88cc" } }"##,
+        )
+        .unwrap();
+        let settings = Store::open(dir.clone()).settings();
+        assert!(settings.disclosure_accepted);
+        let colors = &settings.chat_overlay_colors;
+        assert_eq!(colors.whisper, "#ffffff");
+        assert_eq!(colors.party, ChatColors::default().party);
+        assert_eq!(colors.party, "#00ffff");
+        assert_eq!(colors.friend, "#ff88cc");
         assert!(!dir.join("settings.json.corrupt").exists());
         let _ = std::fs::remove_dir_all(dir);
     }

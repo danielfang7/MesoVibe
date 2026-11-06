@@ -7,7 +7,7 @@ import type { CaptureState, SessionSummary } from "@mesovibe/sdk";
 import { CHANNEL_NAME, clockTime, messageText, messages } from "./chatlines.js";
 import { append, h, icon, replace } from "./dom.js";
 import { connect } from "./ipc.js";
-import type { AppInfo, ChatChannel, ChatChannels, ChatLine, Corner, Display, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
+import type { AppInfo, ChatChannel, ChatChannels, ChatColors, ChatLine, Corner, Display, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
 import { PluginHost, confirmDialog, fill, renderView } from "./plugins.js";
 
 type ViewName = "session" | "chat" | "sees" | "settings";
@@ -21,6 +21,15 @@ const NO_LINES: Record<ChatChannel, string> = {
 };
 /** Lines the panel keeps, like the host's log (app/src/chat.rs). */
 const KEEP_LINES = 1000;
+/** The colors chat over the game can take, named, so a color is never the only sign of a choice. */
+const CHAT_COLORS: [string, string][] = [
+  ["#00ffff", "Cyan"],
+  ["#ffffff", "White"],
+  ["#ffff00", "Yellow"],
+  ["#66ff66", "Green"],
+  ["#ff88cc", "Pink"],
+  ["#ffaa44", "Orange"],
+];
 
 const CORNERS: [Corner, string][] = [
   ["top-left", "Top left"],
@@ -339,9 +348,9 @@ function shell(initial: Settings): void {
     { class: "rail", attrs: { "aria-label": "Views" } },
     railItem("session", "Session", "session"),
     railItem("chat", "Chat", "chat", chatBadge),
-    railItem("sees", "What MesoVibe sees", "sees"),
     h("span", { class: "rail-spacer" }),
     railItem("settings", "Settings", "settings"),
+    railItem("sees", "What MesoVibe sees", "sees"),
   );
   replace(root, h("div", { class: "app" }, h("div", { class: "main" }, strip, view), rail));
 
@@ -456,8 +465,11 @@ function shell(initial: Settings): void {
     chat?.setAttribute("title", label);
   }
 
-  /** New chat lines: kept, and counted as unread unless their tab is open. */
-  function addChat(lines: ChatLine[]): void {
+  /** New chat lines: kept, and counted as unread unless their tab is open. A line already kept (each has its own id) isn't kept again. */
+  function addChat(fresh: ChatLine[]): void {
+    const known = new Set(panel.chat.map((line) => line.id));
+    const lines = fresh.filter((line) => !known.has(line.id));
+    if (lines.length === 0) return;
     panel.chat = [...panel.chat, ...lines].slice(-KEEP_LINES);
     for (const line of lines) {
       if (line.continues) continue;
@@ -687,8 +699,8 @@ function shell(initial: Settings): void {
     }
   }
 
-  function setChatOverlay(on: boolean, channels: ChatChannels): void {
-    void host.setChatOverlay(on, channels).then((settings) => {
+  function setChatOverlay(on: boolean, channels: ChatChannels, colors: ChatColors): void {
+    void host.setChatOverlay(on, channels, colors).then((settings) => {
       panel.settings = settings;
       if (panel.view === "chat") paintChat();
     });
@@ -748,7 +760,7 @@ function shell(initial: Settings): void {
             "data-key": `chat-overlay-${channel}`,
           },
           on: {
-            click: () => setChatOverlay(true, { ...s.chatOverlayChannels, [channel]: !s.chatOverlayChannels[channel] }),
+            click: () => setChatOverlay(true, { ...s.chatOverlayChannels, [channel]: !s.chatOverlayChannels[channel] }, s.chatOverlayColors),
           },
         },
         // A check as well as the pressed look: several can be on at once.
@@ -768,18 +780,49 @@ function shell(initial: Settings): void {
         "section",
         { class: "block" },
         h("h2", { class: "label" }, "Over the game"),
-        toggle("Show the latest chat over the game", s.chatOverlay, (on) => setChatOverlay(on, s.chatOverlayChannels), "chat-overlay"),
-        h("p", { class: "text muted" }, "A small box inside the game's right edge with the newest lines. Clicks go through it to the game."),
+        toggle("Show chat above the game's chat box", s.chatOverlay, (on) => setChatOverlay(on, s.chatOverlayChannels, s.chatOverlayColors), "chat-overlay"),
+        h("p", { class: "text muted" }, "The newest lines, small, just above the game's chat box. Clicks go through to the game."),
         s.chatOverlay
           ? h("div", { class: "segmented chat-picks", attrs: { role: "group", "aria-label": "Chat over the game" } }, ...CHANNELS.map(pick))
           : null,
-        h(
-          "p",
-          { class: "text muted" },
-          "Lines are pictures of the game's chat box, kept only while MesoVibe runs. They never leave this computer.",
-        ),
+        s.chatOverlay ? h("div", { class: "chat-colors" }, ...CHANNELS.map(colorRow)) : null,
       ),
     ];
+  }
+
+  /** A chat type's color over the game: one swatch per color, named. */
+  function colorRow(channel: ChatChannel): Node {
+    const s = panel.settings;
+    const chosen = CHAT_COLORS.find(([hex]) => hex === s.chatOverlayColors[channel]);
+    const swatch = ([hex, name]: [string, string]) => {
+      const on = hex === s.chatOverlayColors[channel];
+      const hook = `chat-color-${channel}-${name.toLowerCase()}`;
+      const button = h(
+        "button",
+        {
+          class: "swatch",
+          attrs: {
+            type: "button",
+            role: "radio",
+            "aria-checked": on ? "true" : "false",
+            "aria-label": name,
+            title: name,
+            "data-key": hook,
+          },
+          on: { click: () => setChatOverlay(true, s.chatOverlayChannels, { ...s.chatOverlayColors, [channel]: hex }) },
+        },
+        on ? "✓" : null,
+      );
+      // CSSOM, not a style attribute, so the strict CSP holds.
+      button.style.backgroundColor = hex;
+      return button;
+    };
+    return h(
+      "div",
+      { class: "chat-color" },
+      h("span", { class: "chat-color-name" }, TAB_NAME[channel], chosen === undefined ? null : h("span", { class: "muted" }, ` · ${chosen[1]}`)),
+      h("div", { class: "swatches", attrs: { role: "radiogroup", "aria-label": `${TAB_NAME[channel]} color` } }, ...CHAT_COLORS.map(swatch)),
+    );
   }
 
   function seesView(): Node[] {

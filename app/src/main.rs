@@ -21,7 +21,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 
 use engine::{Command, Engine};
-use store::{ChatChannels, Settings, Store};
+use store::{ChatChannels, ChatColors, Settings, Store};
 
 fn main() {
     // Tauri creates the windows inside its event loop and panics if that fails, so a
@@ -273,23 +273,39 @@ fn chat_history(log: State<'_, chat::ChatLog>) -> Vec<chat::ChatEntry> {
     log.history()
 }
 
-/// The chat overlay turned on or off, and the chat types it shows. The overlay appears or goes
-/// on the engine's next tick (dock.rs).
+/// What the chat overlay shows: the chat types, and the color of each.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatOverlayChoice {
+    channels: ChatChannels,
+    colors: ChatColors,
+}
+
+/// The chat overlay turned on or off, the chat types it shows and their colors. The overlay
+/// appears or goes on the engine's next tick (dock.rs).
 #[tauri::command]
 fn set_chat_overlay(
     on: bool,
     channels: ChatChannels,
+    colors: ChatColors,
     app: AppHandle,
     store: State<'_, Store>,
 ) -> Result<Settings, String> {
+    if !colors.valid() {
+        return Err("A chat color isn't a #rrggbb color.".into());
+    }
     let settings = store.update(|s| {
         s.chat_overlay = on;
         s.chat_overlay_channels = channels;
+        s.chat_overlay_colors = colors;
     })?;
     let _ = app.emit_to(
         dock::CHAT,
-        "chat://channels",
-        settings.chat_overlay_channels,
+        "chat://overlay",
+        ChatOverlayChoice {
+            channels: settings.chat_overlay_channels,
+            colors: settings.chat_overlay_colors.clone(),
+        },
     );
     Ok(settings)
 }

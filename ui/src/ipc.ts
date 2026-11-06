@@ -3,7 +3,7 @@
 // session with `?mock=<scenario>` in the URL, a scripted stand-in plays the host instead
 // (./mock.ts), so every state can be looked at without the game. Release builds leave it out.
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { Event as GameEvent, SessionSummary } from "@mesovibe/sdk";
 
 /** A corner of the game area, for the mini-HUD (app/src/dock.rs). */
@@ -16,6 +16,19 @@ export interface ChatChannels {
   whisper: boolean;
   party: boolean;
   friend: boolean;
+}
+
+/** A text color for each chat type over the game, as `#rrggbb` (app/src/store.rs). */
+export interface ChatColors {
+  whisper: string;
+  party: string;
+  friend: string;
+}
+
+/** What the chat overlay shows: the chat types, and the color of each. */
+export interface ChatOverlayChoice {
+  channels: ChatChannels;
+  colors: ChatColors;
 }
 
 /** One whisper, party or friend line, as a picture of its text (app/src/chat.rs). */
@@ -43,9 +56,10 @@ export interface Settings {
   /** The mini-HUD may sit over the game when the panel has no room. */
   miniHud: boolean;
   miniHudCorner: Corner;
-  /** The chat overlay over the game's right edge. */
+  /** The chat overlay, just above the game's chat box. */
   chatOverlay: boolean;
   chatOverlayChannels: ChatChannels;
+  chatOverlayColors: ChatColors;
 }
 
 /** "Open with MapleStory Classic": the OS login item (app/src/presence.rs). */
@@ -139,13 +153,22 @@ export interface Host {
   /** The Chat Hub's lines so far this run. */
   chatHistory(): Promise<ChatLine[]>;
   onChat(handler: (lines: ChatLine[]) => void): Promise<unknown>;
-  setChatOverlay(on: boolean, channels: ChatChannels): Promise<Settings>;
+  setChatOverlay(on: boolean, channels: ChatChannels, colors: ChatColors): Promise<Settings>;
   updateStatus(): Promise<UpdateStatus>;
   onUpdateStatus(handler: (status: UpdateStatus) => void): Promise<unknown>;
   /** "Check now": a look at GitHub at once. */
   checkForUpdates(): Promise<void>;
   /** "Restart to update": installs the ready update and restarts; rejects with the reason when it can't. */
   installUpdate(): Promise<void>;
+}
+
+/**
+ * Listens for `event` when it's sent to this window or to every window. Tauri's plain `listen`
+ * also hears events sent only to another window, so chat lines sent to the panel and to the chat
+ * overlay arrived twice in each.
+ */
+function hear<T>(event: string, handler: (payload: T) => void): Promise<unknown> {
+  return getCurrentWebviewWindow().listen<T>(event, (message) => handler(message.payload));
 }
 
 const tauri: Host = {
@@ -162,17 +185,14 @@ const tauri: Host = {
   storageSet: (plugin, value) => invoke<void>("plugin_storage_set", { plugin, value }),
   setDisplay: ({ dock, miniHud, corner }) => invoke<Settings>("set_display", { dock, miniHud, corner }),
   shareSummary: (summary) => invoke<void>("share_summary", { summary: summary === null ? null : hudSummary(summary) }),
-  onStatus: (handler) => listen<Status>("engine://status", (message) => handler(message.payload)),
-  onGameEvent: (handler) =>
-    listen<{ atMs: number; event: GameEvent }>("engine://event", (message) =>
-      handler(message.payload.event, message.payload.atMs),
-    ),
-  onSnapshot: (handler) => listen<string>("engine://snapshot", (message) => handler(message.payload)),
+  onStatus: (handler) => hear<Status>("engine://status", handler),
+  onGameEvent: (handler) => hear<{ atMs: number; event: GameEvent }>("engine://event", ({ event, atMs }) => handler(event, atMs)),
+  onSnapshot: (handler) => hear<string>("engine://snapshot", handler),
   chatHistory: () => invoke<ChatLine[]>("chat_history"),
-  onChat: (handler) => listen<ChatLine[]>("engine://chat", (message) => handler(message.payload)),
-  setChatOverlay: (on, channels) => invoke<Settings>("set_chat_overlay", { on, channels }),
+  onChat: (handler) => hear<ChatLine[]>("engine://chat", handler),
+  setChatOverlay: (on, channels, colors) => invoke<Settings>("set_chat_overlay", { on, channels, colors }),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
-  onUpdateStatus: (handler) => listen<UpdateStatus>("updates://status", (message) => handler(message.payload)),
+  onUpdateStatus: (handler) => hear<UpdateStatus>("updates://status", handler),
   checkForUpdates: () => invoke<void>("check_for_updates"),
   installUpdate: () => invoke<void>("install_update"),
 };
@@ -198,7 +218,7 @@ export interface HudHost {
 const tauriHud: HudHost = {
   latestSummary: () => invoke<HudSummary | null>("hud_summary"),
   onStatus: tauri.onStatus,
-  onSummary: (handler) => listen<HudSummary | null>("hud://summary", (message) => handler(message.payload)),
+  onSummary: (handler) => hear<HudSummary | null>("hud://summary", handler),
 };
 
 /** The chat overlay's host: it reads the settings and the lines so far, and listens. */
@@ -206,14 +226,15 @@ export interface ChatHost {
   settings(): Promise<Settings>;
   chatHistory(): Promise<ChatLine[]>;
   onChat(handler: (lines: ChatLine[]) => void): Promise<unknown>;
-  onChannels(handler: (channels: ChatChannels) => void): Promise<unknown>;
+  /** The player changed which chat types show, or their colors. */
+  onChoice(handler: (choice: ChatOverlayChoice) => void): Promise<unknown>;
 }
 
 const tauriChat: ChatHost = {
   settings: tauri.settings,
   chatHistory: tauri.chatHistory,
   onChat: tauri.onChat,
-  onChannels: (handler) => listen<ChatChannels>("chat://channels", (message) => handler(message.payload)),
+  onChoice: (handler) => hear<ChatOverlayChoice>("chat://overlay", handler),
 };
 
 /** The development stand-in's scenario, when the URL asks for one outside the app. */

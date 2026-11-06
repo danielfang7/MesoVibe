@@ -177,6 +177,20 @@ dl {
   gap: var(--space-sm);
 }
 
+/* A section's heading: larger than other labels and in full text color, so the view reads as its
+   sections. A line above each section after the first marks where it starts. */
+.block > h2.label {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+.view > .block + .block {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-lg);
+}
+
 .rail {
   display: flex;
   flex-direction: column;
@@ -967,41 +981,100 @@ html.hud-page body {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-/* MARK: the chat overlay (chat.html): newest at the bottom; the oldest leave the top. */
-
-.chat-frame {
-  position: fixed;
-  inset: 8px;
+/* The chat colors over the game: a named row of swatches per chat type. */
+.chat-colors {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  /* The one offset shadow, outside the box's clipped corners. */
-  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
+  gap: var(--space-sm);
+  margin-top: var(--space-xs);
 }
 
-.chat-overlay {
-  list-style: none;
-  margin: 0;
+.chat-color {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.chat-color-name {
+  font-size: 14px;
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.swatch {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  /* Every swatch is a bright color, so its check is dark. */
+  color: var(--on-accent);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.swatch:hover {
+  border-color: var(--text);
+}
+
+.swatch[aria-checked="true"] {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* MARK: the chat overlay (chat.html): split chat just above the game's chat box, at the game's
+   size (--game-px is a game pixel). Behind the lines, the same dark wash the game puts behind its
+   own chat box, as wide as the box and flush on its top edge, so the lines read over a bright scene
+   and look like part of the box. Newest at the bottom; the oldest leave the top. */
+
+.split-chat {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
   max-height: 100%;
+  margin: 0;
+  /* A little room above the top line, and text starting in the column the game's own does. */
+  padding: calc(var(--game-px, 1px) * 4) 0 0 calc(var(--game-px, 1px) * 6);
+  list-style: none;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  gap: var(--space-xs);
-  padding: var(--space-sm) var(--space-md);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
+  /* The game's chat box darkens the scene behind it by about half, with no border. */
+  background: rgba(0, 0, 0, 0.5);
   cursor: default;
   user-select: none;
 }
 
-.chat-overlay-line {
+.split-message {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* A one-pixel shadow under the text only, not the wash. */
+  filter: drop-shadow(var(--game-px, 1px) var(--game-px, 1px) 0 rgba(0, 0, 0, 0.9));
 }
 
-.chat-tag {
-  color: var(--text-muted);
+.split-line {
+  display: block;
+  flex: none;
+  height: calc(var(--game-px, 1px) * 16);
+}
+
+/* The rest of a long line, indented as the game draws it. */
+.split-line.rest {
+  padding-left: calc(var(--game-px, 1px) * 16);
+}
+
+.chat-picture {
+  display: block;
+  background-color: currentColor;
 }

@@ -2113,6 +2113,7 @@ name = "mesovibe-app"
 version = "0.2.0"
 dependencies = [
  "mesovibe-engine",
+ "objc2-app-kit",
  "png",
  "serde",
  "serde_json",

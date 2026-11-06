@@ -23,6 +23,15 @@ serde_json = "1"
 # The "What MesoVibe sees" thumbnail.
 png = "0.18"
 
+# Raising the mini-HUD and chat overlay above the game's window (dock.rs). Tauri already uses
+# this version.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "NSResponder",
+  "NSWindow",
+] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",

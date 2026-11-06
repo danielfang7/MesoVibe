@@ -10,8 +10,8 @@
 //! is in front. With the mini-HUD switched off there's no window over the game at all.
 //!
 //! The chat overlay, when the player turns it on in the Chat view, is the same kind of
-//! click-through window inside the game's right edge, with the latest whisper, party and friend
-//! lines (Chat Hub). It's off until then.
+//! click-through window, just above the game's chat box, with the latest whisper, party and
+//! friend lines (Chat Hub) at the chat's own size. It's off until then.
 //!
 //! MesoVibe only moves its own windows. Where the game window is comes from the window list
 //! the capture already reads; the game is never moved, resized or sent anything.
@@ -21,6 +21,7 @@
 use std::sync::Mutex;
 
 use mesovibe_engine::capture::{GameWindow, Placement, ScreenRect};
+use mesovibe_engine::recognizers::chat::{self, ChatPlace};
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position,
@@ -38,12 +39,8 @@ pub const HUD_WIDTH: f64 = 216.0;
 pub const HUD_HEIGHT: f64 = 100.0;
 /// The chat overlay window's label (capabilities/chat.json).
 pub const CHAT: &str = "chat";
-/// The chat overlay window, in logical pixels: a few wrapped lines with room for the shadow.
-pub const CHAT_WIDTH: f64 = 360.0;
-pub const CHAT_HEIGHT: f64 = 220.0;
-/// Where the chat overlay's top sits, as a share of the game area's height down from its top:
-/// below the mini-HUD's top corners and above the notices and party list at the bottom right.
-const CHAT_FROM_TOP: f64 = 0.3;
+/// Chat lines the overlay has room for above the game's chat box.
+const CHAT_LINES: u32 = 6;
 /// How far the mini-HUD window sits inside the game area, in game pixels. The top keeps clear of
 /// the buttons along the game's top edge, the bottom of its status bar and quick slots.
 const INSET_SIDE: f64 = 4.0;
@@ -212,21 +209,27 @@ pub fn layout(game: &Placement, displays: &[Display], panel_width: f64, choice: 
     })
 }
 
-/// Where the chat overlay goes for the game window at `game`: inside the game area's right edge,
-/// below its top. `None` when the game isn't on a known display or is too small to hold it.
-pub fn chat_overlay(game: &Placement, displays: &[Display]) -> Option<Rect> {
+/// Where the chat overlay goes for the game window at `game` with its chat box at `place`: on the
+/// box's top edge, as wide as the box up to its scrollbar, with room for [`CHAT_LINES`] lines at
+/// the game's own size. `None` when there's no room above the box for a line.
+pub fn chat_overlay(game: &Placement, place: &ChatPlace) -> Option<Rect> {
+    if place.width == 0 || place.height == 0 {
+        return None;
+    }
+    // Desktop units per game pixel, each way: the game area on screen is its 1x picture, scaled.
     let area = Rect::from(game.area);
-    let (cx, cy) = (area.x + area.width / 2.0, area.y + area.height / 2.0);
-    let display = displays.iter().find(|d| d.work_area.contains(cx, cy))?;
-    let (width, height) = (CHAT_WIDTH * display.scale, CHAT_HEIGHT * display.scale);
-    let y = area.y + (area.height * CHAT_FROM_TOP).round();
-    (area.width >= width + 2.0 * INSET_SIDE && y + height <= area.bottom() - INSET_BOTTOM)
-        .then_some(Rect {
-            x: area.right() - INSET_SIDE - width,
-            y,
-            width,
-            height,
-        })
+    let (across, down) = (
+        area.width / f64::from(place.width),
+        area.height / f64::from(place.height),
+    );
+    let bottom = area.y + f64::from(place.top) * down;
+    let top = (bottom - f64::from(CHAT_LINES * chat::LINE_HEIGHT) * down).max(area.y);
+    (bottom - top >= f64::from(chat::LINE_HEIGHT) * down).then_some(Rect {
+        x: area.x + f64::from(place.left) * across,
+        y: top,
+        width: f64::from(chat::BOX_WIDTH) * across,
+        height: bottom - top,
+    })
 }
 
 /// Applies [`layout`] to the real windows, from the engine thread, each tick.
@@ -239,11 +242,28 @@ pub struct Docker {
     panel_on_top: bool,
     hud_shown: bool,
     chat_shown: bool,
+    /// Where the chat overlay was last put, so the window moves only when that changes.
+    chat_placed: Option<Rect>,
+    /// Where the game's chat box was last seen. It stays put while the box can't be read for a
+    /// moment (a map change, the player scrolling back).
+    chat_box: Option<ChatPlace>,
 }
 
 impl Docker {
-    /// Places MesoVibe's windows for the game window this tick (`None`: no game found).
-    pub fn follow(&mut self, app: &AppHandle, window: Option<&GameWindow>) {
+    /// Places MesoVibe's windows for the game window this tick (`None`: no game found), with the
+    /// game's chat box where the chat reader saw it this tick, if it did.
+    pub fn follow(
+        &mut self,
+        app: &AppHandle,
+        window: Option<&GameWindow>,
+        chat_box: Option<ChatPlace>,
+    ) {
+        if chat_box.is_some() {
+            self.chat_box = chat_box;
+        } else if window.is_none() {
+            // The game is gone: the next one may be at another size or place.
+            self.chat_box = None;
+        }
         let Some(store) = app.try_state::<Store>() else {
             return;
         };
@@ -272,7 +292,11 @@ impl Docker {
         };
         let in_front = placement.front || panel.is_focused().unwrap_or(false);
         let displays = displays(app);
-        match chat_overlay(&placement, &displays).filter(|_| settings.chat_overlay && in_front) {
+        let overlay = self
+            .chat_box
+            .and_then(|place| chat_overlay(&placement, &place))
+            .filter(|_| settings.chat_overlay && in_front);
+        match overlay {
             Some(target) => self.show_chat(app, &target),
             None => self.hide_chat(app),
         }
@@ -355,13 +379,24 @@ impl Docker {
     }
 
     fn show_chat(&mut self, app: &AppHandle, target: &Rect) {
-        let Some(chat) = app
-            .get_webview_window(CHAT)
-            .or_else(|| create_overlay(app, CHAT).ok())
-        else {
-            return;
+        let chat = match app.get_webview_window(CHAT) {
+            Some(chat) => chat,
+            None => match create_overlay(app, CHAT) {
+                // A new window (the last one may have closed with its play session) is hidden and
+                // not yet placed.
+                Ok(chat) => {
+                    self.chat_shown = false;
+                    self.chat_placed = None;
+                    chat
+                }
+                Err(_) => return,
+            },
         };
-        let _ = chat.set_position(position(target.x, target.y));
+        if self.chat_placed.is_none_or(|placed| placed.differs(target)) {
+            let _ = chat.set_position(position(target.x, target.y));
+            let _ = chat.set_size(size(target.width, target.height));
+            self.chat_placed = Some(*target);
+        }
         if !self.chat_shown {
             let _ = chat.show();
             self.chat_shown = true;
@@ -382,6 +417,7 @@ impl Docker {
             let _ = chat.destroy();
         }
         self.chat_shown = false;
+        self.chat_placed = None;
     }
 }
 
@@ -394,7 +430,13 @@ fn create_hud(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 /// click-through, so every click lands in the game below it.
 fn create_overlay(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
     let (page, title, width, height) = match label {
-        CHAT => ("chat.html", "MesoVibe chat", CHAT_WIDTH, CHAT_HEIGHT),
+        // Sized to the chat box once placed.
+        CHAT => (
+            "chat.html",
+            "MesoVibe chat",
+            f64::from(chat::BOX_WIDTH),
+            f64::from(CHAT_LINES * chat::LINE_HEIGHT),
+        ),
         _ => ("hud.html", "MesoVibe mini-HUD", HUD_WIDTH, HUD_HEIGHT),
     };
     let hud = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
@@ -412,8 +454,30 @@ fn create_overlay(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> 
         .visible(false)
         .build()?;
     hud.set_ignore_cursor_events(true)?;
+    above_the_game(&hud);
     Ok(hud)
 }
+
+/// Lifts an overlay window above the game's own window. While the game is the app in front, Wine
+/// raises its window above the floating level that "always on top" gives, to just over the menu
+/// bar's (layer 26 in the window list), so the overlays showed only while MesoVibe had focus.
+/// The pop-up menu level is above that.
+#[cfg(target_os = "macos")]
+fn above_the_game(window: &WebviewWindow) {
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let Ok(pointer) = target.ns_window() else {
+            return;
+        };
+        // SAFETY: the NSWindow behind this Tauri window, which lives as long as `target`, used on
+        // the main thread as AppKit requires.
+        let ns_window = unsafe { &*pointer.cast::<objc2_app_kit::NSWindow>() };
+        ns_window.setLevel(objc2_app_kit::NSPopUpMenuWindowLevel);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn above_the_game(_window: &WebviewWindow) {}
 
 /// Moves and sizes the panel so its visible frame is `target`, keeping its width.
 pub fn place_panel(panel: &WebviewWindow, target: &Rect) {
@@ -629,26 +693,70 @@ mod tests {
         );
     }
 
-    // The chat overlay sits inside the game area's right edge, below the mini-HUD's corners and
-    // clear of the notices and status bar at the bottom. Fails if it lands outside the game.
+    /// `a` and `b` within a millionth of a unit on every edge.
+    fn close(a: Rect, b: Rect) -> bool {
+        [
+            (a.x, b.x),
+            (a.y, b.y),
+            (a.width, b.width),
+            (a.height, b.height),
+        ]
+        .iter()
+        .all(|(p, q)| (p - q).abs() < 1e-6)
+    }
+
+    // The chat overlay sits on the game's chat box, as wide as the box, with the game's own
+    // line size. Fails if it covers the box, drifts from it, or ignores how the game is scaled.
     #[test]
-    fn the_chat_overlay_sits_inside_the_games_right_edge() {
-        let full = game(76, 40, 1361, 768);
-        let rect = chat_overlay(&full, &[MAC]).expect("room for the overlay");
-        assert_eq!(
-            (rect.x, rect.y, rect.width, rect.height),
-            (
-                76.0 + 1361.0 - 4.0 - CHAT_WIDTH,
-                68.0 + 230.0,
-                CHAT_WIDTH,
-                CHAT_HEIGHT
-            )
-        );
-        // The smallest game size still holds it; a game area narrower than the overlay doesn't.
-        assert!(chat_overlay(&game(76, 40, 800, 600), &[MAC]).is_some());
-        assert_eq!(chat_overlay(&game(76, 40, 300, 600), &[MAC]), None);
-        // Off every display: nowhere to put it.
-        assert_eq!(chat_overlay(&game(-5000, 40, 1361, 768), &[MAC]), None);
+    fn the_chat_overlay_sits_on_top_of_the_games_chat_box() {
+        // A 1366×768 game at 1x on a Mac, with its chat box's top 207 rows above the bottom.
+        let place = ChatPlace {
+            width: 1366,
+            height: 768,
+            left: 283,
+            top: 561,
+        };
+        let mac = game(76, 40, 1366, 768);
+        let rect = chat_overlay(&mac, &place).expect("room above the box");
+        assert!(close(
+            rect,
+            Rect {
+                x: 76.0 + 283.0,
+                y: 68.0 + 561.0 - 96.0,
+                width: 551.0,
+                height: 96.0
+            }
+        ));
+        // Full screen on a Windows display: 1920×1080 pixels showing the game's 1366×768 picture.
+        let screen = ScreenRect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let full = Placement {
+            frame: screen,
+            area: screen,
+            front: true,
+        };
+        let (across, down) = (1920.0 / 1366.0, 1080.0 / 768.0);
+        assert!(close(
+            chat_overlay(&full, &place).expect("room above the box"),
+            Rect {
+                x: 283.0 * across,
+                y: (561.0 - 96.0) * down,
+                width: 551.0 * across,
+                height: 96.0 * down
+            }
+        ));
+        // Near the game's top edge it takes the room there is, and with no room for a line, none.
+        let high = ChatPlace { top: 40, ..place };
+        let squeezed = chat_overlay(&mac, &high).expect("room for two lines");
+        assert_eq!((squeezed.y, squeezed.height), (68.0, 40.0));
+        assert_eq!(chat_overlay(&mac, &ChatPlace { top: 10, ..place }), None);
+        // A reading with no game size can't be scaled to the screen.
+        assert_eq!(chat_overlay(&mac, &ChatPlace { width: 0, ..place }), None);
+        assert_eq!(chat_overlay(&mac, &ChatPlace { height: 0, ..place }), None);
     }
 
     // A 1361-point game on a 1512-point display leaves no room: the mini-HUD sits in the chosen
