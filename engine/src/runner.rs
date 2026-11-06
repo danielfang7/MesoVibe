@@ -22,8 +22,8 @@ pub const EXP_BAR: &str = "exp_bar";
 /// Grabs in a row with no new frame before the engine pauses: 2 s at 4 Hz.
 pub const STALE_AFTER: u32 = 8;
 
-/// How many of a game area's bottom rows the engine reads when the area is `height` game pixels
-/// tall: what its readers need, in game rows.
+/// How many of a game area's bottom rows the engine reads at first when the area is `height` game
+/// pixels tall: what its readers need, in game rows.
 pub fn rows_needed(height: u32) -> u32 {
     exp_bar::rows_needed(height).max(chat::rows_needed(height))
 }
@@ -150,7 +150,9 @@ impl<B: Backend> Runner<B> {
             && found.is_some_and(|w| !w.minimized);
         let capturing = self.state == CaptureState::Capturing;
         if let Some(window) = found.filter(|_| capturing || probing) {
-            let grab = self.backend.grab(&window, rows_needed(window.height));
+            // The chat reader may want more rows than at first, for a chat box the player made taller.
+            let rows = rows_needed(window.height).max(self.chat.rows_needed(window.height));
+            let grab = self.backend.grab(&window, rows);
             match grab {
                 Ok(grab) => {
                     if grab.fresh {
@@ -317,6 +319,28 @@ mod tests {
         let tick = runner.tick();
         assert_eq!((tick.state, tick.exp), (CaptureState::NoGame, None));
         assert_eq!(runner.backend_mut().stops, 1, "capture stops with the game");
+    }
+
+    // A player who makes the chat box taller needs more rows grabbed to reach its top. Fails if
+    // the grab stays at the default size, so the box's upper lines are never read.
+    #[test]
+    fn a_taller_chat_box_makes_the_next_grab_reach_its_top() {
+        use crate::recognizers::chat::test_support::ChatBox;
+        let mut chat = ChatBox::new(&[("lieon: ok", [255, 153, 0])]);
+        chat.size = 14;
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(chat.draw()),
+            ..Fake::default()
+        });
+        runner.tick();
+        runner.tick();
+        let grabs = &runner.backend_mut().grabs;
+        assert_eq!(grabs[0], (7, rows_needed(768)));
+        assert!(
+            grabs[1].1 > rows_needed(768),
+            "second grab asks for more rows: {grabs:?}"
+        );
     }
 
     #[test]

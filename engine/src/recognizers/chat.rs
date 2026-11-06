@@ -30,12 +30,33 @@ use crate::unstretch::{self, No1x};
 
 /// The HUD bar's width at 1x.
 const HUD_WIDTH: u32 = 800;
+/// How far, in game pixels each way, the HUD may sit from where the game area's size puts it.
+/// Wine on a Mac places the game up to a point off.
+const MAX_SHIFT: u32 = 1;
+/// Where the HUD sits relative to where the game area's size puts it, in game pixels: (right,
+/// down).
+type Offset = (i32, i32);
+/// Every place the HUD may be, nearest first.
+const OFFSETS: [Offset; 9] = [
+    (0, 0),
+    (0, -1),
+    (0, 1),
+    (-1, 0),
+    (1, 0),
+    (-1, -1),
+    (1, -1),
+    (-1, 1),
+    (1, 1),
+];
 /// The columns chat text can use, from the HUD's left edge (the scrollbar starts at 551).
 const TEXT_LEFT: u32 = 4;
 const TEXT_RIGHT: u32 = 550;
+/// How wide chat text can run, at 1x.
 const TEXT_WIDTH: u32 = TEXT_RIGHT - TEXT_LEFT;
 /// The scrollbar's left edge, a light gray column from its bottom arrow to its top arrow.
 const SCROLLBAR_EDGE: u32 = 551;
+/// How wide the box's dark backing is, at 1x: from the HUD's left edge up to the scrollbar.
+pub const BOX_WIDTH: u32 = SCROLLBAR_EDGE;
 /// A column through the scrollbar's thumb, and a row just above the bottom arrow: the thumb is
 /// there while the box shows the newest lines.
 const THUMB: (u32, u32) = (556, 88);
@@ -44,14 +65,29 @@ const INPUT_TOP_UP: u32 = 67;
 /// The lowest line's top row, counted up from the bottom, and the distance between lines. A line
 /// runs from just above its capitals to the bottom of its descenders.
 const FIRST_LINE_UP: u32 = 85;
-const LINE_HEIGHT: u32 = 16;
+pub const LINE_HEIGHT: u32 = 16;
 /// The lines read: the default box's.
 const MAX_LINES: u32 = 8;
 /// In the default box, the top of the scrollbar's top arrow is this far above the top line's top
 /// row. A resized box can leave less: 7 rows in a 5-line box (Mac captures, 2026-11-02).
 const ARROW_ABOVE_LINES: u32 = 10;
-/// 1x rows the reader looks at: the lines, the scrollbar's top arrow, and a few rows above it.
-pub const CHAT_ROWS: u32 = FIRST_LINE_UP + LINE_HEIGHT * (MAX_LINES - 1) + ARROW_ABOVE_LINES + 4;
+/// Rows read above the scrollbar's top arrow, and with room for the HUD to sit a row higher.
+const ABOVE_BOX: u32 = 4 + MAX_SHIFT;
+/// 1x rows the default box reaches, up from where the game area's size puts the HUD's bottom: the
+/// lines, the scrollbar's top arrow, and a few rows above it.
+const BOX_ROWS: u32 = FIRST_LINE_UP + LINE_HEIGHT * (MAX_LINES - 1) + ARROW_ABOVE_LINES + 4;
+/// 1x rows the reader looks at first: the default box's, with room for the HUD to sit a row
+/// higher. The player can make the box taller; the reader then follows its top up (ChatReader).
+pub const CHAT_ROWS: u32 = BOX_ROWS + MAX_SHIFT;
+/// How many more rows the reader asks for when a box runs past the top of the rows it read.
+const GROW: u32 = LINE_HEIGHT * MAX_LINES;
+/// The scrollbar's top arrow: a pale face around a blue arrow, `ARROW_ROWS` tall from the top of
+/// the scrollbar's edge down, under a blue-gray border row. Column `ARROW_FACE.0` crosses both.
+const ARROW_ROWS: u32 = 12;
+const ARROW_FACE: (u32, [u8; 3]) = (556, [238, 238, 255]);
+const ARROW_BORDER: [u8; 3] = [136, 154, 170];
+/// The columns of the arrow itself.
+const ARROW_COLUMNS: std::ops::RangeInclusive<u32> = 556..=561;
 /// A line whose text starts this far in is the indented rest of a long line above it.
 const INDENT: u32 = 16;
 /// Lines handed back recently, for telling old lines from new ones after the box was scrolled.
@@ -99,6 +135,21 @@ pub struct ChatReading {
     pub lines: Vec<ChatLine>,
     /// The box couldn't be lined up with the last frame, so lines may be missing.
     pub gap: bool,
+    /// Where the box is, for showing chat just above it.
+    pub place: Option<ChatPlace>,
+}
+
+/// Where the chat box is in the game area's 1x picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChatPlace {
+    /// The 1x picture's size, which maps it onto the game area on screen.
+    pub width: u32,
+    pub height: u32,
+    /// The box's left edge.
+    pub left: u32,
+    /// The box's top row, where its dark backing starts: the border just above the scrollbar's
+    /// top arrow.
+    pub top: u32,
 }
 
 /// Why the chat box couldn't be read.
@@ -213,42 +264,122 @@ fn light_gray(p: [u8; 3]) -> bool {
     lo >= 200 && hi - lo <= 16
 }
 
-/// The chat box's lines in a 1x picture whose bottom row is the game area's, bottom line first.
-fn scan(frame: &Frame) -> Result<Vec<Line>, ChatUnreadable> {
-    let (width, bottom) = (frame.width(), frame.height());
-    if width < HUD_WIDTH || bottom < CHAT_ROWS {
-        return Err(ChatUnreadable::NotFound);
-    }
-    let left = (width - HUD_WIDTH) / 2;
-    let at = |dx: u32, up: u32| frame.rgb(left + dx, bottom - up);
+/// The HUD in a 1x picture whose bottom row is the game area's, at one of the places it may be.
+struct Hud<'f, 'a> {
+    frame: &'f Frame<'a>,
+    /// The HUD's left column and the row just below its bottom.
+    left: u32,
+    bottom: u32,
+}
 
-    // The input bar's top edge, and the scrollbar's edge just above it.
-    let input = [10, 200, 400].into_iter().all(|dx| {
-        at(dx, INPUT_TOP_UP).into_iter().all(|c| c >= 240)
-            && at(dx, INPUT_TOP_UP + 1).into_iter().all(|c| c <= 40)
-    });
-    if !input || !light_gray(at(SCROLLBAR_EDGE, FIRST_LINE_UP)) {
+impl<'f, 'a> Hud<'f, 'a> {
+    /// The HUD moved by `offset` from where the game area's size puts it, if the rows and columns
+    /// the reader looks at are still in the picture.
+    fn at_offset(frame: &'f Frame<'a>, (right, down): Offset) -> Option<Self> {
+        let left = ((frame.width() - HUD_WIDTH) / 2).checked_add_signed(right)?;
+        let bottom = frame.height().checked_add_signed(down)?;
+        (left + THUMB.0 < frame.width() && bottom >= BOX_ROWS + frame.first_row()).then_some(Hud {
+            frame,
+            left,
+            bottom,
+        })
+    }
+
+    /// The pixel `dx` columns from the HUD's left edge and `up` rows above its bottom.
+    fn at(&self, dx: u32, up: u32) -> [u8; 3] {
+        self.frame.rgb(self.left + dx, self.bottom - up)
+    }
+
+    /// The input bar's top edge, and the scrollbar's edge just above it.
+    fn has_chat_box(&self) -> bool {
+        let input = [10, 200, 400].into_iter().all(|dx| {
+            self.at(dx, INPUT_TOP_UP).into_iter().all(|c| c >= 240)
+                && self.at(dx, INPUT_TOP_UP + 1).into_iter().all(|c| c <= 40)
+        });
+        input && light_gray(self.at(SCROLLBAR_EDGE, FIRST_LINE_UP))
+    }
+
+    /// The scrollbar's top arrow at the top of its edge, `top` rows up: the top row of its pale
+    /// face, and the blue arrow in it. A light scene above the box can't pass for it.
+    fn has_top_arrow(&self, top: u32) -> bool {
+        let blue = |p: [u8; 3]| i32::from(p[2]) - i32::from(p[0]) >= 80;
+        let like = |up: u32, color: [u8; 3]| distance(self.at(ARROW_FACE.0, up), color) <= 24;
+        like(top, ARROW_FACE.1)
+            && like(top + 1, ARROW_BORDER)
+            && (2..ARROW_ROWS - 2).any(|k| {
+                ARROW_COLUMNS
+                    .into_iter()
+                    .any(|dx| blue(self.at(dx, top - k)))
+            })
+    }
+}
+
+/// A frame's chat box: its lines, bottom line first, and where it is.
+struct Scan {
+    lines: Vec<Line>,
+    offset: Offset,
+    /// Where the box is, when its top arrow was found.
+    place: Option<ChatPlace>,
+    /// The box's top, in rows up from the picture's bottom, when its top arrow was found.
+    top: Option<u32>,
+    /// The box runs past the top of the rows read.
+    clipped: bool,
+}
+
+/// The chat box in a 1x picture whose bottom row is the game area's. `prefer` is where the HUD
+/// was last time, looked at first.
+fn scan(frame: &Frame, prefer: Offset) -> Result<Scan, ChatUnreadable> {
+    if frame.width() < HUD_WIDTH || frame.height() < CHAT_ROWS {
         return Err(ChatUnreadable::NotFound);
     }
-    let thumb = at(THUMB.0, THUMB.1);
+    let (offset, hud) = std::iter::once(prefer)
+        .chain(OFFSETS)
+        .find_map(|offset| {
+            Hud::at_offset(frame, offset)
+                .filter(Hud::has_chat_box)
+                .map(|hud| (offset, hud))
+        })
+        .ok_or(ChatUnreadable::NotFound)?;
+    let thumb = hud.at(THUMB.0, THUMB.1);
     if light_gray(thumb) || i32::from(thumb[2]) - i32::from(thumb[0]) < 30 {
         return Err(ChatUnreadable::ScrolledBack);
     }
-    // The scrollbar's top: the box holds the lines whose top row is under it.
+    // The scrollbar's top: the box holds the lines whose top row is under it. Its edge is followed
+    // up to the top arrow, as far as the picture goes, for a box the player made taller. Stopping
+    // at the arrow keeps a light scene above the box from passing for more scrollbar.
+    let highest = hud.bottom - frame.first_row();
     let mut top = FIRST_LINE_UP;
-    while top < CHAT_ROWS - 1 && light_gray(at(SCROLLBAR_EDGE, top + 1)) {
+    let mut found = false;
+    while top < highest && light_gray(hud.at(SCROLLBAR_EDGE, top + 1)) {
         top += 1;
+        if top < highest && top >= FIRST_LINE_UP + ARROW_ROWS && hud.has_top_arrow(top) {
+            found = true;
+            break;
+        }
     }
-    let lines = ((top - FIRST_LINE_UP) / LINE_HEIGHT + 1).min(MAX_LINES);
-    Ok((0..lines)
+    let clipped = !found && top == highest;
+    let count = ((top - FIRST_LINE_UP) / LINE_HEIGHT + 1).min(MAX_LINES);
+    let lines = (0..count)
         .map(|k| {
             line(
                 frame,
-                left + TEXT_LEFT,
-                bottom - FIRST_LINE_UP - LINE_HEIGHT * k,
+                hud.left + TEXT_LEFT,
+                hud.bottom - FIRST_LINE_UP - LINE_HEIGHT * k,
             )
         })
-        .collect())
+        .collect();
+    Ok(Scan {
+        lines,
+        offset,
+        place: found.then(|| ChatPlace {
+            width: frame.width(),
+            height: frame.height(),
+            left: hud.left,
+            top: hud.bottom - (top + 1),
+        }),
+        top: found.then(|| frame.height() - (hud.bottom - top)),
+        clipped,
+    })
 }
 
 /// The line whose top-left text pixel is (x, y).
@@ -367,6 +498,10 @@ pub struct ChatReader {
     recent: VecDeque<Line>,
     /// The box was being followed and then wasn't, so lines may have come and gone unseen.
     lost: bool,
+    /// Where the HUD was last found, relative to where the game area's size puts it.
+    offset: Offset,
+    /// 1x rows to read for a box taller than the default; [`CHAT_ROWS`] when below that.
+    rows: u32,
 }
 
 impl ChatReader {
@@ -374,18 +509,52 @@ impl ChatReader {
         Self::default()
     }
 
-    /// The new chat lines in this frame.
+    /// The 1x rows to read: the default box's, or more to reach the top of a taller one.
+    fn rows(&self) -> u32 {
+        self.rows.max(CHAT_ROWS)
+    }
+
+    /// How many of a game area's bottom rows the reader looks at when the area is `height` game
+    /// pixels tall, in game rows.
+    pub fn rows_needed(&self, height: u32) -> u32 {
+        unstretch::rows_for(height, self.rows())
+    }
+
+    /// The new chat lines in this frame, which holds at least [`ChatReader::rows_needed`] rows.
     pub fn observe(&mut self, frame: &Frame) -> Result<ChatReading, ChatUnreadable> {
-        let now = unstretch::with_bottom_1x(frame, CHAT_ROWS, scan)
-            .map_err(ChatUnreadable::Unsupported)
-            .and_then(|lines| lines);
-        let now = match now {
-            Ok(now) => now,
+        let prefer = self.offset;
+        let rows = self.rows();
+        let scanned = unstretch::with_bottom_1x(frame, rows, |picture| {
+            scan(picture, prefer).map(|scan| (scan, picture.height()))
+        })
+        .map_err(ChatUnreadable::Unsupported)
+        .and_then(|scanned| scanned);
+        let (
+            Scan {
+                lines: now,
+                offset,
+                place,
+                top,
+                clipped,
+            },
+            height,
+        ) = match scanned {
+            Ok(scanned) => scanned,
             Err(e) => {
                 self.reset();
                 return Err(e);
             }
         };
+        self.offset = offset;
+        // A box taller than the rows read: more next frame, until its top shows. A box that got
+        // shorter: fewer again. Always the default box's rows and whole steps more, so dragging
+        // the box's edge changes the rows read only when it crosses a step.
+        if clipped {
+            self.rows = (rows + GROW).min(height);
+        } else if let Some(top) = top {
+            let steps = (top + ABOVE_BOX).saturating_sub(CHAT_ROWS).div_ceil(GROW);
+            self.rows = self.rows.min(CHAT_ROWS + steps * GROW);
+        }
         let lined_up = self
             .lines
             .as_deref()
@@ -406,6 +575,7 @@ impl ChatReader {
         let mut reading = ChatReading {
             lines: Vec::new(),
             gap,
+            place,
         };
         let mut handed_back = Vec::new();
         // Oldest first: the highest new line.
@@ -449,7 +619,7 @@ impl ChatReader {
     }
 }
 
-/// How many of a game area's bottom rows the reader looks at when the area is `height` game
+/// How many of a game area's bottom rows a new reader looks at when the area is `height` game
 /// pixels tall, in game rows.
 pub fn rows_needed(height: u32) -> u32 {
     unstretch::rows_for(height, CHAT_ROWS)
@@ -480,6 +650,8 @@ pub(crate) mod test_support {
         pub(crate) arrow_above: u32,
         /// The scene showing through the megaphone bands: a different pattern for each value.
         pub(crate) scene: u32,
+        /// How far the whole HUD sits from where the game area's size puts it: (right, down).
+        pub(crate) shift: (i32, i32),
     }
 
     impl ChatBox {
@@ -492,6 +664,7 @@ pub(crate) mod test_support {
                 size: MAX_LINES,
                 arrow_above: ARROW_ABOVE_LINES,
                 scene: 0,
+                shift: (0, 0),
             }
         }
 
@@ -499,8 +672,8 @@ pub(crate) mod test_support {
             let font = Font::new("abcdefghijklmnopqrstuvwxyz:>.! ", 3);
             let mut canvas = Canvas::new(self.width, self.height);
             canvas.fill(0, 0, self.width, self.height, BRICK);
-            let left = (self.width - HUD_WIDTH) / 2;
-            let y = |up: u32| self.height - up;
+            let left = ((self.width - HUD_WIDTH) / 2).wrapping_add_signed(self.shift.0);
+            let y = |up: u32| (self.height - up).wrapping_add_signed(self.shift.1);
             // The input bar's top edge.
             canvas.fill(left, y(INPUT_TOP_UP + 1), HUD_WIDTH, 1, [8, 8, 8]);
             canvas.fill(left, y(INPUT_TOP_UP), HUD_WIDTH, 1, WHITE);
@@ -508,6 +681,18 @@ pub(crate) mod test_support {
             let top = FIRST_LINE_UP + LINE_HEIGHT * (self.size - 1) + self.arrow_above;
             canvas.fill(left + SCROLLBAR_EDGE, y(top), 1, top - 70 + 1, GRAY);
             canvas.fill(left + SCROLLBAR_EDGE + 1, y(top), 10, top - 70 + 1, TRACK);
+            // The top arrow: a pale face around a blue arrow, under its border and the box's dark
+            // top edge.
+            canvas.fill(left + SCROLLBAR_EDGE, y(top + 1), 2, 1, [36, 22, 9]);
+            canvas.fill(left + SCROLLBAR_EDGE + 2, y(top + 1), 11, 1, ARROW_BORDER);
+            canvas.fill(
+                left + SCROLLBAR_EDGE + 2,
+                y(top),
+                11,
+                ARROW_ROWS,
+                ARROW_FACE.1,
+            );
+            canvas.fill(left + 557, y(top - 3), 4, 5, [34, 102, 153]);
             if !self.scrolled_back {
                 canvas.fill(left + THUMB.0 - 3, y(107), 8, 107 - 85 + 1, THUMB_BLUE);
             }
@@ -708,6 +893,110 @@ mod tests {
         assert_eq!(channels(&reading), [Channel::Friend]);
     }
 
+    // Wine on a Mac can put the game a point off, which moves the whole HUD a game pixel (a
+    // 1024x768 Mac capture, 2026-11-02). Fails if the reader only looks where the game area's size
+    // puts the box, which reports a chat box in plain view as missing.
+    #[test]
+    fn reads_a_box_a_pixel_off() {
+        for shift in [(1, 1), (-1, -1), (1, 0), (0, -1)] {
+            let mut chat = ChatBox::new(&[("lieon: ok", ORANGE), ("aeco: any nx", WHITE)]);
+            chat.shift = shift;
+            let reading =
+                read(&mut ChatReader::new(), &chat).unwrap_or_else(|e| panic!("{shift:?}: {e:?}"));
+            assert_eq!(channels(&reading), [Channel::Friend], "{shift:?}");
+        }
+    }
+
+    // The overlay sits on the box's top edge. Fails if the place the reading gives drifts from
+    // where the box is drawn, or ignores the HUD's shift.
+    #[test]
+    fn says_where_the_box_is() {
+        let mut chat = ChatBox::new(&[("lieon: ok", ORANGE)]);
+        let place = |chat: &ChatBox| read(&mut ChatReader::new(), chat).unwrap().place.unwrap();
+        let top_up = FIRST_LINE_UP + LINE_HEIGHT * (MAX_LINES - 1) + ARROW_ABOVE_LINES;
+        assert_eq!(
+            place(&chat),
+            ChatPlace {
+                width: 1366,
+                height: 768,
+                left: 283,
+                top: 768 - (top_up + 1),
+            }
+        );
+        chat.shift = (1, 1);
+        assert_eq!(
+            (place(&chat).left, place(&chat).top),
+            (284, 769 - (top_up + 1))
+        );
+        // A smaller box: its top is lower.
+        chat.shift = (0, 0);
+        chat.size = 5;
+        chat.arrow_above = 7;
+        assert_eq!(
+            place(&chat).top,
+            768 - (FIRST_LINE_UP + LINE_HEIGHT * 4 + 7 + 1)
+        );
+    }
+
+    // The player can make the box taller than the default. Fails if the reader stops at the rows it
+    // reads first, which puts the overlay on the box's upper lines, or keeps reading the extra rows
+    // after the box is made short again.
+    #[test]
+    fn follows_a_taller_box_up_and_back() {
+        let mut reader = ChatReader::new();
+        let mut look = |chat: &ChatBox| {
+            let canvas = chat.draw();
+            let frame = canvas.frame();
+            let reading = reader.observe(&frame.bottom_rows(reader.rows_needed(768)));
+            (reading.unwrap().place, reader.rows_needed(768))
+        };
+        let mut chat = ChatBox::new(&[("lieon: ok", ORANGE)]);
+        chat.size = 14;
+        let (place, rows) = look(&chat);
+        assert_eq!(place, None, "the box's top is above the rows read");
+        assert!(rows > CHAT_ROWS, "more rows next time");
+        let (place, _) = look(&chat);
+        let top_up = FIRST_LINE_UP + LINE_HEIGHT * 13 + ARROW_ABOVE_LINES;
+        assert_eq!(place.map(|p| p.top), Some(768 - (top_up + 1)));
+        // Back to the default size: the place follows at once, the rows read go back down.
+        chat.size = MAX_LINES;
+        let (place, rows) = look(&chat);
+        assert_eq!(
+            place.map(|p| p.top),
+            Some(768 - (top_up + 1 - LINE_HEIGHT * 6))
+        );
+        assert_eq!(rows, CHAT_ROWS);
+    }
+
+    // A light scene right above the box, like a snowy map. Fails if the reader takes the scene for
+    // more scrollbar, puts the box's top inside it and reads ever more rows looking for it.
+    #[test]
+    fn a_light_scene_above_the_box_isnt_its_top() {
+        let chat = ChatBox::new(&[("lieon: ok", ORANGE)]);
+        let mut canvas = chat.draw();
+        let top_up = FIRST_LINE_UP + LINE_HEIGHT * 7 + ARROW_ABOVE_LINES;
+        // Snow above the box, and showing through its edge next to the arrow's border.
+        let snow = [235, 235, 238];
+        canvas.fill(0, 0, 1366, 768 - top_up - 1, snow);
+        canvas.fill(283 + SCROLLBAR_EDGE, 768 - top_up - 1, 2, 1, snow);
+        let mut reader = ChatReader::new();
+        let frame = canvas.frame();
+        let reading = reader
+            .observe(&frame.bottom_rows(reader.rows_needed(768)))
+            .unwrap();
+        assert_eq!(
+            reading.place.map(|p| p.top),
+            Some(768 - (top_up + 1)),
+            "the border above the arrow"
+        );
+        assert_eq!(channels(&reading), [Channel::Friend]);
+        assert_eq!(
+            reader.rows_needed(768),
+            CHAT_ROWS,
+            "no more rows for the snow"
+        );
+    }
+
     #[test]
     fn no_chat_box_is_not_found() {
         let canvas = Canvas::new(1366, 768);
@@ -733,5 +1022,46 @@ mod tests {
         let frame = Frame::new(1920, 1080, 1920 * 4, &bgra).unwrap();
         let reading = ChatReader::new().observe(&frame).unwrap();
         assert_eq!(channels(&reading), [Channel::Whisper, Channel::Friend]);
+    }
+
+    // In a game stretched to full screen, where the box is is still given in the game's own
+    // 768-line picture, and a taller box is still followed up. Fails if the place is measured in
+    // the strip the stretch recovery rebuilds, which hid the overlay at 1080p.
+    #[test]
+    fn says_where_a_stretched_box_is_and_follows_it_taller() {
+        let stretched = |chat: &ChatBox| {
+            let canvas = chat.draw();
+            let picture: Vec<[u8; 3]> = (0..768)
+                .flat_map(|y| (0..1366).map(move |x| (x, y)))
+                .map(|(x, y)| canvas.frame().rgb(x, y))
+                .collect();
+            unstretch::stretch(&picture, 1366, 1920, 1080, 0)
+        };
+        let mut chat = ChatBox::new(&[("lieon: ok", ORANGE)]);
+        let bgra = stretched(&chat);
+        let frame = Frame::new(1920, 1080, 1920 * 4, &bgra).unwrap();
+        let top_up = FIRST_LINE_UP + LINE_HEIGHT * (MAX_LINES - 1) + ARROW_ABOVE_LINES;
+        assert_eq!(
+            ChatReader::new().observe(&frame).unwrap().place,
+            Some(ChatPlace {
+                width: 1366,
+                height: 768,
+                left: 283,
+                top: 768 - (top_up + 1),
+            })
+        );
+
+        chat.size = 14;
+        let bgra = stretched(&chat);
+        let frame = Frame::new(1920, 1080, 1920 * 4, &bgra).unwrap();
+        let mut reader = ChatReader::new();
+        let first = reader.observe(&frame).unwrap();
+        assert_eq!(first.place, None, "the box's top is above the rows read");
+        assert!(reader.rows_needed(1080) > rows_needed(1080));
+        let top_up = FIRST_LINE_UP + LINE_HEIGHT * 13 + ARROW_ABOVE_LINES;
+        assert_eq!(
+            reader.observe(&frame).unwrap().place.map(|p| p.top),
+            Some(768 - (top_up + 1))
+        );
     }
 }

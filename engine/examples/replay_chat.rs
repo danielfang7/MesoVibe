@@ -70,8 +70,13 @@ fn main() -> ExitCode {
                         .iter()
                         .map(|l| format!("{:?}{}", l.channel, if l.continues { "+" } else { "" }))
                         .collect();
+                    // Where the box's top is, in rows up from the bottom: where the chat overlay sits.
+                    let top = match r.place {
+                        Some(place) => format!(" [box top {} up]", place.height - place.top),
+                        None => " [box top not found]".to_string(),
+                    };
                     println!(
-                        "{name} {}{}",
+                        "{name} {}{}{top}",
                         what.join(" "),
                         if r.gap { " (gap)" } else { "" }
                     );

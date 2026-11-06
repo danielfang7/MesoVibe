@@ -240,7 +240,11 @@ fn tick(
         *blocked = None;
     }
     let _ = app.emit("engine://status", status(&tick, runner, blocked.clone()));
-    docker.follow(app, tick.window.as_ref());
+    let chat_box = match &tick.chat {
+        Some(Ok(reading)) => reading.place,
+        _ => None,
+    };
+    docker.follow(app, tick.window.as_ref(), chat_box);
     let game = match &tick.window {
         Some(window) => presence::Game::Present {
             placed: window.placement.is_some(),

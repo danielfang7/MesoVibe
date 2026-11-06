@@ -1,7 +1,8 @@
 // Chat Hub lines: each whisper, party or friend line is a picture of
-// the game's text, not text, so nothing is ever misread. A picture is cut into its words, and the
-// words wrap like text in a window narrower than the line. The text takes the window's own color
-// (a CSS mask), never the game's colors, so the channel is said in words.
+// the game's text, not text, so nothing is ever misread. In the panel a picture is cut into its
+// words, and the words wrap like text in a window narrower than the line; the chat overlay shows
+// whole lines at the game's own size. The text takes the window's own color (a CSS mask), never
+// the game's colors.
 import { h } from "./dom.js";
 import type { ChatChannel, ChatLine } from "./ipc.js";
 
@@ -45,8 +46,35 @@ export function clockTime(atMs: number): string {
   return new Date(atMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-/** The message's words as pieces of its pictures, colored by the surrounding text color. */
-export function messageText(message: ChatMessage): HTMLElement {
+/**
+ * Shows columns `from` to `to` of `line`'s picture in `element`, `scale` CSS pixels to a picture
+ * pixel. CSSOM properties, not a style attribute, so the strict CSP holds.
+ */
+function showPicture(element: HTMLElement, line: ChatLine, scale: number, from: number, to: number): void {
+  const set = (name: string, value: string) => {
+    element.style.setProperty(name, value);
+    element.style.setProperty(`-webkit-${name}`, value);
+  };
+  element.style.width = `${(to - from) * scale}px`;
+  element.style.height = `${line.height * scale}px`;
+  set("mask-image", `url("${line.png}")`);
+  set("mask-size", `${line.width * scale}px ${line.height * scale}px`);
+  set("mask-position", `${-from * scale}px 0`);
+  set("mask-repeat", "no-repeat");
+}
+
+/** A line's whole picture, `scale` CSS pixels to a game pixel, colored by the surrounding text color. */
+export function linePicture(line: ChatLine, scale: number): HTMLElement {
+  const picture = h("span", { class: "chat-picture" });
+  showPicture(picture, line, scale, 0, line.width);
+  return picture;
+}
+
+/**
+ * The message's words as pieces of its pictures, colored by the surrounding text color, `scale`
+ * CSS pixels to a game pixel: near body text in the panel, the game's own size over the game.
+ */
+export function messageText(message: ChatMessage, scale = CHAT_SCALE): HTMLElement {
   const box = h("span", {
     class: "chat-text",
     attrs: {
@@ -54,21 +82,11 @@ export function messageText(message: ChatMessage): HTMLElement {
       "aria-label": `${CHANNEL_NAME[message.channel]} message at ${clockTime(message.atMs)}, a picture of the game's text`,
     },
   });
-  box.style.setProperty("column-gap", `${WORD_GAP * CHAT_SCALE}px`);
+  box.style.setProperty("column-gap", `${WORD_GAP * scale}px`);
   for (const line of message.lines) {
     for (const [from, to] of line.words) {
       const word = h("span", { class: "chat-word" });
-      // CSSOM properties, not a style attribute, so the strict CSP holds.
-      const set = (name: string, value: string) => {
-        word.style.setProperty(name, value);
-        word.style.setProperty(`-webkit-${name}`, value);
-      };
-      word.style.width = `${(to - from) * CHAT_SCALE}px`;
-      word.style.height = `${line.height * CHAT_SCALE}px`;
-      set("mask-image", `url("${line.png}")`);
-      set("mask-size", `${line.width * CHAT_SCALE}px ${line.height * CHAT_SCALE}px`);
-      set("mask-position", `${-from * CHAT_SCALE}px 0`);
-      set("mask-repeat", "no-repeat");
+      showPicture(word, line, scale, from, to);
       box.appendChild(word);
     }
   }

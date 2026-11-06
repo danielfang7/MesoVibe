@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "chat",
-  "description": "Allow-listed IPC for the chat overlay window: listening to new chat lines and the chat types to show, and asking for the settings and the lines so far. Nothing else.",
+  "description": "Allow-listed IPC for the chat overlay window: listening to new chat lines and the chat types and colors to show, and asking for the settings and the lines so far. Nothing else.",
   "windows": ["chat"],
   "permissions": [
     "core:event:allow-listen",

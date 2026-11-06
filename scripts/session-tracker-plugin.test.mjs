@@ -60,18 +60,26 @@ function grind() {
   return { ...plugin, t0, now: t0 + 60_000 };
 }
 
-test("the plugin introduces itself and starts with the empty state", () => {
+/** A section of the last view drawn, by its title. */
+const section = (sent, title) => last(sent, "render").view.find((node) => node.title === title);
+/** The "This session" section's children (none when it's left out), and its label and value pairs. */
+const thisSession = (sent) => section(sent, "This session")?.children ?? [];
+const items = (sent) => thisSession(sent).find((node) => node.kind === "keyValue")?.items ?? [];
+const pastSessions = (sent) => section(sent, "Past sessions").children;
+
+// Before the first gain the strip says "Earn some EXP to start". Fails if the Session view says
+// it again, or loses its waiting line while the game isn't being read.
+test("the plugin introduces itself, and before the first gain leaves the strip's line to the strip", () => {
   const { send, sent } = run();
   assert.deepEqual(sent[0], { type: "ready", manifest: { id: "session-tracker", name: "Session Tracker" } });
   send({ type: "start", saved: null, atMs: 1_000, capture: "capturing" });
-  assert.match(text(last(sent, "render").view), /Earn some EXP to start/);
+  assert.equal(section(sent, "This session"), undefined, "nothing to show yet");
+  assert.doesNotMatch(text(last(sent, "render").view), /first gain/);
   assert.equal(last(sent, "summary").summary.expPerHour, null);
+  send({ type: "capture", state: "no_game", atMs: 2_000 });
+  send({ type: "tick", atMs: 3_000 });
+  assert.match(text(thisSession(sent)), /Waiting for the game/);
 });
-
-/** The "This session" section's children, and its list of label and value pairs. */
-const thisSession = (sent) => last(sent, "render").view[0].children;
-const items = (sent) => thisSession(sent).find((node) => node.kind === "keyValue")?.items ?? [];
-const pastSessions = (sent) => last(sent, "render").view[1].children;
 const saves = (sent) => sent.filter((m) => m.type === "save").length;
 
 // The Session view repeats nothing the strip shows and hides zero rows. Fails if EXP/hr, progress,
@@ -119,9 +127,9 @@ test("End saves the session with a recap, and Undo within ten seconds takes it b
   assert.match(notice.text, /^Saved: 378 EXP in 1m \(.+\/hr\)\.$/);
   assert.equal(last(sent, "summary").summary.expGained, 0);
   assert.equal(last(sent, "save").data.history.length, 1);
-  // The next session waits for its first gain: one line plus EXP to go, not a list of zeros.
-  assert.deepEqual(thisSession(sent).map((node) => node.kind), ["empty", "keyValue"]);
-  assert.equal(thisSession(sent)[0].text, "Your session numbers appear after your first gain.");
+  // The next session waits for its first gain: EXP to go, not a list of zeros, and not the
+  // strip's "Earn some EXP to start" again.
+  assert.deepEqual(thisSession(sent).map((node) => node.kind), ["keyValue"]);
   assert.deepEqual(items(sent), [["EXP to go", (NEEDED - 230_378).toLocaleString("en-US")]]);
   assert.deepEqual(pastSessions(sent)[0].details, ["Lv\u00a042"]);
 

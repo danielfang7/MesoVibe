@@ -176,9 +176,11 @@ pub fn rows_needed(height: u32, rows: u32) -> Option<u32> {
 }
 
 /// The bottom `rows` rows of the 1x picture behind a stretched frame, at the picture's full
-/// width. `None` when the frame isn't stretched (768 lines or fewer), when `rows` is 0 or more
-/// than 768, when the picture would be narrower than one pixel, or when the frame doesn't hold
-/// the bottom [`rows_needed`] rows the recovery reads (all it reads).
+/// width, as the bottom strip of that 768-line picture (rows `768 - rows` to 768), so a reader
+/// measures up from the game's own height, as it does in an unscaled picture. `None` when the
+/// frame isn't stretched (768 lines or fewer), when `rows` is 0 or more than 768, when the
+/// picture would be narrower than one pixel, or when the frame doesn't hold the bottom
+/// [`rows_needed`] rows the recovery reads (all it reads).
 pub fn bottom_rows(frame: &Frame, rows: u32) -> Option<Picture> {
     let (width, height) = (frame.width(), frame.height());
     let picture_width = picture_width(width, height);
@@ -223,8 +225,8 @@ pub fn bottom_rows(frame: &Frame, rows: u32) -> Option<Picture> {
     }
     Some(Picture {
         width: picture_width as u32,
-        height: rows as u32,
-        first_row: 0,
+        height: NATIVE_HEIGHT,
+        first_row: NATIVE_HEIGHT - rows as u32,
         bgra,
     })
 }
@@ -457,11 +459,15 @@ mod tests {
             assert_eq!(bottom_rows(&short.unwrap(), rows), None, "one row short");
             let recovered = bottom_rows(&frame, rows).unwrap();
             let recovered = recovered.frame();
-            assert_eq!((recovered.width(), recovered.height()), (narrow, rows));
+            // The bottom of the game's own 768-line picture, so readers measure up from there.
+            assert_eq!(
+                (recovered.width(), recovered.height(), recovered.first_row()),
+                (narrow, NATIVE_HEIGHT, NATIVE_HEIGHT - rows)
+            );
             let mut worst = 0;
-            for y in 0..rows {
+            for y in NATIVE_HEIGHT - rows..NATIVE_HEIGHT {
                 for x in 0..narrow {
-                    let truth = picture[((NATIVE_HEIGHT - rows + y) * narrow + x) as usize];
+                    let truth = picture[(y * narrow + x) as usize];
                     let got = recovered.rgb(x, y);
                     for c in 0..3 {
                         worst = worst.max(truth[c].abs_diff(got[c]));

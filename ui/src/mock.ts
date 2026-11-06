@@ -9,7 +9,7 @@
 // Release builds leave this file out (ipc.ts loads it only in development).
 import type { Event as GameEvent } from "@mesovibe/sdk";
 
-import type { ChatChannel, ChatHost, ChatLine, HudHost, HudSummary, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
+import type { ChatChannel, ChatHost, ChatLine, ChatPosition, HudHost, HudSummary, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
 
 const NEEDED = 356_916;
 
@@ -97,6 +97,8 @@ export function mockHost(scenario: string): Host {
     miniHudCorner: "top-right",
     chatOverlay: false,
     chatOverlayChannels: { whisper: true, party: true, friend: true },
+    chatOverlayColors: { whisper: "#00ffff", party: "#00ffff", friend: "#00ffff" },
+    chatOverlayPosition: "above-chat",
   };
   const statusHandlers: ((status: Status) => void)[] = [];
   const eventHandlers: ((event: GameEvent, atMs: number) => void)[] = [];
@@ -197,7 +199,8 @@ export function mockHost(scenario: string): Host {
       // Previews and tests can hand the panel lines of their own.
       (window as unknown as { mockChat?: (lines: ChatLine[]) => void }).mockChat = handler;
     },
-    setChatOverlay: async (on, channels) => (settings = { ...settings, chatOverlay: on, chatOverlayChannels: channels }),
+    setChatOverlay: async (on, channels, colors, position) =>
+      (settings = { ...settings, chatOverlay: on, chatOverlayChannels: channels, chatOverlayColors: colors, chatOverlayPosition: position }),
     updateStatus: async () => update,
     onUpdateStatus: async (handler) => updateHandlers.push(handler),
     checkForUpdates: async () => {
@@ -223,6 +226,9 @@ export function mockChatHost(scenario: string): ChatHost {
     miniHudCorner: "top-right",
     chatOverlay: true,
     chatOverlayChannels: { whisper: true, party: true, friend: true },
+    chatOverlayColors: { whisper: "#00ffff", party: "#00ffff", friend: "#00ffff" },
+    // `?position=right` or `left` shows a side box in a browser.
+    chatOverlayPosition: (new URLSearchParams(location.search).get("position") as ChatPosition | null) ?? "above-chat",
   };
   return {
     settings: async () => settings,
@@ -231,7 +237,9 @@ export function mockChatHost(scenario: string): ChatHost {
       if (scenario === "grind") chatter(handler);
       (window as unknown as { mockChat?: (lines: ChatLine[]) => void }).mockChat = handler;
     },
-    onChannels: async () => {},
+    onChoice: async (handler) => {
+      (window as unknown as { mockChoice?: typeof handler }).mockChoice = handler;
+    },
   };
 }
 
