@@ -1,11 +1,12 @@
-// The chat overlay: the latest whisper, party and friend lines just above the game's chat box,
-// like split chat: the text at the chat's own size, in the colors the player picked, on the same
-// faint dark wash as the box itself. The player turns it on and picks its chat types and colors in
-// the panel's Chat view. The host sizes the window to the chat box's width and puts it on the box's
-// top edge, keeps it click-through and never lets it take the keyboard (app/src/dock.rs). It shows
+// The chat overlay: the latest whisper, party and friend lines over the game, at the chat's own
+// size, in the colors the player picked, on the same faint dark wash as the game's chat box. Above
+// the chat box it's split chat: whole lines on the box's top edge, as wide as the box. At either
+// side of the game it's a box whose lines wrap at its width. The player turns it on and picks where
+// it sits, its chat types and its colors in the panel's Chat view. The host sizes and places the
+// window, keeps it click-through and never lets it take the keyboard (app/src/dock.rs). It shows
 // nothing until a line arrives.
 import { h, replace } from "./dom.js";
-import { CHANNEL_NAME, clockTime, linePicture, messages } from "./chatlines.js";
+import { CHANNEL_NAME, clockTime, linePicture, messageText, messages } from "./chatlines.js";
 import { connectChat } from "./ipc.js";
 import type { ChatLine, ChatOverlayChoice } from "./ipc.js";
 
@@ -14,6 +15,8 @@ import type { ChatLine, ChatOverlayChoice } from "./ipc.js";
  * engine/src/recognizers/chat.rs). The window is that wide on screen, which gives the game's scale.
  */
 const BOX_WIDTH = 551;
+/** How wide a box at the game's side is, in game pixels (SIDE_WIDTH in app/src/dock.rs). */
+const SIDE_WIDTH = 300;
 /** The most messages shown; the oldest leave first, and earlier when they don't all fit. */
 const SHOWN = 5;
 /** Lines kept for repainting. */
@@ -32,9 +35,10 @@ function keep(fresh: ChatLine[]): void {
 
 function paint(): void {
   if (choice === null) return;
-  const { channels, colors } = choice;
-  // CSS pixels per game pixel.
-  const scale = window.innerWidth / BOX_WIDTH;
+  const { channels, colors, position } = choice;
+  const side = position !== "above-chat";
+  // CSS pixels per game pixel: the window is as wide as the chat box, or as the side box.
+  const scale = window.innerWidth / (side ? SIDE_WIDTH : BOX_WIDTH);
   document.documentElement.style.setProperty("--game-px", `${scale}px`);
   const shown = messages(lines.filter((line) => channels[line.channel])).slice(-SHOWN);
   if (shown.length === 0) {
@@ -43,20 +47,23 @@ function paint(): void {
   }
   const list = h(
     "ol",
-    { class: "split-chat", attrs: { "aria-label": "Latest chat" } },
+    { class: side ? `side-chat ${position}` : "split-chat", attrs: { "aria-label": "Latest chat" } },
     ...shown.map((message) => {
-      const item = h(
-        "li",
-        {
-          class: "split-message",
-          attrs: {
-            role: "img",
-            "aria-label": `${CHANNEL_NAME[message.channel]} message at ${clockTime(message.atMs)}, a picture of the game's text`,
-          },
-        },
-        // One row per line, as the game draws them: the rest of a long line is indented.
-        ...message.lines.map((line) => h("span", { class: line.continues ? "split-line rest" : "split-line" }, linePicture(line, scale))),
-      );
+      const item = side
+        ? // The words wrap at the box's width; the picture of the text is named on its words.
+          h("li", { class: "side-message" }, messageText(message, scale))
+        : h(
+            "li",
+            {
+              class: "split-message",
+              attrs: {
+                role: "img",
+                "aria-label": `${CHANNEL_NAME[message.channel]} message at ${clockTime(message.atMs)}, a picture of the game's text`,
+              },
+            },
+            // One row per line, as the game draws them: the rest of a long line is indented.
+            ...message.lines.map((line) => h("span", { class: line.continues ? "split-line rest" : "split-line" }, linePicture(line, scale))),
+          );
       item.style.color = colors[message.channel];
       return item;
     }),
@@ -86,7 +93,7 @@ async function boot(): Promise<void> {
   });
   window.addEventListener("resize", paint);
   const [settings, history] = await Promise.all([host.settings(), host.chatHistory()]);
-  choice ??= { channels: settings.chatOverlayChannels, colors: settings.chatOverlayColors };
+  choice ??= { channels: settings.chatOverlayChannels, colors: settings.chatOverlayColors, position: settings.chatOverlayPosition };
   keep(history);
   paint();
 }

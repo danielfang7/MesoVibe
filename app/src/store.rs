@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::dock::Corner;
+use crate::dock::{ChatPosition, Corner};
 
 /// The largest blob a plugin may keep: enough for months of session history.
 const MAX_PLUGIN_BYTES: usize = 4 * 1024 * 1024;
@@ -38,9 +38,11 @@ pub struct Settings {
     pub mini_hud: bool,
     /// The corner of the game area the mini-HUD sits in.
     pub mini_hud_corner: Corner,
-    /// The chat overlay: the latest whisper, party and friend lines just above the game's chat
-    /// box (Chat Hub). Off until the player turns it on.
+    /// The chat overlay: the latest whisper, party and friend lines over the game (Chat Hub). Off
+    /// until the player turns it on.
     pub chat_overlay: bool,
+    /// Where the chat overlay sits: on the game's chat box, or in a box at either side.
+    pub chat_overlay_position: ChatPosition,
     /// Which chat types the overlay shows.
     pub chat_overlay_channels: ChatChannels,
     /// The color of each chat type's text in the overlay.
@@ -139,6 +141,7 @@ impl Default for Settings {
             mini_hud: true,
             mini_hud_corner: Corner::TopRight,
             chat_overlay: false,
+            chat_overlay_position: ChatPosition::AboveChat,
             chat_overlay_channels: ChatChannels::default(),
             chat_overlay_colors: ChatColors::default(),
             panel: None,
@@ -388,6 +391,7 @@ mod tests {
         assert_eq!(settings.mini_hud_corner, Corner::TopRight);
         assert_eq!(settings.panel, None);
         assert_eq!(settings.chat_overlay_colors, ChatColors::default());
+        assert_eq!(settings.chat_overlay_position, ChatPosition::AboveChat);
         assert!(!dir.join("settings.json.corrupt").exists());
         let _ = std::fs::remove_dir_all(dir);
     }

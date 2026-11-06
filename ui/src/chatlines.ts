@@ -70,8 +70,11 @@ export function linePicture(line: ChatLine, scale: number): HTMLElement {
   return picture;
 }
 
-/** The message's words as pieces of its pictures, colored by the surrounding text color. */
-export function messageText(message: ChatMessage): HTMLElement {
+/**
+ * The message's words as pieces of its pictures, colored by the surrounding text color, `scale`
+ * CSS pixels to a game pixel: near body text in the panel, the game's own size over the game.
+ */
+export function messageText(message: ChatMessage, scale = CHAT_SCALE): HTMLElement {
   const box = h("span", {
     class: "chat-text",
     attrs: {
@@ -79,11 +82,11 @@ export function messageText(message: ChatMessage): HTMLElement {
       "aria-label": `${CHANNEL_NAME[message.channel]} message at ${clockTime(message.atMs)}, a picture of the game's text`,
     },
   });
-  box.style.setProperty("column-gap", `${WORD_GAP * CHAT_SCALE}px`);
+  box.style.setProperty("column-gap", `${WORD_GAP * scale}px`);
   for (const line of message.lines) {
     for (const [from, to] of line.words) {
       const word = h("span", { class: "chat-word" });
-      showPicture(word, line, CHAT_SCALE, from, to);
+      showPicture(word, line, scale, from, to);
       box.appendChild(word);
     }
   }

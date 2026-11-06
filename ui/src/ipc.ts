@@ -25,10 +25,14 @@ export interface ChatColors {
   friend: string;
 }
 
-/** What the chat overlay shows: the chat types, and the color of each. */
+/** Where the chat overlay sits: on the game's chat box, or in a box at the game's right or left edge (app/src/dock.rs). */
+export type ChatPosition = "above-chat" | "right" | "left";
+
+/** What the chat overlay shows: the chat types, the color of each, and where it sits. */
 export interface ChatOverlayChoice {
   channels: ChatChannels;
   colors: ChatColors;
+  position: ChatPosition;
 }
 
 /** One whisper, party or friend line, as a picture of its text (app/src/chat.rs). */
@@ -60,6 +64,7 @@ export interface Settings {
   chatOverlay: boolean;
   chatOverlayChannels: ChatChannels;
   chatOverlayColors: ChatColors;
+  chatOverlayPosition: ChatPosition;
 }
 
 /** "Open with MapleStory Classic": the OS login item (app/src/presence.rs). */
@@ -153,7 +158,7 @@ export interface Host {
   /** The Chat Hub's lines so far this run. */
   chatHistory(): Promise<ChatLine[]>;
   onChat(handler: (lines: ChatLine[]) => void): Promise<unknown>;
-  setChatOverlay(on: boolean, channels: ChatChannels, colors: ChatColors): Promise<Settings>;
+  setChatOverlay(on: boolean, channels: ChatChannels, colors: ChatColors, position: ChatPosition): Promise<Settings>;
   updateStatus(): Promise<UpdateStatus>;
   onUpdateStatus(handler: (status: UpdateStatus) => void): Promise<unknown>;
   /** "Check now": a look at GitHub at once. */
@@ -190,7 +195,7 @@ const tauri: Host = {
   onSnapshot: (handler) => hear<string>("engine://snapshot", handler),
   chatHistory: () => invoke<ChatLine[]>("chat_history"),
   onChat: (handler) => hear<ChatLine[]>("engine://chat", handler),
-  setChatOverlay: (on, channels, colors) => invoke<Settings>("set_chat_overlay", { on, channels, colors }),
+  setChatOverlay: (on, channels, colors, position) => invoke<Settings>("set_chat_overlay", { on, channels, colors, position }),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   onUpdateStatus: (handler) => hear<UpdateStatus>("updates://status", handler),
   checkForUpdates: () => invoke<void>("check_for_updates"),

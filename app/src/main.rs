@@ -273,21 +273,23 @@ fn chat_history(log: State<'_, chat::ChatLog>) -> Vec<chat::ChatEntry> {
     log.history()
 }
 
-/// What the chat overlay shows: the chat types, and the color of each.
+/// What the chat overlay shows: the chat types, the color of each, and where it sits.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatOverlayChoice {
     channels: ChatChannels,
     colors: ChatColors,
+    position: dock::ChatPosition,
 }
 
-/// The chat overlay turned on or off, the chat types it shows and their colors. The overlay
-/// appears or goes on the engine's next tick (dock.rs).
+/// The chat overlay turned on or off, the chat types it shows, their colors and where it sits.
+/// The overlay appears, goes or moves on the engine's next tick (dock.rs).
 #[tauri::command]
 fn set_chat_overlay(
     on: bool,
     channels: ChatChannels,
     colors: ChatColors,
+    position: dock::ChatPosition,
     app: AppHandle,
     store: State<'_, Store>,
 ) -> Result<Settings, String> {
@@ -298,6 +300,7 @@ fn set_chat_overlay(
         s.chat_overlay = on;
         s.chat_overlay_channels = channels;
         s.chat_overlay_colors = colors;
+        s.chat_overlay_position = position;
     })?;
     let _ = app.emit_to(
         dock::CHAT,
@@ -305,6 +308,7 @@ fn set_chat_overlay(
         ChatOverlayChoice {
             channels: settings.chat_overlay_channels,
             colors: settings.chat_overlay_colors.clone(),
+            position: settings.chat_overlay_position,
         },
     );
     Ok(settings)

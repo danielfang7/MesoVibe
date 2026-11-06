@@ -413,6 +413,12 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(`${swatch("party", "cyan")}.getAttribute("aria-checked")`), "false");
     assert.equal(await page.evaluate(`${swatch("whisper", "cyan")}.getAttribute("aria-checked")`), "true", "only party changed");
     assert.equal(await page.evaluate(`${swatch("party", "pink")}.getAttribute("aria-label")`), "Pink");
+    // Where it sits: above the chat box to start, and a pick sticks.
+    const place = (position) => `document.querySelector('[data-key="chat-position-${position}"]')`;
+    assert.equal(await page.evaluate(`${place("above-chat")}.getAttribute("aria-checked")`), "true");
+    await page.evaluate(`${place("right")}.click()`);
+    await page.until(`${place("right")}.getAttribute("aria-checked") === "true"`, "chat on the right");
+    assert.equal(await page.evaluate(`${place("above-chat")}.getAttribute("aria-checked")`), "false");
     assert.deepEqual(page.errors, []);
     page.close();
   });
@@ -447,11 +453,11 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     const colors = `[...document.querySelectorAll(".split-message")].map((m) => getComputedStyle(m).color)`;
     assert.deepEqual(await page.evaluate(colors), ["rgb(0, 255, 255)", "rgb(0, 255, 255)"], "cyan to start");
     await page.evaluate(
-      `window.mockChoice({ channels: { whisper: true, party: true, friend: true }, colors: { whisper: "#00ffff", party: "#ff88cc", friend: "#00ffff" } }), true`,
+      `window.mockChoice({ channels: { whisper: true, party: true, friend: true }, colors: { whisper: "#00ffff", party: "#ff88cc", friend: "#00ffff" }, position: "above-chat" }), true`,
     );
     await page.until(`${colors}[1] === "rgb(255, 136, 204)"`, "party in pink");
     await page.evaluate(
-      `window.mockChoice({ channels: { whisper: false, party: true, friend: true }, colors: { whisper: "#00ffff", party: "#ff88cc", friend: "#00ffff" } }), true`,
+      `window.mockChoice({ channels: { whisper: false, party: true, friend: true }, colors: { whisper: "#00ffff", party: "#ff88cc", friend: "#00ffff" }, position: "above-chat" }), true`,
     );
     await page.until(`document.querySelectorAll(".split-message").length === 1`, "whispers off");
     const wash = await page.evaluate(`(() => {
@@ -463,6 +469,47 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(wash.color, "rgba(0, 0, 0, 0.5)", "the game's chat-box shade");
     assert.deepEqual([wash.left, wash.width, wash.bottom], [0, innerWidth, innerHeight], "the box's width, on its top edge");
     assert.ok(wash.height < innerHeight / 2, `only as tall as the lines, not ${wash.height}px of ${innerHeight}`);
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // A box at the game's side: the same wash and text size, against the chosen edge, with a long
+  // line wrapping at the box's width. Fails if the box leaves its edge, the text isn't the game's
+  // size, or a long line runs past the box instead of wrapping.
+  await t.test("the chat overlay in a box at the game's side keeps the game's text size and wraps long lines", async () => {
+    const page = await openPage(devtools, at("levelup", "chat.html"));
+    await page.until(`window.mockChat && window.mockChoice`, "the overlay");
+    const choice = (position) =>
+      `window.mockChoice({ channels: { whisper: true, party: true, friend: true }, colors: { whisper: "#00ffff", party: "#00ffff", friend: "#00ffff" }, position: "${position}" }), true`;
+    await page.evaluate(choice("right"));
+    // Wider than the box: three words, of which two fit on a row.
+    const long = { ...chatLine(1, "friend"), width: 420, words: [[0, 140], [142, 280], [282, 420]] };
+    await page.evaluate(say([long, chatLine(2, "whisper")]));
+    await page.until(`document.querySelectorAll(".side-message").length === 2`, "two messages in the box");
+    const box = await page.evaluate(`(() => {
+      const list = document.querySelector(".side-chat.right");
+      const { right, bottom } = list.getBoundingClientRect();
+      const words = [...list.querySelector(".side-message").querySelectorAll(".chat-word")].map((w) => w.getBoundingClientRect());
+      return {
+        color: getComputedStyle(list).backgroundColor,
+        right,
+        bottom,
+        rows: new Set(words.map((w) => Math.round(w.top))).size,
+        height: words[0].height,
+        reach: Math.max(...words.map((w) => w.right)),
+      };
+    })()`);
+    const [innerWidth, innerHeight] = await page.evaluate(`[innerWidth, innerHeight]`);
+    const gamePixel = innerWidth / 300;
+    assert.equal(box.color, "rgba(0, 0, 0, 0.5)", "the game's chat-box shade");
+    assert.deepEqual([box.right, box.bottom], [innerWidth, innerHeight], "against the right edge, newest at the bottom");
+    assert.ok(Math.abs(box.height - 16 * gamePixel) < 0.5, `a row is 16 game pixels tall, not ${box.height}px`);
+    assert.equal(box.rows, 2, "the long line wraps");
+    assert.ok(box.reach <= box.right, "no word runs past the box");
+    await page.evaluate(choice("left"));
+    await page.until(`document.querySelector(".side-chat.left")?.getBoundingClientRect().left === 0`, "against the left edge");
+    await page.evaluate(choice("above-chat"));
+    await page.until(`document.querySelectorAll(".split-message").length === 2`, "back above the chat box");
     assert.deepEqual(page.errors, []);
     page.close();
   });

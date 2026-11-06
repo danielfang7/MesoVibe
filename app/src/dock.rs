@@ -22,6 +22,7 @@ use std::sync::Mutex;
 
 use mesovibe_engine::capture::{GameWindow, Placement, ScreenRect};
 use mesovibe_engine::recognizers::chat::{self, ChatPlace};
+use mesovibe_engine::unstretch;
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position,
@@ -41,6 +42,14 @@ pub const HUD_HEIGHT: f64 = 100.0;
 pub const CHAT: &str = "chat";
 /// Chat lines the overlay has room for above the game's chat box.
 const CHAT_LINES: u32 = 6;
+/// The chat overlay in a box at the game's side: as wide as this, in game pixels (long lines
+/// wrap), with room for `SIDE_LINES` lines and `SIDE_PADDING` around them. The box's top sits
+/// `SIDE_FROM_TOP` of the game area's height down from its top: below the minimap and the quest
+/// helper in the top corners, above the quick slots and notices at the bottom.
+pub const SIDE_WIDTH: u32 = 300;
+const SIDE_LINES: u32 = 8;
+const SIDE_PADDING: u32 = 4;
+const SIDE_FROM_TOP: f64 = 0.3;
 /// How far the mini-HUD window sits inside the game area, in game pixels. The top keeps clear of
 /// the buttons along the game's top edge, the bottom of its status bar and quick slots.
 const INSET_SIDE: f64 = 4.0;
@@ -81,6 +90,19 @@ pub enum Corner {
     TopRight,
     BottomLeft,
     BottomRight,
+}
+
+/// Where the chat overlay sits in the game area.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChatPosition {
+    /// On the top edge of the game's chat box, as split chat.
+    #[default]
+    AboveChat,
+    /// In a box inside the game area's right edge.
+    Right,
+    /// In a box inside its left edge.
+    Left,
 }
 
 /// A rectangle in desktop units (see [`ScreenRect`]).
@@ -232,6 +254,50 @@ pub fn chat_overlay(game: &Placement, place: &ChatPlace) -> Option<Rect> {
     })
 }
 
+/// Desktop units per game pixel, each way, for a game area `width` by `height` game pixels shown
+/// at `area`. Above 768 lines the game stretches its 768-line picture to fill the area, so a game
+/// pixel is one of that picture's. `None` for an empty area.
+fn game_pixel(width: u32, height: u32, area: &Rect) -> Option<(f64, f64)> {
+    let (width, height) = if height > unstretch::NATIVE_HEIGHT {
+        (
+            unstretch::picture_width(width, height),
+            unstretch::NATIVE_HEIGHT,
+        )
+    } else {
+        (width, height)
+    };
+    (width > 0 && height > 0).then(|| {
+        (
+            area.width / f64::from(width),
+            area.height / f64::from(height),
+        )
+    })
+}
+
+/// Where the chat overlay goes in a box at the game's side, for the game window `window` at
+/// `game`: inside the game area's left or right edge, below its top, at the game's own size.
+/// `None` when the game area is too small to hold it.
+pub fn chat_side(window: &GameWindow, game: &Placement, left: bool) -> Option<Rect> {
+    let area = Rect::from(game.area);
+    let (across, down) = game_pixel(window.width, window.height, &area)?;
+    let (width, height) = (
+        f64::from(SIDE_WIDTH) * across,
+        f64::from(SIDE_LINES * chat::LINE_HEIGHT + 2 * SIDE_PADDING) * down,
+    );
+    let inset = INSET_SIDE * across;
+    let y = area.y + (area.height * SIDE_FROM_TOP).round();
+    (area.width >= width + 2.0 * inset && y + height <= area.bottom()).then_some(Rect {
+        x: if left {
+            area.x + inset
+        } else {
+            area.right() - inset - width
+        },
+        y,
+        width,
+        height,
+    })
+}
+
 /// Applies [`layout`] to the real windows, from the engine thread, each tick.
 #[derive(Default)]
 pub struct Docker {
@@ -292,10 +358,13 @@ impl Docker {
         };
         let in_front = placement.front || panel.is_focused().unwrap_or(false);
         let displays = displays(app);
-        let overlay = self
-            .chat_box
-            .and_then(|place| chat_overlay(&placement, &place))
-            .filter(|_| settings.chat_overlay && in_front);
+        let overlay = match settings.chat_overlay_position {
+            ChatPosition::AboveChat => self
+                .chat_box
+                .and_then(|place| chat_overlay(&placement, &place)),
+            side => window.and_then(|w| chat_side(w, &placement, side == ChatPosition::Left)),
+        }
+        .filter(|_| settings.chat_overlay && in_front);
         match overlay {
             Some(target) => self.show_chat(app, &target),
             None => self.hide_chat(app),
@@ -757,6 +826,69 @@ mod tests {
         // A reading with no game size can't be scaled to the screen.
         assert_eq!(chat_overlay(&mac, &ChatPlace { width: 0, ..place }), None);
         assert_eq!(chat_overlay(&mac, &ChatPlace { height: 0, ..place }), None);
+    }
+
+    // The side boxes sit inside the game's left or right edge, below its top, at the game's own
+    // size. Fails if a box leaves the game, ignores a stretched game's scale, or crowds a small one.
+    #[test]
+    fn the_chat_overlay_box_sits_inside_either_side_of_the_game() {
+        let window = |width, height| GameWindow {
+            id: 7,
+            width,
+            height,
+            scale: 1,
+            minimized: false,
+            placement: None,
+        };
+        let height = f64::from(SIDE_LINES * chat::LINE_HEIGHT + 2 * SIDE_PADDING);
+        // A 1366×768 game at 1x on a Mac: a game pixel is a point.
+        let mac = game(76, 40, 1366, 768);
+        let right = chat_side(&window(1366, 768), &mac, false).expect("room on the right");
+        assert!(close(
+            right,
+            Rect {
+                x: 76.0 + 1366.0 - 4.0 - 300.0,
+                y: 68.0 + 230.0,
+                width: 300.0,
+                height
+            }
+        ));
+        let left = chat_side(&window(1366, 768), &mac, true).expect("room on the left");
+        assert!(close(
+            left,
+            Rect {
+                x: 76.0 + 4.0,
+                ..right
+            }
+        ));
+        // Full screen at 1920×1080: the game stretched its 1366×768 picture, so its text is that
+        // much larger, and so is the box.
+        let screen = ScreenRect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let full = Placement {
+            frame: screen,
+            area: screen,
+            front: true,
+        };
+        let (across, down) = (1920.0 / 1366.0, 1080.0 / 768.0);
+        assert!(close(
+            chat_side(&window(1920, 1080), &full, false).expect("room on the right"),
+            Rect {
+                x: 1920.0 - (4.0 + 300.0) * across,
+                y: 324.0,
+                width: 300.0 * across,
+                height: height * down
+            }
+        ));
+        // A game area narrower than the box has no room for it.
+        assert_eq!(
+            chat_side(&window(300, 600), &game(76, 40, 300, 600), false),
+            None
+        );
     }
 
     // A 1361-point game on a 1512-point display leaves no room: the mini-HUD sits in the chosen

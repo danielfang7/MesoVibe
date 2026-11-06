@@ -7,7 +7,7 @@ import type { CaptureState, SessionSummary } from "@mesovibe/sdk";
 import { CHANNEL_NAME, clockTime, messageText, messages } from "./chatlines.js";
 import { append, h, icon, replace } from "./dom.js";
 import { connect } from "./ipc.js";
-import type { AppInfo, ChatChannel, ChatChannels, ChatColors, ChatLine, Corner, Display, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
+import type { AppInfo, ChatChannel, ChatChannels, ChatColors, ChatLine, ChatPosition, Corner, Display, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
 import { PluginHost, confirmDialog, fill, renderView } from "./plugins.js";
 
 type ViewName = "session" | "chat" | "sees" | "settings";
@@ -29,6 +29,13 @@ const CHAT_COLORS: [string, string][] = [
   ["#66ff66", "Green"],
   ["#ff88cc", "Pink"],
   ["#ffaa44", "Orange"],
+];
+
+/** Where chat over the game can sit, named for the picker, in their order across the game. */
+const CHAT_POSITIONS: [ChatPosition, string][] = [
+  ["left", "Left side"],
+  ["above-chat", "Above chat"],
+  ["right", "Right side"],
 ];
 
 const CORNERS: [Corner, string][] = [
@@ -699,11 +706,20 @@ function shell(initial: Settings): void {
     }
   }
 
-  function setChatOverlay(on: boolean, channels: ChatChannels, colors: ChatColors): void {
-    void host.setChatOverlay(on, channels, colors).then((settings) => {
-      panel.settings = settings;
-      if (panel.view === "chat") paintChat();
-    });
+  /** Changes the chat overlay's settings: on or off, its chat types, their colors or where it sits. */
+  function setChatOverlay(change: { on?: boolean; channels?: ChatChannels; colors?: ChatColors; position?: ChatPosition }): void {
+    const s = panel.settings;
+    void host
+      .setChatOverlay(
+        change.on ?? s.chatOverlay,
+        change.channels ?? s.chatOverlayChannels,
+        change.colors ?? s.chatOverlayColors,
+        change.position ?? s.chatOverlayPosition,
+      )
+      .then((settings) => {
+        panel.settings = settings;
+        if (panel.view === "chat") paintChat();
+      });
   }
 
   function chatView(): Node[] {
@@ -760,7 +776,7 @@ function shell(initial: Settings): void {
             "data-key": `chat-overlay-${channel}`,
           },
           on: {
-            click: () => setChatOverlay(true, { ...s.chatOverlayChannels, [channel]: !s.chatOverlayChannels[channel] }, s.chatOverlayColors),
+            click: () => setChatOverlay({ channels: { ...s.chatOverlayChannels, [channel]: !s.chatOverlayChannels[channel] } }),
           },
         },
         // A check as well as the pressed look: several can be on at once.
@@ -780,14 +796,41 @@ function shell(initial: Settings): void {
         "section",
         { class: "block" },
         h("h2", { class: "label" }, "Over the game"),
-        toggle("Show chat above the game's chat box", s.chatOverlay, (on) => setChatOverlay(on, s.chatOverlayChannels, s.chatOverlayColors), "chat-overlay"),
-        h("p", { class: "text muted" }, "The newest lines, small, just above the game's chat box. Clicks go through to the game."),
+        toggle("Show chat over the game", s.chatOverlay, (on) => setChatOverlay({ on }), "chat-overlay"),
+        h("p", { class: "text muted" }, "The newest lines, at the size of the game's own chat. Clicks go through to the game."),
+        s.chatOverlay ? positionPicker() : null,
         s.chatOverlay
           ? h("div", { class: "segmented chat-picks", attrs: { role: "group", "aria-label": "Chat over the game" } }, ...CHANNELS.map(pick))
           : null,
         s.chatOverlay ? h("div", { class: "chat-colors" }, ...CHANNELS.map(colorRow)) : null,
       ),
     ];
+  }
+
+  /** Where chat sits over the game: on the game's chat box, or in a box at either side. */
+  function positionPicker(): Node {
+    const s = panel.settings;
+    return h(
+      "div",
+      { class: "segmented chat-positions", attrs: { role: "radiogroup", "aria-label": "Where chat sits over the game" } },
+      ...CHAT_POSITIONS.map(([position, label]) => {
+        const hook = `chat-position-${position}`;
+        return h(
+          "button",
+          {
+            class: "segment",
+            attrs: {
+              type: "button",
+              role: "radio",
+              "aria-checked": s.chatOverlayPosition === position ? "true" : "false",
+              "data-key": hook,
+            },
+            on: { click: () => setChatOverlay({ position }) },
+          },
+          label,
+        );
+      }),
+    );
   }
 
   /** A chat type's color over the game: one swatch per color, named. */
@@ -809,7 +852,7 @@ function shell(initial: Settings): void {
             title: name,
             "data-key": hook,
           },
-          on: { click: () => setChatOverlay(true, s.chatOverlayChannels, { ...s.chatOverlayColors, [channel]: hex }) },
+          on: { click: () => setChatOverlay({ colors: { ...s.chatOverlayColors, [channel]: hex } }) },
         },
         on ? "✓" : null,
       );

@@ -977,7 +977,8 @@ html.hud-page body {
   background: var(--match-tint);
 }
 
-.segmented.chat-picks {
+.segmented.chat-picks,
+.segmented.chat-positions {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -1077,4 +1078,42 @@ html.hud-page body {
 .chat-picture {
   display: block;
   background-color: currentColor;
+}
+
+/* The chat overlay in a box at the game's side: the same wash and size, against the game's edge,
+   only as wide and tall as its lines, which wrap at the box's width. Newest at the bottom. */
+.side-chat {
+  position: fixed;
+  bottom: 0;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0;
+  padding: calc(var(--game-px, 1px) * 4) calc(var(--game-px, 1px) * 6);
+  list-style: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.5);
+  cursor: default;
+  user-select: none;
+}
+
+.side-chat.right {
+  right: 0;
+}
+
+.side-chat.left {
+  left: 0;
+}
+
+.side-message {
+  /* A one-pixel shadow under the text only, as above the chat box. */
+  filter: drop-shadow(var(--game-px, 1px) var(--game-px, 1px) 0 rgba(0, 0, 0, 0.9));
+}
+
+/* The words take the chat type's color, in the game's 16-pixel rows. */
+.side-message .chat-text {
+  row-gap: 0;
+  color: inherit;
 }
