@@ -11,6 +11,10 @@
 //! New lines always enter at the bottom, so the reader looks only at the default box's eight
 //! lines, even when the player made the box taller.
 //!
+//! Party and friend chat comes as "name : words". The game also writes some notices of its own in
+//! those colors (a party member left, a pet out of potions); they have no name and colon, so they
+//! stay out of the hub, along with the indented rest of them.
+//!
 //! New lines are counted by how far the box's lines moved up since the last frame, the way the
 //! notice stack is counted, so a friend saying "ok" twice shows twice. When the lines can't be
 //! lined up (the box was scrolled back, covered, or just came into view), every colored line on
@@ -36,6 +40,10 @@ const MAX_SHIFT: u32 = 1;
 /// Where the HUD sits relative to where the game area's size puts it, in game pixels: (right,
 /// down).
 type Offset = (i32, i32);
+/// How far apart two frames may read the same line, in pixels each way: each frame may find the
+/// HUD up to [`MAX_SHIFT`] from where the game area's size puts it, so not always at the same place.
+/// Reading a line two places as two lines would hand every line on screen back again.
+const DRIFT: i32 = 2 * MAX_SHIFT as i32;
 /// Every place the HUD may be, nearest first.
 const OFFSETS: [Offset; 9] = [
     (0, 0),
@@ -90,6 +98,8 @@ const ARROW_BORDER: [u8; 3] = [136, 154, 170];
 const ARROW_COLUMNS: std::ops::RangeInclusive<u32> = 556..=561;
 /// A line whose text starts this far in is the indented rest of a long line above it.
 const INDENT: u32 = 16;
+/// How far into a line a speaker's " : " can be, from [`TEXT_LEFT`]: past the game's longest names.
+const NAME_COLUMNS: usize = 120;
 /// Lines handed back recently, for telling old lines from new ones after the box was scrolled.
 const RECENT: usize = 64;
 
@@ -186,11 +196,14 @@ struct Line {
     left: u32,
     /// The picture handed back if the line is new: only for channel lines.
     picture: Option<ChatLine>,
+    /// Someone said it: a party or friend line that starts "name : ", or any whisper. False for the
+    /// indented rest of a line, which goes with the line above it.
+    said: bool,
 }
 
 impl Line {
     /// The same line: a band of the same color, or text with nearly the same pixels (a mouse
-    /// pointer over the line changes a few).
+    /// pointer over the line changes a few), up to [`DRIFT`] pixels away each way.
     fn matches(&self, other: &Line) -> bool {
         match (self.kind, other.kind) {
             (Kind::Band(a), Kind::Band(b)) => {
@@ -199,13 +212,19 @@ impl Line {
             (a, b) if a != b => return false,
             _ => {}
         }
-        let differ: u32 = self
-            .ink
-            .iter()
-            .zip(&other.ink)
-            .map(|(a, b)| (a ^ b).count_ones())
-            .sum();
-        differ <= (self.count.max(other.count) / 10).max(6)
+        let allowed = (self.count.max(other.count) / 10).max(6);
+        // Moved anywhere, they differ by at least their difference in pixels: no need to look.
+        if self.count.abs_diff(other.count) > allowed {
+            return false;
+        }
+        let same_at = |(right, down): Offset| {
+            differ(&self.ink, &other.ink, down * TEXT_WIDTH as i32 + right) <= allowed
+        };
+        // Almost always where it was; only then a pixel or two away.
+        same_at((0, 0))
+            || (-DRIFT..=DRIFT)
+                .flat_map(|down| (-DRIFT..=DRIFT).map(move |right| (right, down)))
+                .any(same_at)
     }
 
     fn channel(&self) -> Option<Channel> {
@@ -214,6 +233,39 @@ impl Line {
             _ => None,
         }
     }
+}
+
+/// How many pixels differ between `a` and `b` moved `by` pixels along, both as [`Line::ink`]. A
+/// row's end runs on into the next row's start, but text never reaches the line's edges.
+fn differ(a: &[u64], b: &[u64], by: i32) -> u32 {
+    let len = (TEXT_WIDTH * LINE_HEIGHT) as i64;
+    // The 64 pixels of `b` moved along that land at `start`: none from outside the line.
+    let moved = |start: i64| -> u64 {
+        let from = start - i64::from(by);
+        let word = |i: i64| {
+            usize::try_from(i)
+                .ok()
+                .and_then(|i| b.get(i))
+                .copied()
+                .unwrap_or(0)
+        };
+        let (q, r) = (from.div_euclid(64), from.rem_euclid(64) as u32);
+        let low = word(q) >> r;
+        let high = if r == 0 { 0 } else { word(q + 1) << (64 - r) };
+        low | high
+    };
+    a.iter()
+        .enumerate()
+        .map(|(i, &word)| {
+            let start = i as i64 * 64;
+            // The last word's pixels past the line's end, where `b`'s bottom row may move to.
+            let inside = match len - start {
+                n if n >= 64 => u64::MAX,
+                n => (1u64 << n) - 1,
+            };
+            ((word ^ moved(start)) & inside).count_ones()
+        })
+        .sum()
 }
 
 /// Bright enough to be a megaphone's band, or text.
@@ -431,13 +483,70 @@ fn line(frame: &Frame, x: u32, y: u32) -> Line {
         Kind::Text(Some(channel)) => Some(picture(&pixels, channel)),
         _ => None,
     };
+    let said = match kind {
+        Kind::Text(Some(Channel::Whisper)) => true,
+        Kind::Text(Some(channel)) => has_speaker(&pixels, channel),
+        _ => false,
+    };
     Line {
         kind,
         ink,
         count,
         left: if count == 0 { 0 } else { first },
         picture,
+        said,
     }
+}
+
+/// The line starts the way party and friend chat does, "name : words": a colon on its own between
+/// spaces, after the name and before the words.
+fn has_speaker(pixels: &[[u8; 3]], channel: Channel) -> bool {
+    let (w, h) = (TEXT_WIDTH as usize, LINE_HEIGHT as usize);
+    // Each column's rows of text, bit `row`.
+    let columns: Vec<u16> = (0..w)
+        .map(|col| {
+            (0..h)
+                .filter(|&row| solid_in(pixels[row * w + col], channel))
+                .fold(0, |rows, row| rows | 1 << row)
+        })
+        .collect();
+    // The glyphs: runs of columns with text, `[from, to)`.
+    let mut glyphs = Vec::new();
+    let mut start = None;
+    for (col, &rows) in columns.iter().enumerate() {
+        match (rows != 0, start) {
+            (true, None) => start = Some(col),
+            (false, Some(from)) => {
+                glyphs.push((from, col));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    glyphs.windows(3).any(|three| {
+        let [(_, name_end), (from, to), (words, _)] = [three[0], three[1], three[2]];
+        from < NAME_COLUMNS
+            && to - from <= 2
+            && from - name_end >= 2
+            && words - to >= 2
+            && is_colon(columns[from..to].iter().fold(0, |rows, &c| rows | c))
+    })
+}
+
+/// Two dots one above the other: two short runs of rows with a gap between. Not a period (one
+/// dot), an `i` or a `!` (a long stroke), or a quote mark (one).
+fn is_colon(rows: u16) -> bool {
+    let mut runs = Vec::new();
+    let mut run = 0;
+    for row in 0..=16 {
+        if row < 16 && rows >> row & 1 == 1 {
+            run += 1;
+        } else if run > 0 {
+            runs.push(run);
+            run = 0;
+        }
+    }
+    runs.len() == 2 && runs.iter().all(|&run| run <= 3)
 }
 
 /// A channel line's picture: the columns its solid text spans, one pixel of margin each side.
@@ -564,19 +673,40 @@ impl ChatReader {
             // Can't line up: everything on screen may be new.
             None => (now.len(), self.lines.is_some() || self.lost),
         };
-        // Lines that can't be lined up may still be old ones: after frames the box couldn't be read
-        // in (scrolled back, covered), the ones handed back recently; between two readable frames,
-        // the ones on screen last frame.
-        let seen_before = |line: &Line| match (lined_up, &self.lines) {
-            (Some(_), _) => false,
-            (None, None) => self.recent.iter().any(|r| r.matches(line)),
-            (None, Some(before)) => before.iter().any(|b| b.matches(line)),
+        // Lines that can't be lined up may still be old ones: the ones on screen last frame, or
+        // handed back recently, for after frames the box couldn't be read in (scrolled back,
+        // covered) or that lined up with nothing.
+        let seen_before = |line: &Line| {
+            lined_up.is_none()
+                && self
+                    .lines
+                    .iter()
+                    .flatten()
+                    .chain(&self.recent)
+                    .any(|old| old.matches(line))
         };
         let mut reading = ChatReading {
             lines: Vec::new(),
             gap,
             place,
         };
+        // The indented rest of a long line, and whether someone said each line: the rest of a line
+        // goes with the line above it, so a notice's rest stays out with it. Top line first.
+        let continues: Vec<bool> = (0..now.len())
+            .map(|i| {
+                now[i].left >= INDENT
+                    && now
+                        .get(i + 1)
+                        .is_some_and(|above| above.channel() == now[i].channel())
+            })
+            .collect();
+        let mut said = vec![false; now.len()];
+        for i in (0..now.len()).rev() {
+            said[i] = match continues[i] {
+                true => said[i + 1],
+                false => now[i].said,
+            };
+        }
         let mut handed_back = Vec::new();
         // Oldest first: the highest new line.
         for i in (0..fresh).rev() {
@@ -584,15 +714,11 @@ impl ChatReader {
             let Some(picture) = &line.picture else {
                 continue;
             };
-            if seen_before(line) {
+            if !said[i] || seen_before(line) {
                 continue;
             }
-            let continues = line.left >= INDENT
-                && now
-                    .get(i + 1)
-                    .is_some_and(|above| above.channel() == line.channel());
             reading.lines.push(ChatLine {
-                continues,
+                continues: continues[i],
                 ..picture.clone()
             });
             handed_back.push(Line {
@@ -652,6 +778,9 @@ pub(crate) mod test_support {
         pub(crate) scene: u32,
         /// How far the whole HUD sits from where the game area's size puts it: (right, down).
         pub(crate) shift: (i32, i32),
+        /// How far the text sits from its place in the box, as when the box is read a pixel off:
+        /// (right, down).
+        pub(crate) nudge: (i32, i32),
     }
 
     impl ChatBox {
@@ -665,6 +794,7 @@ pub(crate) mod test_support {
                 arrow_above: ARROW_ABOVE_LINES,
                 scene: 0,
                 shift: (0, 0),
+                nudge: (0, 0),
             }
         }
 
@@ -711,8 +841,8 @@ pub(crate) mod test_support {
                 canvas.text(
                     &font,
                     text.trim_start(),
-                    left + indent,
-                    line_top + 4,
+                    (left + indent).wrapping_add_signed(self.nudge.0),
+                    (line_top + 4).wrapping_add_signed(self.nudge.1),
                     |_| *color,
                 );
             }
@@ -747,10 +877,10 @@ mod tests {
     fn splits_whisper_party_and_friend_lines_from_the_rest() {
         let chat = ChatBox::new(&[
             ("aeco: any nx", WHITE),
-            ("fangkip: party test", PINK),
+            ("fangkip : party test", PINK),
             ("temple: cape accuracy", BAND),
             ("notice: party invitations", YELLOW),
-            ("lieon: what it do", ORANGE),
+            ("lieon : what it do", ORANGE),
             ("lieon>> where pot", GREEN),
             ("medicaid: pure water", WHITE),
         ]);
@@ -771,10 +901,40 @@ mod tests {
         );
     }
 
+    // Fails if the game's own notices in a chat type's color reach the hub, or chat with them goes
+    // missing. Only lines someone said, "name : words", and the rest of them belong there.
+    #[test]
+    fn notices_in_a_chat_types_color_are_left_out() {
+        let chat = ChatBox::new(&[
+            ("fangkip : bye bye", PINK),
+            ("fangkip has become the leader of the party.", PINK),
+            (" that your pet is supposed to use.", PINK),
+            ("you are lacking the mp potion", PINK),
+            (" and the rest of it", PINK),
+            ("naynshi : a long party line", PINK),
+            ("lieon is online.", ORANGE),
+            ("lieon>> no colon in a whisper", GREEN),
+        ]);
+        let reading = read(&mut ChatReader::new(), &chat).unwrap();
+        assert_eq!(
+            reading
+                .lines
+                .iter()
+                .map(|l| (l.channel, l.continues))
+                .collect::<Vec<_>>(),
+            [
+                (Channel::Whisper, false),
+                (Channel::Party, false),
+                (Channel::Party, true),
+                (Channel::Party, false),
+            ]
+        );
+    }
+
     #[test]
     fn counts_new_lines_by_how_far_the_box_moved() {
         let mut reader = ChatReader::new();
-        let mut chat = ChatBox::new(&[("lieon: ok", ORANGE), ("aeco: any nx", WHITE)]);
+        let mut chat = ChatBox::new(&[("lieon : ok", ORANGE), ("aeco : any nx", WHITE)]);
         assert_eq!(read(&mut reader, &chat).unwrap().lines.len(), 1);
         // Nothing new: the same lines.
         assert!(read(&mut reader, &chat).unwrap().lines.is_empty());
@@ -783,7 +943,7 @@ mod tests {
         chat.lines = vec![
             ("medicaid: pure water".into(), WHITE),
             ("lieon>> hello".into(), GREEN),
-            ("lieon: ok".into(), ORANGE),
+            ("lieon : ok".into(), ORANGE),
         ];
         chat.lines.extend(before);
         let reading = read(&mut reader, &chat).unwrap();
@@ -799,7 +959,7 @@ mod tests {
     fn a_see_through_band_lines_up_while_the_scene_behind_it_changes() {
         let mut reader = ChatReader::new();
         let mut chat = ChatBox::new(&[
-            ("lieon: ok", ORANGE),
+            ("lieon : ok", ORANGE),
             ("temple: cape accuracy", BAND),
             ("aeco: any nx", WHITE),
             ("pide: nx", BAND),
@@ -815,7 +975,7 @@ mod tests {
     fn a_box_that_turned_over_doesnt_repeat_a_line_still_on_screen() {
         let mut reader = ChatReader::new();
         let mut chat = ChatBox::new(&[
-            ("lieon: ok", ORANGE),
+            ("lieon : ok", ORANGE),
             ("aeco: any nx", WHITE),
             ("medicaid: pure water", WHITE),
         ]);
@@ -824,12 +984,58 @@ mod tests {
         // No shift lines these up: everything else changed.
         chat.lines = vec![
             ("oakville: scrolls".into(), WHITE),
-            ("lieon: ok".into(), ORANGE),
+            ("lieon : ok".into(), ORANGE),
             ("nieox: pots".into(), WHITE),
         ];
         let reading = read(&mut reader, &chat).unwrap();
         assert!(reading.gap);
         assert!(reading.lines.is_empty(), "{reading:?}");
+    }
+
+    // Fails if a line read a pixel away from where it was last frame counts as a new line: every
+    // line on screen would come back again.
+    #[test]
+    fn lines_read_a_pixel_off_are_the_same_lines() {
+        let mut reader = ChatReader::new();
+        let mut chat = ChatBox::new(&[
+            ("lieon : ok", ORANGE),
+            ("aeco: any nx", WHITE),
+            ("fangkip : party test", PINK),
+            ("lieon>> where pot", GREEN),
+        ]);
+        assert_eq!(read(&mut reader, &chat).unwrap().lines.len(), 3);
+        // A pixel off, then two pixels from the frame before: each frame may find the box a pixel
+        // either way of where it is.
+        for nudge in [(1, 0), (-1, 1), (1, -1), (0, 0)] {
+            chat.nudge = nudge;
+            let reading = read(&mut reader, &chat).unwrap();
+            assert!(
+                reading.lines.is_empty(),
+                "{nudge:?}: {:?}",
+                channels(&reading)
+            );
+            assert!(!reading.gap, "{nudge:?}: the lines still line up");
+        }
+    }
+
+    #[test]
+    fn a_frame_that_lines_up_with_nothing_doesnt_bring_back_older_lines() {
+        let mut reader = ChatReader::new();
+        let mut chat = ChatBox::new(&[("lieon : ok", ORANGE), ("aeco : any nx", WHITE)]);
+        chat.size = 2;
+        assert_eq!(read(&mut reader, &chat).unwrap().lines.len(), 1);
+        // A frame where nothing lines up, then the first frame's lines again: the friend line was
+        // handed back already, though it wasn't on screen in the frame just before.
+        let first = chat.lines.clone();
+        chat.lines = vec![
+            ("oakville: scrolls".into(), WHITE),
+            ("nieox: pots".into(), WHITE),
+        ];
+        assert!(read(&mut reader, &chat).unwrap().lines.is_empty());
+        chat.lines = first;
+        let reading = read(&mut reader, &chat).unwrap();
+        assert!(reading.gap);
+        assert!(reading.lines.is_empty(), "{:?}", channels(&reading));
     }
 
     #[test]
@@ -852,7 +1058,7 @@ mod tests {
     #[test]
     fn a_scrolled_back_box_reads_nothing_and_old_lines_dont_repeat() {
         let mut reader = ChatReader::new();
-        let mut chat = ChatBox::new(&[("lieon: ok", ORANGE), ("aeco: any nx", WHITE)]);
+        let mut chat = ChatBox::new(&[("lieon : ok", ORANGE), ("aeco : any nx", WHITE)]);
         assert_eq!(read(&mut reader, &chat).unwrap().lines.len(), 1);
         chat.scrolled_back = true;
         assert_eq!(read(&mut reader, &chat), Err(ChatUnreadable::ScrolledBack));
@@ -866,7 +1072,7 @@ mod tests {
 
     #[test]
     fn a_smaller_box_reads_only_its_lines() {
-        let mut chat = ChatBox::new(&[("lieon: ok", ORANGE)]);
+        let mut chat = ChatBox::new(&[("lieon : ok", ORANGE)]);
         chat.size = 3;
         let mut extra = vec![("x".to_string(), WHITE); 2];
         extra.push(("lieon>> above the box".into(), GREEN));
@@ -885,7 +1091,7 @@ mod tests {
             ("medicaid: pure water", WHITE),
             ("x", WHITE),
             ("x", WHITE),
-            ("lieon: kumbis", ORANGE),
+            ("lieon : kumbis", ORANGE),
         ]);
         chat.size = 5;
         chat.arrow_above = 7;
@@ -899,7 +1105,7 @@ mod tests {
     #[test]
     fn reads_a_box_a_pixel_off() {
         for shift in [(1, 1), (-1, -1), (1, 0), (0, -1)] {
-            let mut chat = ChatBox::new(&[("lieon: ok", ORANGE), ("aeco: any nx", WHITE)]);
+            let mut chat = ChatBox::new(&[("lieon : ok", ORANGE), ("aeco : any nx", WHITE)]);
             chat.shift = shift;
             let reading =
                 read(&mut ChatReader::new(), &chat).unwrap_or_else(|e| panic!("{shift:?}: {e:?}"));
@@ -911,7 +1117,7 @@ mod tests {
     // where the box is drawn, or ignores the HUD's shift.
     #[test]
     fn says_where_the_box_is() {
-        let mut chat = ChatBox::new(&[("lieon: ok", ORANGE)]);
+        let mut chat = ChatBox::new(&[("lieon : ok", ORANGE)]);
         let place = |chat: &ChatBox| read(&mut ChatReader::new(), chat).unwrap().place.unwrap();
         let top_up = FIRST_LINE_UP + LINE_HEIGHT * (MAX_LINES - 1) + ARROW_ABOVE_LINES;
         assert_eq!(
@@ -950,7 +1156,7 @@ mod tests {
             let reading = reader.observe(&frame.bottom_rows(reader.rows_needed(768)));
             (reading.unwrap().place, reader.rows_needed(768))
         };
-        let mut chat = ChatBox::new(&[("lieon: ok", ORANGE)]);
+        let mut chat = ChatBox::new(&[("lieon : ok", ORANGE)]);
         chat.size = 14;
         let (place, rows) = look(&chat);
         assert_eq!(place, None, "the box's top is above the rows read");
@@ -972,7 +1178,7 @@ mod tests {
     // more scrollbar, puts the box's top inside it and reads ever more rows looking for it.
     #[test]
     fn a_light_scene_above_the_box_isnt_its_top() {
-        let chat = ChatBox::new(&[("lieon: ok", ORANGE)]);
+        let chat = ChatBox::new(&[("lieon : ok", ORANGE)]);
         let mut canvas = chat.draw();
         let top_up = FIRST_LINE_UP + LINE_HEIGHT * 7 + ARROW_ABOVE_LINES;
         // Snow above the box, and showing through its edge next to the arrow's border.
@@ -1009,7 +1215,7 @@ mod tests {
     #[test]
     fn reads_the_picture_the_game_stretched() {
         let chat = ChatBox::new(&[
-            ("lieon: ok", ORANGE),
+            ("lieon : ok", ORANGE),
             ("aeco: any nx", WHITE),
             ("lieon>> hello", GREEN),
         ]);
@@ -1037,7 +1243,7 @@ mod tests {
                 .collect();
             unstretch::stretch(&picture, 1366, 1920, 1080, 0)
         };
-        let mut chat = ChatBox::new(&[("lieon: ok", ORANGE)]);
+        let mut chat = ChatBox::new(&[("lieon : ok", ORANGE)]);
         let bgra = stretched(&chat);
         let frame = Frame::new(1920, 1080, 1920 * 4, &bgra).unwrap();
         let top_up = FIRST_LINE_UP + LINE_HEIGHT * (MAX_LINES - 1) + ARROW_ABOVE_LINES;

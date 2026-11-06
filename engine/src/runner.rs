@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn a_taller_chat_box_makes_the_next_grab_reach_its_top() {
         use crate::recognizers::chat::test_support::ChatBox;
-        let mut chat = ChatBox::new(&[("lieon: ok", [255, 153, 0])]);
+        let mut chat = ChatBox::new(&[("lieon : ok", [255, 153, 0])]);
         chat.size = 14;
         let mut runner = Runner::new(Fake {
             window: Some(GAME),
