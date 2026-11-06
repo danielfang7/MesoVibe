@@ -181,6 +181,7 @@ mod tests {
         let reading = |gap: bool, channels: &[Channel]| ChatReading {
             lines: channels.iter().map(|&c| line("#.#", c)).collect(),
             gap,
+            place: None,
         };
         let first = log.record(&reading(false, &[Channel::Whisper, Channel::Party]), 10);
         assert_eq!(first.iter().map(|e| e.id).collect::<Vec<_>>(), [1, 2]);
@@ -209,6 +210,7 @@ mod tests {
         let one = ChatReading {
             lines: vec![line("#", Channel::Party)],
             gap: false,
+            place: None,
         };
         for _ in 0..KEEP + 5 {
             log.record(&one, 0);
