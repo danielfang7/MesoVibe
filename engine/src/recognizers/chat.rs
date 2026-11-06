@@ -22,10 +22,15 @@
 //! missing. While the player has scrolled back through the
 //! chat, the box shows old lines and nothing is read.
 //!
+//! The game draws its own mouse pointer into the picture. Where it is over the lines, found by
+//! its highlight, is left out when lines are compared, so a line looks the same with the pointer
+//! over it or not.
+//!
 //! Chat pictures never become [`crate::events::Event`]s: plugins don't see them, and nothing
 //! leaves the device.
 
 use std::collections::VecDeque;
+use std::ops::Range;
 
 use serde::Serialize;
 
@@ -102,6 +107,16 @@ const INDENT: u32 = 16;
 const NAME_COLUMNS: usize = 120;
 /// Lines handed back recently, for telling old lines from new ones after the box was scrolled.
 const RECENT: usize = 64;
+/// The game draws its own mouse pointer into the picture: a white glove pointing up and to the
+/// left, about 24 columns by 28 rows at 1x, edged in black and shaded blue-gray. Over a line it
+/// adds and hides up to 140 of the line's text pixels (a Windows recording, 2026-11-06), more
+/// than a line may change and still be the same line. Its pale cyan highlight is near no chat
+/// color, so it shows where the pointer is.
+const POINTER_HIGHLIGHT: [u8; 3] = [221, 255, 255];
+/// How far the glove reaches past its highlight: its black edge, and its shaded palm to the right.
+const POINTER_REACH: u32 = 8;
+/// No highlight wider or taller than this is the pointer's.
+const POINTER_SPAN: u32 = 32;
 
 /// The chat types the Chat Hub splits out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -194,6 +209,9 @@ struct Line {
     count: u32,
     /// The first column with ink, from [`TEXT_LEFT`].
     left: u32,
+    /// The columns the game's pointer may cover, from [`TEXT_LEFT`]: left out of `ink` here, and
+    /// out of the other line when the two are compared.
+    hidden: Option<Range<u32>>,
     /// The picture handed back if the line is new: only for channel lines.
     picture: Option<ChatLine>,
     /// Someone said it: a party or friend line that starts "name : ", or any whisper. False for the
@@ -202,8 +220,8 @@ struct Line {
 }
 
 impl Line {
-    /// The same line: a band of the same color, or text with nearly the same pixels (a mouse
-    /// pointer over the line changes a few), up to [`DRIFT`] pixels away each way.
+    /// The same line: a band of the same color, or text with nearly the same pixels, up to
+    /// [`DRIFT`] pixels away each way. Columns the pointer covers in either line are left out.
     fn matches(&self, other: &Line) -> bool {
         match (self.kind, other.kind) {
             (Kind::Band(a), Kind::Band(b)) => {
@@ -212,13 +230,25 @@ impl Line {
             (a, b) if a != b => return false,
             _ => {}
         }
-        let allowed = (self.count.max(other.count) / 10).max(6);
+        let hidden = hidden_bits(self.hidden.as_ref(), other.hidden.as_ref());
+        let seen = |line: &Line| match &hidden {
+            Some(bits) => line
+                .ink
+                .iter()
+                .zip(bits)
+                .map(|(ink, hidden)| (ink & !hidden).count_ones())
+                .sum(),
+            None => line.count,
+        };
+        let (a, b) = (seen(self), seen(other));
+        let allowed = (a.max(b) / 10).max(6);
         // Moved anywhere, they differ by at least their difference in pixels: no need to look.
-        if self.count.abs_diff(other.count) > allowed {
+        if a.abs_diff(b) > allowed {
             return false;
         }
         let same_at = |(right, down): Offset| {
-            differ(&self.ink, &other.ink, down * TEXT_WIDTH as i32 + right) <= allowed
+            let by = down * TEXT_WIDTH as i32 + right;
+            differ(&self.ink, &other.ink, by, hidden.as_deref()) <= allowed
         };
         // Almost always where it was; only then a pixel or two away.
         same_at((0, 0))
@@ -235,9 +265,30 @@ impl Line {
     }
 }
 
-/// How many pixels differ between `a` and `b` moved `by` pixels along, both as [`Line::ink`]. A
-/// row's end runs on into the next row's start, but text never reaches the line's edges.
-fn differ(a: &[u64], b: &[u64], by: i32) -> u32 {
+/// The columns hidden in either line, as [`Line::ink`] bits in every row, and as far again as two
+/// lines are compared apart. `None` when neither line has any.
+fn hidden_bits(a: Option<&Range<u32>>, b: Option<&Range<u32>>) -> Option<Vec<u64>> {
+    if a.is_none() && b.is_none() {
+        return None;
+    }
+    let mut bits = vec![0u64; (TEXT_WIDTH * LINE_HEIGHT).div_ceil(64) as usize];
+    for columns in [a, b].into_iter().flatten() {
+        let from = columns.start.saturating_sub(DRIFT as u32);
+        let to = (columns.end + DRIFT as u32).min(TEXT_WIDTH);
+        for row in 0..LINE_HEIGHT {
+            for col in from..to {
+                let bit = (row * TEXT_WIDTH + col) as usize;
+                bits[bit / 64] |= 1 << (bit % 64);
+            }
+        }
+    }
+    Some(bits)
+}
+
+/// How many pixels differ between `a` and `b` moved `by` pixels along, both as [`Line::ink`],
+/// leaving out the `hidden` ones. A row's end runs on into the next row's start, but text never
+/// reaches the line's edges.
+fn differ(a: &[u64], b: &[u64], by: i32, hidden: Option<&[u64]>) -> u32 {
     let len = (TEXT_WIDTH * LINE_HEIGHT) as i64;
     // The 64 pixels of `b` moved along that land at `start`: none from outside the line.
     let moved = |start: i64| -> u64 {
@@ -263,7 +314,8 @@ fn differ(a: &[u64], b: &[u64], by: i32) -> u32 {
                 n if n >= 64 => u64::MAX,
                 n => (1u64 << n) - 1,
             };
-            ((word ^ moved(start)) & inside).count_ones()
+            let shown = !hidden.map_or(0, |hidden| hidden[i]);
+            ((word ^ moved(start)) & inside & shown).count_ones()
         })
         .sum()
 }
@@ -411,13 +463,20 @@ fn scan(frame: &Frame, prefer: Offset) -> Result<Scan, ChatUnreadable> {
     }
     let clipped = !found && top == highest;
     let count = ((top - FIRST_LINE_UP) / LINE_HEIGHT + 1).min(MAX_LINES);
-    let lines = (0..count)
-        .map(|k| {
-            line(
-                frame,
-                hud.left + TEXT_LEFT,
-                hud.bottom - FIRST_LINE_UP - LINE_HEIGHT * k,
-            )
+    let x = hud.left + TEXT_LEFT;
+    // Each line's top row, bottom line first.
+    let rows: Vec<u32> = (0..count)
+        .map(|k| hud.bottom - FIRST_LINE_UP - LINE_HEIGHT * k)
+        .collect();
+    let pointer = pointer(frame, x, rows[rows.len() - 1]..rows[0] + LINE_HEIGHT);
+    let lines = rows
+        .iter()
+        .map(|&y| {
+            let hidden = pointer
+                .as_ref()
+                .filter(|p| p.rows.start < y + LINE_HEIGHT && y < p.rows.end)
+                .map(|p| p.columns.clone());
+            line(frame, x, y, hidden)
         })
         .collect();
     Ok(Scan {
@@ -434,19 +493,61 @@ fn scan(frame: &Frame, prefer: Offset) -> Result<Scan, ChatUnreadable> {
     })
 }
 
-/// The line whose top-left text pixel is (x, y).
-fn line(frame: &Frame, x: u32, y: u32) -> Line {
+/// Where the game's pointer is over the lines: what it may cover of them.
+struct Pointer {
+    /// The text columns, from [`TEXT_LEFT`].
+    columns: Range<u32>,
+    /// The picture's rows.
+    rows: Range<u32>,
+}
+
+/// The game's pointer over the text columns from `x` in these rows, found by its highlight. None
+/// when no highlight shows, or one bigger than the pointer's.
+fn pointer(frame: &Frame, x: u32, rows: Range<u32>) -> Option<Pointer> {
+    // The highlight's leftmost and rightmost columns, top and bottom rows.
+    let mut seen: Option<[u32; 4]> = None;
+    for y in rows {
+        for col in 0..TEXT_WIDTH {
+            let p = frame.rgb(x + col, y);
+            if p[1] < 240 || distance(p, POINTER_HIGHLIGHT) > 12 {
+                continue;
+            }
+            seen = Some(match seen {
+                None => [col, col, y, y],
+                Some([left, right, top, bottom]) => {
+                    [left.min(col), right.max(col), top.min(y), bottom.max(y)]
+                }
+            });
+        }
+    }
+    let [left, right, top, bottom] = seen?;
+    (right - left < POINTER_SPAN && bottom - top < POINTER_SPAN).then(|| Pointer {
+        columns: left.saturating_sub(POINTER_REACH)..(right + 1 + POINTER_REACH).min(TEXT_WIDTH),
+        rows: top.saturating_sub(POINTER_REACH)..bottom + 1 + POINTER_REACH,
+    })
+}
+
+/// The line whose top-left text pixel is (x, y). Its `hidden` columns, under the pointer, are
+/// left out of its ink.
+fn line(frame: &Frame, x: u32, y: u32, hidden: Option<Range<u32>>) -> Line {
     let (w, h) = (TEXT_WIDTH as usize, LINE_HEIGHT as usize);
     let pixels: Vec<[u8; 3]> = (0..LINE_HEIGHT)
         .flat_map(|row| (0..TEXT_WIDTH).map(move |col| (col, row)))
         .map(|(col, row)| frame.rgb(x + col, y + row))
         .collect();
+    let shown = TEXT_WIDTH - hidden.as_ref().map_or(0, |columns| columns.len() as u32);
     let mut ink = vec![0u64; (w * h).div_ceil(64)];
     let mut count = 0;
     let mut near = [0u32; 3];
     let mut first = u32::MAX;
     let mut lit: [Vec<u8>; 3] = Default::default();
     for (bit, &p) in pixels.iter().enumerate() {
+        if hidden
+            .as_ref()
+            .is_some_and(|columns| columns.contains(&((bit % w) as u32)))
+        {
+            continue;
+        }
         if bright(p) {
             for (c, v) in lit.iter_mut().zip(p) {
                 c.push(v);
@@ -462,7 +563,7 @@ fn line(frame: &Frame, x: u32, y: u32) -> Line {
             *n += u32::from(solid_in(p, channel));
         }
     }
-    let kind = if lit[0].len() as u32 * 2 > TEXT_WIDTH * LINE_HEIGHT {
+    let kind = if lit[0].len() as u32 * 2 > shown * LINE_HEIGHT {
         // The band's color: the middle value of its bright pixels, each way.
         Kind::Band(lit.map(|mut values| {
             let middle = values.len() / 2;
@@ -493,6 +594,7 @@ fn line(frame: &Frame, x: u32, y: u32) -> Line {
         ink,
         count,
         left: if count == 0 { 0 } else { first },
+        hidden,
         picture,
         said,
     }
@@ -579,7 +681,7 @@ fn picture(pixels: &[[u8; 3]], channel: Channel) -> ChatLine {
 }
 
 /// How many lines arrived at the bottom: the smallest shift that lines up the last frame's lines
-/// with this one's. One line may differ when four or more line up, for a pointer over the box.
+/// with this one's. One line may differ when four or more line up, for something drawn over it.
 /// `None` when no shift does.
 fn arrived(before: &[Line], now: &[Line]) -> Option<usize> {
     (0..=now.len()).find(|&shift| {
@@ -781,6 +883,9 @@ pub(crate) mod test_support {
         /// How far the text sits from its place in the box, as when the box is read a pixel off:
         /// (right, down).
         pub(crate) nudge: (i32, i32),
+        /// The game's mouse pointer over the box, its top-left corner this far from the HUD's left
+        /// edge and up from its bottom: (right, up).
+        pub(crate) pointer: Option<(u32, u32)>,
     }
 
     impl ChatBox {
@@ -795,6 +900,7 @@ pub(crate) mod test_support {
                 scene: 0,
                 shift: (0, 0),
                 nudge: (0, 0),
+                pointer: None,
             }
         }
 
@@ -845,6 +951,34 @@ pub(crate) mod test_support {
                     (line_top + 4).wrapping_add_signed(self.nudge.1),
                     |_| *color,
                 );
+            }
+            if let Some((right, up)) = self.pointer {
+                // A glove: a finger 8 columns wide over a palm 20 wide. A black edge, the pale
+                // highlight inside it, then white, and the palm's shaded right side.
+                let inside = |col: i32, row: i32| {
+                    (0..28).contains(&row) && (0..if row < 14 { 8 } else { 20 }).contains(&col)
+                };
+                for row in 0..28 {
+                    for col in 0..20 {
+                        if !inside(col, row) {
+                            continue;
+                        }
+                        let depth = (1..3)
+                            .find(|&d| {
+                                [(-d, 0), (d, 0), (0, -d), (0, d)]
+                                    .into_iter()
+                                    .any(|(c, r)| !inside(col + c, row + r))
+                            })
+                            .unwrap_or(3);
+                        let color = match depth {
+                            1 => [0, 0, 0],
+                            2 => POINTER_HIGHLIGHT,
+                            _ if col >= 13 => [153, 187, 204],
+                            _ => WHITE,
+                        };
+                        canvas.set(left + right + col as u32, y(up) + row as u32, color);
+                    }
+                }
             }
             canvas
         }
@@ -1016,6 +1150,72 @@ mod tests {
             );
             assert!(!reading.gap, "{nudge:?}: the lines still line up");
         }
+    }
+
+    // The game draws its own pointer into the picture (a Windows recording, 2026-11-06): a whisper
+    // came in under it, and a megaphone came in as it moved off. Fails if the whisper, read with
+    // and without the pointer over it, isn't the same line: in a 4-line box nothing else can line
+    // the frames up then, and the whisper comes back after "lines may be missing".
+    #[test]
+    fn a_line_the_pointer_was_over_isnt_handed_back_again() {
+        let mut reader = ChatReader::new();
+        let mut chat = ChatBox::new(&[
+            ("lindalena>> test", GREEN),
+            ("lindalena is online.", ORANGE),
+            ("temple: cape accuracy", BAND),
+            ("pide: nx", BAND),
+        ]);
+        chat.size = 4;
+        assert_eq!(
+            channels(&read(&mut reader, &chat).unwrap()),
+            [Channel::Whisper]
+        );
+        let arrives = |chat: &mut ChatBox, line: (&str, [u8; 3])| {
+            chat.lines.insert(0, (line.0.into(), line.1));
+            chat.lines.truncate(4);
+        };
+        arrives(&mut chat, ("lindalena>> hello", GREEN));
+        chat.pointer = Some((100, FIRST_LINE_UP - 2));
+        let reading = read(&mut reader, &chat).unwrap();
+        assert_eq!(channels(&reading), [Channel::Whisper], "the new whisper");
+        assert!(!reading.gap);
+        // The pointer moves along the whisper, then off it as a megaphone comes in.
+        chat.pointer = Some((106, FIRST_LINE_UP - 4));
+        let reading = read(&mut reader, &chat).unwrap();
+        assert_eq!(channels(&reading), [], "nothing new");
+        assert!(!reading.gap, "the pointer moved");
+        chat.pointer = None;
+        arrives(&mut chat, ("oglemon: slots", BAND));
+        let reading = read(&mut reader, &chat).unwrap();
+        assert_eq!(channels(&reading), [], "the whisper again");
+        assert!(!reading.gap, "the lines still line up");
+    }
+
+    // Moving the pointer over the box while chatting, as on a Mac where whispers came back three
+    // times: it comes to rest over two lines at once, and a reply comes in under it. Fails if two
+    // lines changed by the pointer keep the frames from lining up, so the whisper under it comes
+    // back.
+    #[test]
+    fn the_pointer_resting_over_two_lines_doesnt_bring_them_back() {
+        let mut reader = ChatReader::new();
+        let mut chat = ChatBox::new(&[
+            ("aeco: any nx", WHITE),
+            ("lieon>> holy moly that was a close one", GREEN),
+            ("medicaid: pure water", WHITE),
+            ("fangkip : party test", PINK),
+        ]);
+        assert_eq!(
+            channels(&read(&mut reader, &chat).unwrap()),
+            [Channel::Party, Channel::Whisper]
+        );
+        chat.pointer = Some((40, FIRST_LINE_UP + LINE_HEIGHT + 4));
+        let reading = read(&mut reader, &chat).unwrap();
+        assert_eq!(channels(&reading), [], "the pointer came over the box");
+        assert!(!reading.gap, "the pointer came over the box");
+        chat.lines.insert(0, ("lieon>> ok".into(), GREEN));
+        let reading = read(&mut reader, &chat).unwrap();
+        assert_eq!(channels(&reading), [Channel::Whisper], "only the reply");
+        assert!(!reading.gap, "a reply came in");
     }
 
     #[test]
