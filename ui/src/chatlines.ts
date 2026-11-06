@@ -6,8 +6,8 @@
 import { h } from "./dom.js";
 import type { ChatChannel, ChatLine } from "./ipc.js";
 
-/** The line pictures come at the game's own size; this brings the text near 16px body text. */
-export const CHAT_SCALE = 1.5;
+/** The line pictures come at the game's own size, and the panel keeps it: the game's 16px rows, about as small as the chat over the game. */
+export const CHAT_SCALE = 1;
 /** The room added between two words, in the picture's pixels: with each word's one-pixel margins, about the game's own space. */
 const WORD_GAP = 2;
 
