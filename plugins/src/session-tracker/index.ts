@@ -113,21 +113,19 @@ function toGo(session: SessionState): number | null {
 
 /**
  * The Session view. "This session" holds only what the strip above it doesn't show:
- * no EXP/hr, level progress or time to level, which the strip already has.
+ * no EXP/hr, level progress or time to level, which the strip already has. Before the first gain
+ * while the game is being read, the strip says "Earn some EXP to start", so nothing here repeats
+ * it, and with nothing else to show the section is left out.
  */
 function view(session: SessionState, history: PastSession[], capture: CaptureState): ViewNode[] {
   const current: ViewNode[] = [];
   const left = toGo(session);
+  const reading = capture === "capturing";
   if (session.last === null) {
-    current.push(
-      capture === "capturing"
-        ? { kind: "empty", text: "Earn some EXP to start. Your rate appears after the first gain." }
-        : { kind: "loading", text: "Waiting for the game. Your session starts with your first EXP gain." },
-    );
+    if (!reading) current.push({ kind: "loading", text: "Waiting for the game. Your session starts with your first EXP gain." });
   } else if (session.expGained <= 0) {
-    // At startup and after End or Reset: one line, not a list of zeros. The strip above
-    // already says "Earn some EXP to start", so this line doesn't repeat it.
-    current.push({ kind: "empty", text: "Your session numbers appear after your first gain." });
+    // At startup and after End or Reset: no list of zeros.
+    if (!reading) current.push({ kind: "empty", text: "Your session numbers appear after your first gain." });
     if (left !== null) current.push({ kind: "keyValue", items: [["EXP to go", formatDigits(left)]] });
   } else {
     const recent = recentRate(session);
@@ -176,7 +174,7 @@ function view(session: SessionState, history: PastSession[], capture: CaptureSta
         ];
 
   return [
-    { kind: "section", title: "This session", children: current },
+    ...(current.length === 0 ? [] : [{ kind: "section", title: "This session", children: current } as const]),
     { kind: "section", title: "Past sessions", children: past },
   ];
 }
