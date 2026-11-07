@@ -28,7 +28,7 @@ MesoVibe is not affiliated with or endorsed by Nexon. MapleStory is a trademark 
 - [plugins](plugins/) - first-party plugins, starting with the Session Tracker
 - [tools](tools/) - capture helpers for developing recognizers, and the icon generator
 - [scripts](scripts/) - build checks, tests and release scripts
-- [web](web/) - the project website
+- [web](web/) - the project website at mesovibe.com: static files with no build step, deployed by Vercel from `main` (the Vercel project's Root Directory is `web`; headers are in [web/vercel.json](web/vercel.json))
 
 ## Building from source
 
