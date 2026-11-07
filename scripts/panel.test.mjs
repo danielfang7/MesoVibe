@@ -398,7 +398,8 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(badge), "1");
     assert.equal(await page.evaluate(`document.querySelector(".chat-gap")?.textContent`), "Some lines may be missing here.");
 
-    await page.evaluate(`document.querySelector('[data-key="chat-overlay"]').click()`);
+    // Chat over the game starts on, with its choices showing.
+    assert.equal(await page.evaluate(`document.querySelector('[data-key="chat-overlay"]').getAttribute("aria-checked")`), "true");
     const pick = (channel) => `document.querySelector('[data-key="chat-overlay-${channel}"]')`;
     assert.equal(await page.until(`${pick("whisper")}?.textContent`, "the overlay's chat types"), "✓ Whispers");
     await page.evaluate(`${pick("whisper")}.click()`);

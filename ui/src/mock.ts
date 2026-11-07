@@ -95,7 +95,7 @@ export function mockHost(scenario: string): Host {
     dock: true,
     miniHud: true,
     miniHudCorner: "top-right",
-    chatOverlay: false,
+    chatOverlay: true,
     chatOverlayChannels: { whisper: true, party: true, friend: true },
     chatOverlayColors: { whisper: "#00ffff", party: "#00ffff", friend: "#00ffff" },
     chatOverlayPosition: "above-chat",

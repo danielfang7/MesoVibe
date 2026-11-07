@@ -797,7 +797,6 @@ function shell(initial: Settings): void {
         { class: "block" },
         h("h2", { class: "label" }, "Over the game"),
         toggle("Show chat over the game", s.chatOverlay, (on) => setChatOverlay({ on }), "chat-overlay"),
-        h("p", { class: "text muted" }, "The newest lines, at the size of the game's own chat. Clicks go through to the game."),
         s.chatOverlay ? positionPicker() : null,
         s.chatOverlay
           ? h("div", { class: "segmented chat-picks", attrs: { role: "group", "aria-label": "Chat over the game" } }, ...CHANNELS.map(pick))
