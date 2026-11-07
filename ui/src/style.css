@@ -931,31 +931,38 @@ html.hud-page body {
   line-height: 16px;
 }
 
+/* Compact like the game's own chat: a row per message, close together. */
 .chat-log {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: 2px;
   margin: 0;
   padding: 0;
 }
 
+/* The time, then the words, which wrap beside it rather than under it. */
 .chat-message {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  gap: var(--space-sm);
 }
 
+/* As tall as a row of words (CHAT_SCALE in chatlines.ts), so it sits level with the first. Wide
+   enough for "10:59 PM", so the words start at the same place on every row. */
 .chat-time {
-  font-size: 14px;
+  flex: none;
+  min-width: 8ch;
+  font-size: 11px;
+  line-height: 16px;
   color: var(--text-muted);
 }
 
-/* A message's words, cut from its pictures, wrap like text. */
+/* A message's words, cut from its pictures, wrap like text, in the game's 16-pixel rows. */
 .chat-text {
   display: flex;
   flex-wrap: wrap;
-  row-gap: 2px;
+  min-width: 0;
   color: var(--text);
 }
 
@@ -966,10 +973,12 @@ html.hud-page body {
 }
 
 .chat-gap {
-  font-size: 14px;
+  font-size: 11px;
+  line-height: 16px;
   color: var(--text-muted);
   border-top: 1px dashed var(--line);
-  padding-top: var(--space-xs);
+  margin-top: 2px;
+  padding-top: 2px;
 }
 
 .segment[aria-pressed="true"] {
@@ -1112,8 +1121,7 @@ html.hud-page body {
   filter: drop-shadow(var(--game-px, 1px) var(--game-px, 1px) 0 rgba(0, 0, 0, 0.9));
 }
 
-/* The words take the chat type's color, in the game's 16-pixel rows. */
+/* The words take the chat type's color. */
 .side-message .chat-text {
-  row-gap: 0;
   color: inherit;
 }

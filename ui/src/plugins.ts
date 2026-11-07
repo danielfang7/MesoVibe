@@ -24,6 +24,12 @@ export interface PluginListener {
 
 export class PluginHost {
   private worker: Worker | null = null;
+  /**
+   * Messages sent while the plugin starts, before its worker is there. The game's EXP bar is
+   * reported only when it changes, so a reading dropped here wouldn't come again until the next
+   * gain.
+   */
+  private waiting: ToPlugin[] | null = null;
   private ticker: number | undefined;
   manifest: PluginManifest | null = null;
   view: ViewNode[] = [];
@@ -37,7 +43,12 @@ export class PluginHost {
 
   async start(): Promise<void> {
     this.stop();
+    const waiting: ToPlugin[] = [];
+    this.waiting = waiting;
     const saved = await this.host.storageGet(this.id).catch(() => null);
+    // Stopped, or started again, while the saved data loaded.
+    if (this.waiting !== waiting) return;
+    this.waiting = null;
     const worker = new Worker(`/plugins/${this.id}.js`, { type: "module", name: this.id });
     this.worker = worker;
     worker.onmessage = (message: MessageEvent<ToHost>) => this.receive(message.data);
@@ -47,6 +58,7 @@ export class PluginHost {
       this.listener.crashed(`${this.manifest?.name ?? this.id} stopped responding and was turned off.`);
     };
     this.post({ type: "start", saved, atMs: Date.now(), capture: this.capture });
+    for (const message of waiting) this.post(message);
     this.ticker = window.setInterval(() => this.post({ type: "tick", atMs: Date.now() }), 1000);
   }
 
@@ -54,6 +66,7 @@ export class PluginHost {
     window.clearInterval(this.ticker);
     this.worker?.terminate();
     this.worker = null;
+    this.waiting = null;
   }
 
   event(event: GameEvent, atMs: number): void {
@@ -71,7 +84,8 @@ export class PluginHost {
   }
 
   private post(message: ToPlugin): void {
-    this.worker?.postMessage(message);
+    if (this.worker !== null) this.worker.postMessage(message);
+    else this.waiting?.push(message);
   }
 
   private receive(message: ToHost): void {

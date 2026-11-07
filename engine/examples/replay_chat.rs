@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use mesovibe_engine::recognizers::chat::{ChatReader, ChatUnreadable};
+use mesovibe_engine::recognizers::chat::{self, ChatReader, ChatUnreadable};
 use mesovibe_engine::unstretch;
 
 #[path = "common/capture_run.rs"]
@@ -106,7 +106,9 @@ fn main() -> ExitCode {
                 }
             }
             if let Some(dir) = &dump {
-                let rows = 250;
+                // The rows the reader reads first, which a recording cropped to the bottom 300
+                // rows of a 1080-line game still holds.
+                let rows = chat::CHAT_ROWS;
                 let started = std::time::Instant::now();
                 // The 1x picture the reader sees: one pixel per block on a Retina Mac, the
                 // stretch undone above 768 lines, the frame itself otherwise.

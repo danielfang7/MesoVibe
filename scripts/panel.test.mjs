@@ -289,12 +289,26 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(press(true)), false, "a held Enter is ignored");
     assert.equal(await page.evaluate(press(false)), true, "a fresh Enter is left alone");
     // The next session's first gain arrives within seconds; until a rate means anything the strip
-    // says it's coming, not "Earn some EXP to start".
+    // says it's coming.
     await page.until(`document.querySelector(".hero-empty")?.textContent === "Your rate appears after a few seconds of play."`, "the rate on its way");
     assert.ok(await page.click("Undo"));
     await page.until(`document.querySelector(".notice")?.textContent.includes("Session restored.")`, "the undo of End");
     await page.until(`document.querySelector(".view .cell-detail") === null`, "the history row taken back");
     assert.ok(await page.evaluate(`document.querySelector(".number-hero").textContent.length > 0`));
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // Before the first gain the strip shows the level and its bar, with no rate and no words in its
+  // place. The game sends no EXP change here, so this fails if the tracker only learns the bar
+  // from a change it may have missed.
+  await t.test("before the first gain the strip shows the level and its bar, without a rate", async () => {
+    const page = await openPage(devtools, at("idle"));
+    await page.until(`document.querySelector(".status-text")?.textContent === "Reading game"`, "reading");
+    assert.equal(await page.until(`document.querySelector(".to-level")?.textContent || null`, "the level"), "Lv 42");
+    await page.until(`document.querySelector('.strip-progress [role="progressbar"]')`, "the level's bar");
+    assert.equal(await page.evaluate(`document.querySelector(".hero").hidden`), true, "no rate yet");
+    assert.equal(await page.evaluate(`document.querySelector(".hero-empty").textContent`), "");
     assert.deepEqual(page.errors, []);
     page.close();
   });
@@ -387,6 +401,12 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(`document.querySelectorAll(".chat-message").length`), 1);
     assert.equal(await page.evaluate(`document.querySelectorAll(".chat-message .chat-word").length`), 3, "both lines' words in one message");
     assert.match(await page.evaluate(`document.querySelector(".chat-text").getAttribute("aria-label")`), /^Whisper message at /);
+    // The game draws a line whole once it moves up, and it comes again under its id: the whole
+    // picture takes the cut one's place, and isn't another unread line.
+    await page.evaluate(say([chatLine(1, "whisper", { words: [[0, 10]] })]));
+    await page.until(`document.querySelectorAll(".chat-message .chat-word").length === 2`, "the whole picture in place");
+    assert.equal(await page.evaluate(`document.querySelectorAll(".chat-message").length`), 1);
+    assert.equal(await page.evaluate(badge), "2", "not another unread line");
 
     const partyTab = `document.querySelector('[data-key="chat-tab-party"]')`;
     assert.equal(await page.evaluate(`${partyTab}.getAttribute("aria-label")`), "Party, 1 unread");
@@ -398,7 +418,8 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(badge), "1");
     assert.equal(await page.evaluate(`document.querySelector(".chat-gap")?.textContent`), "Some lines may be missing here.");
 
-    await page.evaluate(`document.querySelector('[data-key="chat-overlay"]').click()`);
+    // Chat over the game starts on, with its choices showing.
+    assert.equal(await page.evaluate(`document.querySelector('[data-key="chat-overlay"]').getAttribute("aria-checked")`), "true");
     const pick = (channel) => `document.querySelector('[data-key="chat-overlay-${channel}"]')`;
     assert.equal(await page.until(`${pick("whisper")}?.textContent`, "the overlay's chat types"), "✓ Whispers");
     await page.evaluate(`${pick("whisper")}.click()`);
@@ -450,6 +471,12 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(`document.querySelectorAll(".split-line").length`), 3, "each line once");
     assert.equal(await page.evaluate(`document.querySelectorAll(".split-line.rest").length`), 1, "the rest of the long line");
     assert.match(await page.evaluate(`document.querySelector(".split-message").getAttribute("aria-label")`), /^Whisper message at /);
+    // The game draws a line whole once it moves up; it comes again under its id, in its place.
+    const partyWidth = `document.querySelectorAll(".split-message")[1].querySelector(".chat-picture").getBoundingClientRect().width`;
+    const cutWidth = await page.evaluate(partyWidth);
+    await page.evaluate(say([{ ...chatLine(3, "party"), width: 20 }]));
+    await page.until(`${partyWidth} > ${cutWidth * 1.5}`, "the whole picture in its place");
+    assert.equal(await page.evaluate(`document.querySelectorAll(".split-line").length`), 3, "still each line once");
     const colors = `[...document.querySelectorAll(".split-message")].map((m) => getComputedStyle(m).color)`;
     assert.deepEqual(await page.evaluate(colors), ["rgb(0, 255, 255)", "rgb(0, 255, 255)"], "cyan to start");
     await page.evaluate(

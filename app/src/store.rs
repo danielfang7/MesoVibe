@@ -38,8 +38,8 @@ pub struct Settings {
     pub mini_hud: bool,
     /// The corner of the game area the mini-HUD sits in.
     pub mini_hud_corner: Corner,
-    /// The chat overlay: the latest whisper, party and friend lines over the game (Chat Hub). Off
-    /// until the player turns it on.
+    /// The chat overlay: the latest whisper, party and friend lines over the game (Chat Hub). On
+    /// until the player turns it off.
     pub chat_overlay: bool,
     /// Where the chat overlay sits: on the game's chat box, or in a box at either side.
     pub chat_overlay_position: ChatPosition,
@@ -140,7 +140,7 @@ impl Default for Settings {
             dock: true,
             mini_hud: true,
             mini_hud_corner: Corner::TopRight,
-            chat_overlay: false,
+            chat_overlay: true,
             chat_overlay_position: ChatPosition::AboveChat,
             chat_overlay_channels: ChatChannels::default(),
             chat_overlay_colors: ChatColors::default(),
@@ -390,6 +390,7 @@ mod tests {
         assert!(settings.dock && settings.mini_hud);
         assert_eq!(settings.mini_hud_corner, Corner::TopRight);
         assert_eq!(settings.panel, None);
+        assert!(settings.chat_overlay);
         assert_eq!(settings.chat_overlay_colors, ChatColors::default());
         assert_eq!(settings.chat_overlay_position, ChatPosition::AboveChat);
         assert!(!dir.join("settings.json.corrupt").exists());

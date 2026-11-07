@@ -114,8 +114,8 @@ function toGo(session: SessionState): number | null {
 /**
  * The Session view. "This session" holds only what the strip above it doesn't show:
  * no EXP/hr, level progress or time to level, which the strip already has. Before the first gain
- * while the game is being read, the strip says "Earn some EXP to start", so nothing here repeats
- * it, and with nothing else to show the section is left out.
+ * while the game is being read, the strip shows the level and its bar, so nothing here waits on
+ * the first gain, and with nothing else to show the section is left out.
  */
 function view(session: SessionState, history: PastSession[], capture: CaptureState): ViewNode[] {
   const current: ViewNode[] = [];

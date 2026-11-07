@@ -67,9 +67,9 @@ const thisSession = (sent) => section(sent, "This session")?.children ?? [];
 const items = (sent) => thisSession(sent).find((node) => node.kind === "keyValue")?.items ?? [];
 const pastSessions = (sent) => section(sent, "Past sessions").children;
 
-// Before the first gain the strip says "Earn some EXP to start". Fails if the Session view says
-// it again, or loses its waiting line while the game isn't being read.
-test("the plugin introduces itself, and before the first gain leaves the strip's line to the strip", () => {
+// Before the first gain the strip shows the level and its bar. Fails if the Session view adds a
+// line of its own while the game is being read, or stops saying it's waiting when it isn't.
+test("the plugin introduces itself, and before the first gain adds nothing to the strip", () => {
   const { send, sent } = run();
   assert.deepEqual(sent[0], { type: "ready", manifest: { id: "session-tracker", name: "Session Tracker" } });
   send({ type: "start", saved: null, atMs: 1_000, capture: "capturing" });
@@ -127,8 +127,7 @@ test("End saves the session with a recap, and Undo within ten seconds takes it b
   assert.match(notice.text, /^Saved: 378 EXP in 1m \(.+\/hr\)\.$/);
   assert.equal(last(sent, "summary").summary.expGained, 0);
   assert.equal(last(sent, "save").data.history.length, 1);
-  // The next session waits for its first gain: EXP to go, not a list of zeros, and not the
-  // strip's "Earn some EXP to start" again.
+  // The next session waits for its first gain: EXP to go, not a list of zeros or a waiting line.
   assert.deepEqual(thisSession(sent).map((node) => node.kind), ["keyValue"]);
   assert.deepEqual(items(sent), [["EXP to go", (NEEDED - 230_378).toLocaleString("en-US")]]);
   assert.deepEqual(pastSessions(sent)[0].details, ["Lv\u00a042"]);
