@@ -27,10 +27,14 @@ const root = document.getElementById("chat") as HTMLElement;
 let lines: ChatLine[] = [];
 let choice: ChatOverlayChoice | null = null;
 
-/** New lines, without any already kept: each line has its own id. */
-function keep(fresh: ChatLine[]): void {
-  const known = new Set(lines.map((line) => line.id));
-  lines = [...lines, ...fresh.filter((line) => !known.has(line.id))].sort((a, b) => a.id - b.id).slice(-KEPT);
+/**
+ * Keeps lines by id. A line that comes again was read whole this time, and takes its own place,
+ * unless it's from the history: the history may be older than what came meanwhile.
+ */
+function keep(fresh: ChatLine[], history = false): void {
+  const byId = new Map(lines.map((line) => [line.id, line]));
+  for (const line of fresh) if (!history || !byId.has(line.id)) byId.set(line.id, line);
+  lines = [...byId.values()].sort((a, b) => a.id - b.id).slice(-KEPT);
 }
 
 function paint(): void {
@@ -94,7 +98,7 @@ async function boot(): Promise<void> {
   window.addEventListener("resize", paint);
   const [settings, history] = await Promise.all([host.settings(), host.chatHistory()]);
   choice ??= { channels: settings.chatOverlayChannels, colors: settings.chatOverlayColors, position: settings.chatOverlayPosition };
-  keep(history);
+  keep(history, true);
   paint();
 }
 

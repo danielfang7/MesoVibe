@@ -483,11 +483,23 @@ function shell(initial: Settings): void {
     chat?.setAttribute("title", label);
   }
 
-  /** New chat lines: kept, and counted as unread unless their tab is open. A line already kept (each has its own id) isn't kept again. */
+  /**
+   * New chat lines: kept, and counted as unread unless their tab is open. A line already kept (each
+   * has its own id) comes again once it's read whole: its picture takes the old one's place, and
+   * it isn't new.
+   */
   function addChat(fresh: ChatLine[]): void {
-    const known = new Set(panel.chat.map((line) => line.id));
+    const known = new Map(panel.chat.map((line, at) => [line.id, at]));
     const lines = fresh.filter((line) => !known.has(line.id));
-    if (lines.length === 0) return;
+    const redrawn = fresh.filter((line) => known.has(line.id));
+    if (redrawn.length > 0) {
+      panel.chat = panel.chat.slice();
+      for (const line of redrawn) panel.chat[known.get(line.id) as number] = line;
+    }
+    if (lines.length === 0) {
+      if (redrawn.length > 0 && panel.view === "chat") paintChat();
+      return;
+    }
     panel.chat = [...panel.chat, ...lines].slice(-KEEP_LINES);
     for (const line of lines) {
       if (line.continues) continue;

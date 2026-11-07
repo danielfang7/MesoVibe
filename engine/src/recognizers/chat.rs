@@ -26,11 +26,18 @@
 //! its highlight, is left out when lines are compared, so a line looks the same with the pointer
 //! over it or not.
 //!
+//! The game leaves the bottom of the letters (the tails of g, p and y) off its lowest line, and
+//! draws them once the line moves up. Lines are compared without those rows. A line is handed back
+//! as soon as it shows; if it showed cut off, or with the pointer over it, it's handed back again,
+//! whole, under the same id, from the first frame where it has moved up and the pointer isn't over
+//! it.
+//!
 //! Chat pictures never become [`crate::events::Event`]s: plugins don't see them, and nothing
 //! leaves the device.
 
 use std::collections::VecDeque;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 
@@ -79,6 +86,11 @@ const INPUT_TOP_UP: u32 = 67;
 /// runs from just above its capitals to the bottom of its descenders.
 const FIRST_LINE_UP: u32 = 85;
 pub const LINE_HEIGHT: u32 = 16;
+/// A line's rows the game always draws. On its lowest line it leaves off the rest, the bottom of
+/// letters such as g and p, and draws them once the line moves up: the same line, captured a
+/// second apart, has nothing in its last three rows at the bottom of the box and its tails one
+/// line up.
+const DRAWN_ROWS: u32 = 13;
 /// The lines read: the default box's.
 const MAX_LINES: u32 = 8;
 /// In the default box, the top of the scrollbar's top arrow is this far above the top line's top
@@ -118,6 +130,9 @@ const POINTER_REACH: u32 = 8;
 /// No highlight wider or taller than this is the pointer's.
 const POINTER_SPAN: u32 = 32;
 
+/// The next line id, shared by every reader, so no id is used twice while MesoVibe runs.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
 /// The chat types the Chat Hub splits out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -143,6 +158,8 @@ impl Channel {
 /// One new chat line, as a picture of its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatLine {
+    /// The line's own id, set when it's handed back; the same when it's handed back again, whole.
+    pub id: u64,
     pub channel: Channel,
     /// The indented rest of a long line, which arrived with the line before it.
     pub continues: bool,
@@ -158,6 +175,10 @@ pub struct ChatLine {
 pub struct ChatReading {
     /// New whisper, party and friend lines, oldest first.
     pub lines: Vec<ChatLine>,
+    /// Lines handed back earlier with part of their text missing, now whole: they were on the
+    /// box's lowest line, where the game leaves off the bottom of the letters, or under the
+    /// pointer. Each keeps its id.
+    pub whole: Vec<ChatLine>,
     /// The box couldn't be lined up with the last frame, so lines may be missing.
     pub gap: bool,
     /// Where the box is, for showing chat just above it.
@@ -204,7 +225,8 @@ enum Kind {
 struct Line {
     kind: Kind,
     /// Which pixels are solid text, bit `row * TEXT_WIDTH + column`: the line's shape, which stays
-    /// the same as the line moves up the box while the scene behind it changes.
+    /// the same as the line moves up the box while the scene behind it changes. Only the rows
+    /// above [`DRAWN_ROWS`], which the game draws on every line.
     ink: Vec<u64>,
     count: u32,
     /// The first column with ink, from [`TEXT_LEFT`].
@@ -553,7 +575,8 @@ fn line(frame: &Frame, x: u32, y: u32, hidden: Option<Range<u32>>) -> Line {
                 c.push(v);
             }
         }
-        if !solid(p) {
+        // The rows the game may leave off are in the picture, not the shape.
+        if !solid(p) || bit / w >= DRAWN_ROWS as usize {
             continue;
         }
         ink[bit / 64] |= 1 << (bit % 64);
@@ -672,6 +695,8 @@ fn picture(pixels: &[[u8; 3]], channel: Channel) -> ChatLine {
         }
     }
     ChatLine {
+        // Given when the line is handed back.
+        id: 0,
         channel,
         continues: false,
         width: (to - from) as u32,
@@ -707,6 +732,10 @@ pub struct ChatReader {
     lines: Option<Vec<Line>>,
     /// Lines handed back recently, newest last.
     recent: VecDeque<Line>,
+    /// Lines handed back with part of their text missing (from the lowest line, or under the
+    /// pointer), until they're seen whole: each one's id, and its place last frame (0 is the
+    /// lowest).
+    partial: Vec<(u64, usize)>,
     /// The box was being followed and then wasn't, so lines may have come and gone unseen.
     lost: bool,
     /// Where the HUD was last found, relative to where the game area's size puts it.
@@ -787,11 +816,6 @@ impl ChatReader {
                     .chain(&self.recent)
                     .any(|old| old.matches(line))
         };
-        let mut reading = ChatReading {
-            lines: Vec::new(),
-            gap,
-            place,
-        };
         // The indented rest of a long line, and whether someone said each line: the rest of a line
         // goes with the line above it, so a notice's rest stays out with it. Top line first.
         let continues: Vec<bool> = (0..now.len())
@@ -802,6 +826,36 @@ impl ChatReader {
                         .is_some_and(|above| above.channel() == now[i].channel())
             })
             .collect();
+        // Lines handed back with part of their text missing, now whole: moved up, and out from
+        // under the pointer. Lines that go off the box, or can't be followed, stay as they were
+        // handed back.
+        let mut whole = Vec::new();
+        match lined_up {
+            Some(moved) => self.partial.retain_mut(|(id, place)| {
+                *place += moved;
+                let Some(line) = now.get(*place) else {
+                    return false;
+                };
+                if *place == 0 || line.hidden.is_some() {
+                    return true;
+                }
+                if let Some(picture) = &line.picture {
+                    whole.push(ChatLine {
+                        id: *id,
+                        continues: continues[*place],
+                        ..picture.clone()
+                    });
+                }
+                false
+            }),
+            None => self.partial.clear(),
+        }
+        let mut reading = ChatReading {
+            lines: Vec::new(),
+            whole,
+            gap,
+            place,
+        };
         let mut said = vec![false; now.len()];
         for i in (0..now.len()).rev() {
             said[i] = match continues[i] {
@@ -819,7 +873,12 @@ impl ChatReader {
             if !said[i] || seen_before(line) {
                 continue;
             }
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            if i == 0 || line.hidden.is_some() {
+                self.partial.push((id, i));
+            }
             reading.lines.push(ChatLine {
+                id,
                 continues: continues[i],
                 ..picture.clone()
             });
@@ -844,6 +903,7 @@ impl ChatReader {
     pub fn reset(&mut self) {
         self.lost |= self.lines.is_some();
         self.lines = None;
+        self.partial.clear();
     }
 }
 
@@ -944,13 +1004,21 @@ pub(crate) mod test_support {
                     continue;
                 }
                 let indent = if text.starts_with(' ') { 29 } else { 9 };
-                canvas.text(
-                    &font,
-                    text.trim_start(),
-                    (left + indent).wrapping_add_signed(self.nudge.0),
-                    (line_top + 4).wrapping_add_signed(self.nudge.1),
-                    |_| *color,
-                );
+                let x = (left + indent).wrapping_add_signed(self.nudge.0);
+                let row = |r: u32| (line_top + r).wrapping_add_signed(self.nudge.1);
+                canvas.text(&font, text.trim_start(), x, row(4), |_| *color);
+                // The tails of g, p and y, under the letters to the bottom of the line. The game
+                // leaves their bottom rows off its lowest line.
+                let bottom = if k == 0 { DRAWN_ROWS } else { LINE_HEIGHT };
+                let mut at = x;
+                for c in text.trim_start().chars() {
+                    if "gpy".contains(c) {
+                        for r in 11..bottom {
+                            canvas.set(at, row(r), *color);
+                        }
+                    }
+                    at += font.columns(c).len() as u32 + 1;
+                }
             }
             if let Some((right, up)) = self.pointer {
                 // A glove: a finger 8 columns wide over a palm 20 wide. A black edge, the pale
@@ -1089,6 +1157,53 @@ mod tests {
         assert!(!reading.gap);
     }
 
+    // The game leaves the tails of g, p and y off its lowest line, where new lines show first.
+    // Fails if such a line isn't handed back whole under its id once it moves up, comes back as a
+    // new line instead, or is handed back whole more than once.
+    #[test]
+    fn a_line_cut_off_at_the_bottom_comes_back_whole_once_it_moves_up() {
+        let mut reader = ChatReader::new();
+        let mut chat = ChatBox::new(&[("lieon>> happy guppy", GREEN), ("aeco: any nx", WHITE)]);
+        let first = read(&mut reader, &chat).unwrap();
+        assert!(first.whole.is_empty());
+        let [cut] = first.lines.as_slice() else {
+            panic!("one new line: {first:?}");
+        };
+        assert!(
+            read(&mut reader, &chat).unwrap().whole.is_empty(),
+            "still the lowest line"
+        );
+
+        // A line of normal chat pushes it up, where the game draws it whole.
+        chat.lines.insert(0, ("medicaid: pure water".into(), WHITE));
+        let moved = read(&mut reader, &chat).unwrap();
+        assert!(moved.lines.is_empty() && !moved.gap, "{moved:?}");
+        let [whole] = moved.whole.as_slice() else {
+            panic!("the line again, whole: {moved:?}");
+        };
+        assert_eq!(
+            (whole.id, whole.channel, whole.continues, whole.width),
+            (cut.id, Channel::Whisper, false, cut.width)
+        );
+        let rows = |line: &ChatLine, rows: Range<u32>| {
+            line.coverage[(rows.start * line.width) as usize..(rows.end * line.width) as usize]
+                .to_vec()
+        };
+        assert_eq!(rows(whole, 0..DRAWN_ROWS), rows(cut, 0..DRAWN_ROWS));
+        assert!(rows(cut, DRAWN_ROWS..LINE_HEIGHT).iter().all(|&c| c == 0));
+        assert!(
+            rows(whole, DRAWN_ROWS..LINE_HEIGHT).contains(&255),
+            "the tails"
+        );
+
+        chat.lines.insert(0, ("aeco: ok".into(), WHITE));
+        let later = read(&mut reader, &chat).unwrap();
+        assert!(
+            later.lines.is_empty() && later.whole.is_empty(),
+            "{later:?}"
+        );
+    }
+
     #[test]
     fn a_see_through_band_lines_up_while_the_scene_behind_it_changes() {
         let mut reader = ChatReader::new();
@@ -1216,6 +1331,51 @@ mod tests {
         let reading = read(&mut reader, &chat).unwrap();
         assert_eq!(channels(&reading), [Channel::Whisper], "only the reply");
         assert!(!reading.gap, "a reply came in");
+    }
+
+    // The pointer hides the text under it, so a line read with the pointer over it is missing
+    // those pixels. Fails if such a line isn't handed back again, whole, once the pointer moves
+    // off, or if a line that moves up under the pointer is handed back with the pointer's hole.
+    #[test]
+    fn a_line_the_pointer_covered_comes_back_whole_once_it_moves_off() {
+        let ink = |line: &ChatLine| line.coverage.iter().filter(|&&c| c > 0).count();
+        let over_second_line = Some((40, FIRST_LINE_UP + LINE_HEIGHT + 4));
+        let mut reader = ChatReader::new();
+        let mut chat = ChatBox::new(&[
+            ("aeco: any nx", WHITE),
+            ("lieon>> holy moly that was a close one", GREEN),
+        ]);
+        chat.pointer = over_second_line;
+        let first = read(&mut reader, &chat).unwrap();
+        let [covered] = first.lines.as_slice() else {
+            panic!("one new line: {first:?}");
+        };
+        let still = read(&mut reader, &chat).unwrap();
+        assert!(still.whole.is_empty(), "the pointer is still over it");
+        chat.pointer = None;
+        let off = read(&mut reader, &chat).unwrap();
+        let [whole] = off.whole.as_slice() else {
+            panic!("the line again, whole: {off:?}");
+        };
+        assert_eq!(whole.id, covered.id);
+        assert!(ink(whole) > ink(covered), "the text the pointer was over");
+        assert!(off.lines.is_empty() && !off.gap, "{off:?}");
+
+        // A new whisper, cut off at the bottom, moves up with the pointer over it.
+        chat.lines.insert(0, ("lieon>> happy guppy".into(), GREEN));
+        let cut = read(&mut reader, &chat).unwrap().lines.remove(0);
+        chat.lines.insert(0, ("medicaid: pure water".into(), WHITE));
+        chat.pointer = over_second_line;
+        let up = read(&mut reader, &chat).unwrap();
+        assert!(up.lines.is_empty() && !up.gap, "{up:?}");
+        assert!(up.whole.is_empty(), "the pointer is over it");
+        chat.pointer = None;
+        let off = read(&mut reader, &chat).unwrap();
+        assert_eq!(off.whole.iter().map(|l| l.id).collect::<Vec<_>>(), [cut.id]);
+        assert!(
+            read(&mut reader, &chat).unwrap().whole.is_empty(),
+            "only once"
+        );
     }
 
     #[test]

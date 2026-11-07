@@ -401,6 +401,12 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(`document.querySelectorAll(".chat-message").length`), 1);
     assert.equal(await page.evaluate(`document.querySelectorAll(".chat-message .chat-word").length`), 3, "both lines' words in one message");
     assert.match(await page.evaluate(`document.querySelector(".chat-text").getAttribute("aria-label")`), /^Whisper message at /);
+    // The game draws a line whole once it moves up, and it comes again under its id: the whole
+    // picture takes the cut one's place, and isn't another unread line.
+    await page.evaluate(say([chatLine(1, "whisper", { words: [[0, 10]] })]));
+    await page.until(`document.querySelectorAll(".chat-message .chat-word").length === 2`, "the whole picture in place");
+    assert.equal(await page.evaluate(`document.querySelectorAll(".chat-message").length`), 1);
+    assert.equal(await page.evaluate(badge), "2", "not another unread line");
 
     const partyTab = `document.querySelector('[data-key="chat-tab-party"]')`;
     assert.equal(await page.evaluate(`${partyTab}.getAttribute("aria-label")`), "Party, 1 unread");
@@ -465,6 +471,12 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(`document.querySelectorAll(".split-line").length`), 3, "each line once");
     assert.equal(await page.evaluate(`document.querySelectorAll(".split-line.rest").length`), 1, "the rest of the long line");
     assert.match(await page.evaluate(`document.querySelector(".split-message").getAttribute("aria-label")`), /^Whisper message at /);
+    // The game draws a line whole once it moves up; it comes again under its id, in its place.
+    const partyWidth = `document.querySelectorAll(".split-message")[1].querySelector(".chat-picture").getBoundingClientRect().width`;
+    const cutWidth = await page.evaluate(partyWidth);
+    await page.evaluate(say([{ ...chatLine(3, "party"), width: 20 }]));
+    await page.until(`${partyWidth} > ${cutWidth * 1.5}`, "the whole picture in its place");
+    assert.equal(await page.evaluate(`document.querySelectorAll(".split-line").length`), 3, "still each line once");
     const colors = `[...document.querySelectorAll(".split-message")].map((m) => getComputedStyle(m).color)`;
     assert.deepEqual(await page.evaluate(colors), ["rgb(0, 255, 255)", "rgb(0, 255, 255)"], "cyan to start");
     await page.evaluate(
