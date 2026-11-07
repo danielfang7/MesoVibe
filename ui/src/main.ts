@@ -385,7 +385,18 @@ function shell(initial: Settings): void {
     },
     "off",
   );
-  void tracker.start();
+  /**
+   * The tracker has had the EXP bar since it started. The engine reports the bar only when it
+   * changes, so a tracker that missed that report (the panel opened after it, or the tracker was
+   * restarted) gets the bar from the status instead, and shows the level and its bar before the
+   * first gain.
+   */
+  let trackerHasBar = false;
+  const startTracker = () => {
+    trackerHasBar = false;
+    void tracker.start();
+  };
+  startTracker();
 
   const setSafeMode = async (on: boolean) => {
     panel.settings = await host.setSafeMode(on);
@@ -571,14 +582,12 @@ function shell(initial: Settings): void {
     strip.classList.toggle("dim", stale);
     const heroBox = hero.parentElement as HTMLElement;
     if (rate === null) {
+      // Before the first gain the strip shows only the level and its bar; the rate takes its place
+      // once there's EXP to measure.
       heroBox.hidden = true;
       const capturing = !panel.settings.safeMode && status?.state === "capturing";
       const gained = (summary?.expGained ?? 0) > 0;
-      heroEmpty.textContent = !capturing
-        ? ""
-        : gained
-          ? "Your rate appears after a few seconds of play."
-          : "Earn some EXP to start. Your rate appears after the first gain.";
+      heroEmpty.textContent = capturing && gained ? "Your rate appears after a few seconds of play." : "";
     } else {
       hero.textContent = formatCompact(rate);
       hero.title = `${formatDigits(rate)} EXP per hour`;
@@ -666,7 +675,7 @@ function shell(initial: Settings): void {
                     // The old numbers belong to the stopped tracker; the restarted one sends its own,
                     // and until then there is nothing for End or Reset to act on.
                     panel.summary = null;
-                    void tracker.start();
+                    startTracker();
                     paintStrip();
                   },
                   "primary",
@@ -1110,6 +1119,14 @@ function shell(initial: Settings): void {
     if (status.exp?.confirmed) panel.lastReadAt = status.atMs;
     if (status.state !== "blocked") panel.helpOpen = false;
     tracker.setCapture(captureState(status));
+    const bar = status.exp;
+    if (!trackerHasBar && bar?.confirmed) {
+      trackerHasBar = true;
+      tracker.event(
+        { type: "ExpChanged", level: bar.level, exp: bar.exp, pct_hundredths: bar.pctHundredths, needed: bar.needed },
+        status.atMs,
+      );
+    }
     paintStrip();
     if (panel.view === "chat") {
       // Statuses arrive four times a second; the Chat view repaints only when its note changes.
@@ -1127,7 +1144,10 @@ function shell(initial: Settings): void {
     panel.chat = [...lines.filter((line) => !known.has(line.id)), ...panel.chat].slice(-KEEP_LINES);
     if (panel.view === "chat") paintChat();
   });
-  void host.onGameEvent((event, atMs) => tracker.event(event, atMs));
+  void host.onGameEvent((event, atMs) => {
+    if (event.type === "ExpChanged") trackerHasBar = true;
+    tracker.event(event, atMs);
+  });
   void host.onSnapshot((png) => {
     panel.snapshot = png;
     if (panel.view === "sees") paintView();

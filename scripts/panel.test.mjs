@@ -289,12 +289,26 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(press(true)), false, "a held Enter is ignored");
     assert.equal(await page.evaluate(press(false)), true, "a fresh Enter is left alone");
     // The next session's first gain arrives within seconds; until a rate means anything the strip
-    // says it's coming, not "Earn some EXP to start".
+    // says it's coming.
     await page.until(`document.querySelector(".hero-empty")?.textContent === "Your rate appears after a few seconds of play."`, "the rate on its way");
     assert.ok(await page.click("Undo"));
     await page.until(`document.querySelector(".notice")?.textContent.includes("Session restored.")`, "the undo of End");
     await page.until(`document.querySelector(".view .cell-detail") === null`, "the history row taken back");
     assert.ok(await page.evaluate(`document.querySelector(".number-hero").textContent.length > 0`));
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // Before the first gain the strip shows the level and its bar, with no rate and no words in its
+  // place. The game sends no EXP change here, so this fails if the tracker only learns the bar
+  // from a change it may have missed.
+  await t.test("before the first gain the strip shows the level and its bar, without a rate", async () => {
+    const page = await openPage(devtools, at("idle"));
+    await page.until(`document.querySelector(".status-text")?.textContent === "Reading game"`, "reading");
+    assert.equal(await page.until(`document.querySelector(".to-level")?.textContent || null`, "the level"), "Lv 42");
+    await page.until(`document.querySelector('.strip-progress [role="progressbar"]')`, "the level's bar");
+    assert.equal(await page.evaluate(`document.querySelector(".hero").hidden`), true, "no rate yet");
+    assert.equal(await page.evaluate(`document.querySelector(".hero-empty").textContent`), "");
     assert.deepEqual(page.errors, []);
     page.close();
   });

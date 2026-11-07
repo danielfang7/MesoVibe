@@ -146,7 +146,8 @@ export function mockHost(scenario: string): Host {
   window.setInterval(() => {
     const s = status();
     for (const handler of statusHandlers) handler(s);
-    if (s.exp === null) return;
+    // `idle`: the bar is read, but nothing is killed yet.
+    if (s.exp === null || scenario === "idle") return;
     // A kill every two seconds; a death once in a while.
     if (s.atMs - lastGain >= 2000) {
       lastGain = s.atMs;
