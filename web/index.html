@@ -66,56 +66,58 @@
       <p class="meta">Free and open source · Windows 10 or 11 · macOS 12.3 or later</p>
     </section>
 
-    <section class="feature feature-lead wrap" aria-labelledby="chat-title">
+    <section class="feature feature-lead wrap" aria-labelledby="exp-title">
       <div class="feature-text">
-        <h2 id="chat-title">Never miss a whisper</h2>
-        <p>Megaphones and crowded towns bury the messages meant for you. MesoVibe pulls whispers, party chat and friend chat out of the game's chat box and gives each one its own tab.</p>
-        <ul class="points">
-          <li>Each tab counts what came in while you were away.</li>
-          <li>An optional overlay at the edge of the game shows the newest messages. Clicks pass straight through it.</li>
-          <li>Chat stays in memory on your computer and is gone when you quit.</li>
-        </ul>
+        <h2 id="exp-title">Track your EXP and loot</h2>
+        <p>See your EXP per hour, the time to your next level, and how every session went. Loot tracking, with the items and mesos you pick up, is coming next.</p>
       </div>
-      <div class="panel mock-chat" role="group" aria-label="Example of the Chat view">
-        <p class="panel-label" aria-hidden="true">Chat</p>
-        <div class="tabs" role="tablist" aria-label="Chat types">
-          <button type="button" class="tab" role="tab" id="tab-whispers" aria-controls="chat-whispers" aria-selected="true">Whispers</button>
-          <button type="button" class="tab" role="tab" id="tab-party" aria-controls="chat-party" aria-selected="false" tabindex="-1">Party <span class="count">3<span class="sr-only"> unread</span></span></button>
-          <button type="button" class="tab" role="tab" id="tab-friends" aria-controls="chat-friends" aria-selected="false" tabindex="-1">Friends <span class="count">1<span class="sr-only"> unread</span></span></button>
-        </div>
-        <div class="chat-body">
-          <ol class="chat-lines" id="chat-whispers" role="tabpanel" aria-labelledby="tab-whispers">
-            <li><span class="who">Fernwick&gt;&gt;</span> still need one more for the ant tunnel?</li>
-            <li><span class="who">Fernwick&gt;&gt;</span> i can bring pots</li>
-            <li><span class="who">Fernwick&lt;&lt;</span> yes! omw, ch 4</li>
-            <li><span class="who">Quillbeck&gt;&gt;</span> thanks for the party earlier</li>
-          </ol>
-          <ol class="chat-lines" id="chat-party" role="tabpanel" aria-labelledby="tab-party" hidden>
-            <li><span class="who">Sorrelbee :</span> pots ready, heading left</li>
-            <li><span class="who">Fernwick :</span> need 2 more horns for my quest</li>
-            <li><span class="who">Thistlewren :</span> brb 1 min</li>
-            <li><span class="who">Sorrelbee :</span> np, we'll hold the spot</li>
-          </ol>
-          <ol class="chat-lines" id="chat-friends" role="tabpanel" aria-labelledby="tab-friends" hidden>
-            <li><span class="who">Mossbell :</span> anyone up for a party quest tonight?</li>
-            <li><span class="who">Tinkerfern :</span> i'm in after dinner</li>
-            <li><span class="who">Mossbell :</span> 8pm, ch 2</li>
-            <li><span class="who">Quillbeck :</span> count me in</li>
-          </ol>
-        </div>
+      <div class="panel mock-exp" role="img" aria-label="The session strip: 1.85M EXP per hour, level 41 to 42 in 38 minutes, with a progress bar about two-thirds full.">
+        <p class="status"><span class="dot"></span>Reading game</p>
+        <p class="rate"><span class="rate-number">1.85M</span> <span class="rate-unit">EXP/hr</span></p>
+        <p class="to-level">Lv 41 → 42 in 38m</p>
+        <div class="bar"><span style="width: 64%"></span></div>
       </div>
     </section>
 
     <div class="feature-pair wrap">
-      <section class="feature" aria-labelledby="exp-title">
-        <div class="panel mock-exp" role="img" aria-label="The session strip: 1.85M EXP per hour, level 41 to 42 in 38 minutes, with a progress bar about two-thirds full.">
-          <p class="status"><span class="dot"></span>Reading game</p>
-          <p class="rate"><span class="rate-number">1.85M</span> <span class="rate-unit">EXP/hr</span></p>
-          <p class="to-level">Lv 41 → 42 in 38m</p>
-          <div class="bar"><span style="width: 64%"></span></div>
+      <section class="feature" aria-labelledby="chat-title">
+        <div class="panel mock-chat" role="group" aria-label="Example of the Chat view">
+          <p class="panel-label" aria-hidden="true">Chat</p>
+          <div class="tabs" role="tablist" aria-label="Chat types">
+            <button type="button" class="tab" role="tab" id="tab-whispers" aria-controls="chat-whispers" aria-selected="true">Whispers</button>
+            <button type="button" class="tab" role="tab" id="tab-party" aria-controls="chat-party" aria-selected="false" tabindex="-1">Party <span class="count">3<span class="sr-only"> unread</span></span></button>
+            <button type="button" class="tab" role="tab" id="tab-friends" aria-controls="chat-friends" aria-selected="false" tabindex="-1">Friends <span class="count">1<span class="sr-only"> unread</span></span></button>
+          </div>
+          <div class="chat-body">
+            <ol class="chat-lines" id="chat-whispers" role="tabpanel" aria-labelledby="tab-whispers">
+              <li><span class="who">Fernwick&gt;&gt;</span> still need one more for the ant tunnel?</li>
+              <li><span class="who">Fernwick&gt;&gt;</span> i can bring pots</li>
+              <li><span class="who">Fernwick&lt;&lt;</span> yes! omw, ch 4</li>
+              <li><span class="who">Quillbeck&gt;&gt;</span> thanks for the party earlier</li>
+            </ol>
+            <ol class="chat-lines" id="chat-party" role="tabpanel" aria-labelledby="tab-party" hidden>
+              <li><span class="who">Sorrelbee :</span> pots ready, heading left</li>
+              <li><span class="who">Fernwick :</span> need 2 more horns for my quest</li>
+              <li><span class="who">Thistlewren :</span> brb 1 min</li>
+              <li><span class="who">Sorrelbee :</span> np, we'll hold the spot</li>
+            </ol>
+            <ol class="chat-lines" id="chat-friends" role="tabpanel" aria-labelledby="tab-friends" hidden>
+              <li><span class="who">Mossbell :</span> anyone up for a party quest tonight?</li>
+              <li><span class="who">Tinkerfern :</span> i'm in after dinner</li>
+              <li><span class="who">Mossbell :</span> 8pm, ch 2</li>
+              <li><span class="who">Quillbeck :</span> count me in</li>
+            </ol>
+          </div>
         </div>
-        <h2 id="exp-title">Track your EXP and loot</h2>
-        <p>See your EXP per hour, the time to your next level, and how every session went. Loot tracking, with the items and mesos you pick up, is coming next.</p>
+        <div class="feature-text">
+          <h2 id="chat-title">Never miss a whisper</h2>
+          <p>Megaphones and crowded towns bury the messages meant for you. MesoVibe pulls whispers, party chat and friend chat out of the game's chat box and gives each one its own tab.</p>
+          <ul class="points">
+            <li>Each tab counts what came in while you were away.</li>
+            <li>An optional overlay at the edge of the game shows the newest messages. Clicks pass straight through it.</li>
+            <li>Chat stays in memory on your computer and is gone when you quit.</li>
+          </ul>
+        </div>
       </section>
 
       <section class="feature" aria-labelledby="radar-title">
@@ -128,8 +130,10 @@
             <li><span class="ch">Ch 4</span><span class="track"><span style="width: 8%"></span></span><span class="n">1</span><span class="note">quiet</span></li>
           </ul>
         </div>
-        <h2 id="radar-title">Find a quiet channel <span class="chip">In progress</span></h2>
-        <p>MesoVibe will count the players on your minimap as you change channels, so you can tell which ones are crowded before you settle in.</p>
+        <div class="feature-text">
+          <h2 id="radar-title">Find a quiet channel <span class="chip">In progress</span></h2>
+          <p>MesoVibe will count the players on your minimap as you change channels, so you can tell which ones are crowded before you settle in.</p>
+        </div>
       </section>
     </div>
 
