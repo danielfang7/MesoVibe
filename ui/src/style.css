@@ -150,6 +150,10 @@ dl {
 .app {
   display: grid;
   grid-template-columns: 1fr 48px;
+  /* One row exactly the window's height. An automatic row grows to fit the tallest view, which
+     made the whole page taller than the window and pushed the rail's last icons out of it,
+     instead of the view scrolling. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
 }
 

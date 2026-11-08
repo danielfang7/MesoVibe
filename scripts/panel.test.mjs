@@ -313,6 +313,25 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
+  // A view taller than the panel scrolls inside itself, under a strip and beside a rail that stay
+  // put. Fails if the page grows with the view instead, which pushes the rail's last icons below
+  // the window.
+  await t.test("a long view scrolls inside the panel, and the rail stays in the window", async () => {
+    const page = await openPage(devtools, at("grind"));
+    await openSettings(page);
+    await page.until(checked("settings-startup"), "Settings");
+    const layout = await page.evaluate(`(() => {
+      const view = document.querySelector(".view");
+      const lastIcon = [...document.querySelectorAll(".rail-item")].at(-1).getBoundingClientRect();
+      return { window: innerHeight, page: document.documentElement.scrollHeight, scrolls: view.scrollHeight > view.clientHeight, lastIcon: lastIcon.bottom };
+    })()`);
+    assert.ok(layout.scrolls, "Settings is taller than the panel at this size");
+    assert.equal(layout.page, layout.window, "the page is no taller than the window");
+    assert.ok(layout.lastIcon <= layout.window, `the rail's last icon ends at ${layout.lastIcon}px, past the window's ${layout.window}px`);
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
   // Safe mode's switch lives in Settings. Fails if the strip's switch returns or Start reading does
   // nothing.
   await t.test("Safe mode has no switch in the strip, and Start reading turns reading back on", async () => {
