@@ -28,8 +28,11 @@ const OPEN_AFTER_UPDATE_FILE: &str = "open-after-update";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    /// The first-run disclosure was read and accepted. Nothing is captured before.
-    pub disclosure_accepted: bool,
+    /// MesoVibe's first start on this computer is done: it turned "Open with MapleStory Classic"
+    /// on (presence.rs). MesoVibe 0.3.0 and earlier showed a first-run screen and saved this as
+    /// `disclosureAccepted`, so players who already set it up aren't set up again.
+    #[serde(alias = "disclosureAccepted")]
+    pub first_run_done: bool,
     /// Capture off: MesoVibe reads nothing.
     pub safe_mode: bool,
     /// Keep MesoVibe with the game: the panel docks beside it, or the mini-HUD stands in.
@@ -135,7 +138,7 @@ impl ChatColors {
 impl Default for Settings {
     fn default() -> Settings {
         Settings {
-            disclosure_accepted: false,
+            first_run_done: false,
             safe_mode: false,
             dock: true,
             mini_hud: true,
@@ -365,17 +368,38 @@ mod tests {
         assert_eq!(store.settings(), Settings::default());
         store
             .update(|s| {
-                s.disclosure_accepted = true;
+                s.first_run_done = true;
                 s.safe_mode = true;
             })
             .unwrap();
         let again = Store::open(dir.clone());
-        assert!(again.settings().disclosure_accepted && again.settings().safe_mode);
+        assert!(again.settings().first_run_done && again.settings().safe_mode);
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    // A 0.1.0 settings file has no display fields, and must keep the accepted disclosure rather
-    // than be set aside as unreadable. Fails if a new field has no default.
+    // MesoVibe 0.3.0 and earlier saved the first-run flag as "disclosureAccepted". Saved again,
+    // the file has the new name only: both names in one file would make it unreadable. Fails if
+    // the old name is written back or the flag is lost on the way.
+    #[test]
+    fn the_first_run_flag_is_saved_under_its_new_name() {
+        let dir = temp_dir("first-run-name");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{ "disclosureAccepted": true }"#,
+        )
+        .unwrap();
+        Store::open(dir.clone()).update(|_| {}).unwrap();
+        let text = std::fs::read_to_string(dir.join("settings.json")).unwrap();
+        assert!(text.contains("\"firstRunDone\": true") && !text.contains("disclosureAccepted"));
+        assert!(Store::open(dir.clone()).settings().first_run_done);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // A 0.1.0 settings file has no display fields, and must keep its choices rather than be set
+    // aside as unreadable. Its "disclosureAccepted" means the first start is done, so MesoVibe
+    // doesn't turn "Open with MapleStory Classic" back on for a player who turned it off. Fails if
+    // a new field has no default or the old name is no longer read.
     #[test]
     fn settings_saved_by_an_older_mesovibe_keep_their_choices() {
         let dir = temp_dir("older");
@@ -386,7 +410,7 @@ mod tests {
         )
         .unwrap();
         let settings = Store::open(dir.clone()).settings();
-        assert!(settings.disclosure_accepted);
+        assert!(settings.first_run_done);
         assert!(settings.dock && settings.mini_hud);
         assert_eq!(settings.mini_hud_corner, Corner::TopRight);
         assert_eq!(settings.panel, None);
@@ -409,7 +433,7 @@ mod tests {
         )
         .unwrap();
         let settings = Store::open(dir.clone()).settings();
-        assert!(settings.disclosure_accepted);
+        assert!(settings.first_run_done);
         let colors = &settings.chat_overlay_colors;
         assert_eq!(colors.whisper, "#ffffff");
         assert_eq!(colors.party, ChatColors::default().party);

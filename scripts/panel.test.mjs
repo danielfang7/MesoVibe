@@ -1,7 +1,7 @@
 // A smoke test of the panel (ui/src) in headless Chrome, against the development stand-in for the
-// host (ui/src/mock.ts): the first-run disclosure and its "Open with MapleStory Classic" switch,
-// the live session strip, End and Reset with Undo, Safe mode's way back, the blocked state, the
-// display and startup settings and the mini-HUD. It drives Chrome over the DevTools protocol with
+// host (ui/src/mock.ts): a new install reading straight away, the live session strip, End and
+// Reset with Undo, Safe mode's way back, the blocked state, the display and startup settings and
+// the mini-HUD. It drives Chrome over the DevTools protocol with
 // Node's own WebSocket, so it needs no browser package. It's skipped when no Chrome is installed;
 // set MESOVIBE_CHROME to point at one.
 import { test } from "node:test";
@@ -155,25 +155,24 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await page.evaluate(`document.querySelector('[aria-label="Settings"]').click()`);
   };
 
-  // The opt-in is on the one first-run screen, on by default, and what the player picks is what
-  // Settings shows. Fails if the switch is dropped, its default flips, or its value isn't sent.
-  await t.test("first run shows the disclosure and the opt-in, then the panel", async () => {
+  // A new install goes straight to the panel and reads the game: no first-run screen, and no
+  // Safe mode offer while it looks for the game. "Open with MapleStory Classic" starts on. Fails
+  // if a first-run choice comes back, Safe mode is offered outside Settings, or the switch starts
+  // off.
+  await t.test("a new install reads the game straight away, with Open with MapleStory Classic on", async () => {
     const page = await openPage(devtools, at("first"));
-    await page.until(`document.body.innerText.includes("Before you start")`, "the disclosure");
-    const body = await page.evaluate("document.body.innerText");
-    assert.match(body, /never sends keyboard or mouse input/);
-    // The disclosure no longer has the risk paragraph.
-    assert.doesNotMatch(body, /Nexon hasn't approved MesoVibe/);
-    // What leaves the computer: the update check, and what it carries.
-    assert.match(await page.evaluate(textOf("disclosure-updates")), /^Once a day MesoVibe asks GitHub.+carries nothing about you or the game/);
-    assert.equal(await page.evaluate(checked("open-with-game")), "true", "on by default");
-    assert.match(await page.evaluate(textOf("open-with-game-note")), /waits in the menu bar.+quit from its menu bar icon/);
-    await page.evaluate(`document.querySelector('[data-key="open-with-game"]').click()`);
-    await page.until(`${checked("open-with-game")} === "false"`, "the opt-in switched off");
-    assert.ok(await page.click("Start reading the game"));
+    const status = `document.querySelector(".status-text")?.textContent`;
+    await page.until(`${status} && ${status} !== "Reading game"`, "looking for the game");
+    const buttons = `[...document.querySelectorAll("button")].map((b) => b.textContent.trim())`;
+    assert.ok(!(await page.evaluate(buttons)).includes("Use Safe mode"), "no Safe mode offer while looking");
+    await page.until(`${status} === "Reading game"`, "reading");
+    assert.doesNotMatch(await page.evaluate("document.body.innerText"), /Before you start/);
     await openSettings(page);
-    assert.equal(await page.until(checked("settings-startup"), "the startup switch"), "false", "the player's choice");
-    assert.match(await page.evaluate(textOf("settings-startup-note")), /Off, closing the panel quits MesoVibe\./);
+    assert.equal(await page.until(checked("settings-startup"), "the startup switch"), "true", "on from the first start");
+    assert.match(
+      await page.evaluate(textOf("settings-startup-note")),
+      /waits in the menu bar.+quit from its menu bar icon\. Off, closing the panel quits MesoVibe\.$/,
+    );
     assert.deepEqual(page.errors, []);
     page.close();
   });
@@ -202,16 +201,12 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     failed.close();
   });
 
-  // A login item registered from the disk image would stop working, so the switch says what to do
-  // instead. Fails if the switch stays usable or the reason is hidden.
-  await t.test("run from the disk image, the opt-in says to move MesoVibe first", async () => {
+  // A login item registered from the disk image would stop working, so the switch stays off and
+  // says what to do instead. Fails if the switch is on or usable, or the reason is hidden.
+  await t.test("run from the disk image, Open with MapleStory Classic says to move MesoVibe first", async () => {
     const page = await openPage(devtools, at("moved"));
-    await page.until(`document.body.innerText.includes("Before you start")`, "the disclosure");
-    assert.equal(await page.evaluate(checked("open-with-game")), "false");
-    assert.equal(await page.evaluate(disabled("open-with-game")), true);
-    assert.match(await page.evaluate(textOf("open-with-game-note")), /Move MesoVibe to your Applications folder/);
-    assert.ok(await page.click("Start reading the game"));
     await openSettings(page);
+    assert.equal(await page.until(checked("settings-startup"), "the startup switch"), "false");
     await page.until(`${disabled("settings-startup")} === true`, "the startup switch, disabled");
     assert.match(await page.evaluate(textOf("settings-startup-note")), /Move MesoVibe to your Applications folder/);
     assert.deepEqual(page.errors, []);
@@ -222,7 +217,7 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
   await t.test("Settings switches the opt-in, and says why when the OS refuses", async () => {
     const page = await openPage(devtools, at("grind"));
     await openSettings(page);
-    assert.equal(await page.until(checked("settings-startup"), "the startup switch"), "true", "kept from first run");
+    assert.equal(await page.until(checked("settings-startup"), "the startup switch"), "true", "on from the first start");
     await page.evaluate(`document.querySelector('[data-key="settings-startup"]').click()`);
     await page.until(`${checked("settings-startup")} === "false"`, "switched off");
     page.close();
@@ -328,12 +323,15 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
+  // Safe mode is turned on only in Settings. Fails if the fix goes missing or the strip offers
+  // Safe mode again.
   await t.test("a blocked capture says so and how to fix it", async () => {
     const page = await openPage(devtools, at("blocked"));
     await page.until(`document.querySelector(".status-text")?.textContent === "Can't capture the game window."`, "blocked");
     assert.ok(await page.click("How to fix"));
     await page.until(`document.querySelector(".help")?.textContent.includes("Screen Recording")`, "the fix");
-    assert.ok(await page.evaluate(`[...document.querySelectorAll("button")].some((b) => b.textContent === "Use Safe mode")`));
+    assert.ok(await page.evaluate(`[...document.querySelectorAll("button")].some((b) => b.textContent === "Try again")`));
+    assert.equal(await page.evaluate(`[...document.querySelectorAll("button")].some((b) => b.textContent === "Use Safe mode")`), false);
     assert.deepEqual(page.errors, []);
     page.close();
   });

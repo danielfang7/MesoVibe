@@ -5,7 +5,6 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "app_info",
             "get_settings",
-            "accept_disclosure",
             "set_safe_mode",
             "retry_capture",
             "watch_capture",

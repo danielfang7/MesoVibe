@@ -1,6 +1,7 @@
 // A scripted stand-in for the host, for looking at the panel in a development browser without
-// the game: `?mock=grind` (default play), `first` (first run), `blocked`, `safe`, `levelup`, and
-// `moved` (first run from a disk image, where "Open with MapleStory Classic" can't be turned on),
+// the game: `?mock=grind` (default play), `first` (a new install, before any chat), `blocked`,
+// `safe`, `levelup`, and `moved` (run from a disk image, where "Open with MapleStory Classic"
+// can't be turned on),
 // `loginfail` (the OS refuses the login item), `update` (MesoVibe 0.2.0 downloaded and ready:
 // Restart to update) and `updatefail` (GitHub couldn't be reached; Check now then finds nothing).
 // The mini-HUD page (hud.html) takes `grind`, `learning` and `blocked`; the chat overlay page
@@ -69,11 +70,11 @@ function chatter(handler: (lines: ChatLine[]) => void): void {
 }
 
 export function mockHost(scenario: string): Host {
-  const firstRun = scenario === "first" || scenario === "moved";
   const problem = scenario === "moved" ? "Move MesoVibe to your Applications folder and open it from there first." : null;
   const refused = scenario === "loginfail" ? "MesoVibe couldn't add itself to your login items: Access is denied." : null;
   // A returning player kept the first-run default; a first run starts with nothing registered.
-  let startup: Startup = { on: !firstRun && refused === null, problem };
+  // Like the host's first start: on, unless MesoVibe can't keep a login item from where it is.
+  let startup: Startup = { on: problem === null && refused === null, problem };
   const checkedAtMs = Date.now() - 20 * 60_000;
   let update: UpdateStatus =
     scenario === "update"
@@ -90,7 +91,6 @@ export function mockHost(scenario: string): Host {
   const installs = { count: 0 };
   (window as unknown as { __mockInstalls: typeof installs }).__mockInstalls = installs;
   let settings: Settings = {
-    disclosureAccepted: !firstRun,
     safeMode: scenario === "safe",
     dock: true,
     miniHud: true,
@@ -111,7 +111,7 @@ export function mockHost(scenario: string): Host {
   const status = (): Status => {
     const now = Date.now();
     const t = now - started;
-    const base = { reading: settings.disclosureAccepted && !settings.safeMode, atMs: now, stale: false, chat: null };
+    const base = { reading: !settings.safeMode, atMs: now, stale: false, chat: null };
     if (!base.reading) return { ...base, state: "off", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
     const game = { width: 1366, height: 768, scale: 2 };
     if (scenario === "blocked") {
@@ -173,11 +173,6 @@ export function mockHost(scenario: string): Host {
   return {
     appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 2 }),
     settings: async () => settings,
-    acceptDisclosure: async (safeMode, openWithGame) => {
-      // Like the host: accepted whatever the login item does.
-      startup = { ...startup, on: openWithGame && problem === null };
-      return (settings = { ...settings, disclosureAccepted: true, safeMode });
-    },
     startup: async () => startup,
     setStartup: async (on) => {
       if (on && (problem ?? refused) !== null) throw new Error(problem ?? refused ?? "");
@@ -220,7 +215,6 @@ export function mockHost(scenario: string): Host {
 /** The chat overlay's stand-in: lines so far, and more every few seconds. */
 export function mockChatHost(scenario: string): ChatHost {
   const settings: Settings = {
-    disclosureAccepted: true,
     safeMode: false,
     dock: true,
     miniHud: true,

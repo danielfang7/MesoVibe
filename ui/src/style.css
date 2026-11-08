@@ -131,14 +131,6 @@ dl {
   text-transform: none;
 }
 
-.wordmark {
-  font-family: var(--font-pixel);
-  font-weight: 600;
-  font-size: 18px;
-  letter-spacing: 0.01em;
-  color: var(--accent);
-}
-
 .text.muted,
 .muted {
   color: var(--text-muted);
@@ -692,23 +684,6 @@ dl {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   font-size: 14px;
-}
-
-/* MARK: first run */
-
-.disclosure {
-  max-width: 520px;
-  margin: 0 auto;
-  padding: var(--space-xl) var(--space-lg);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
-}
-
-.disclosure h1 {
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.2;
 }
 
 /* MARK: dialogs */

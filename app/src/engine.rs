@@ -8,8 +8,7 @@
 //! While the "What MesoVibe sees" view is open, it also sends the exact rows the engine read, as
 //! a PNG, at most once a second (`engine://snapshot`). Each tick also keeps MesoVibe's windows
 //! with the game window (`dock.rs`) and decides whether the panel should be built, hidden or
-//! destroyed (`presence.rs`). Nothing is captured while reading is off (Safe mode, or before the
-//! first-run disclosure is accepted).
+//! destroyed (`presence.rs`). Nothing is captured while reading is off (Safe mode).
 //!
 //! The EXP bar digits the reader confirms are kept on this computer (`Store`), and the next time
 //! reading starts the reader begins from them, so it reads level and EXP from the first frame
@@ -52,7 +51,7 @@ type Platform = Unsupported;
 
 /// What the panel asks of the engine.
 pub enum Command {
-    /// Reading on (capture) or off (Safe mode, or before the disclosure).
+    /// Reading on (capture) or off (Safe mode).
     SetReading(bool),
     /// The player fixed what blocked capture: look again.
     Retry,

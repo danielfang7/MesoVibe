@@ -1,5 +1,5 @@
-// The side panel: the first-run disclosure, the session strip and icon rail, and the Session,
-// Chat (the Chat Hub), "What MesoVibe sees" and Settings views.
+// The side panel: the session strip and icon rail, and the Session, Chat (the Chat Hub),
+// "What MesoVibe sees" and Settings views.
 // Every word on screen is a text node, never parsed HTML.
 import { formatCompact, formatDigits, formatMinutes, formatPercent } from "@mesovibe/sdk";
 import type { CaptureState, SessionSummary } from "@mesovibe/sdk";
@@ -84,87 +84,9 @@ function startupNote(os: string | undefined): string {
   return `MesoVibe starts when you log in and waits in the ${tray}. When MapleStory Classic starts, MesoVibe opens with it. Closing the panel keeps MesoVibe waiting; quit from its ${tray} icon.`;
 }
 
-/** What the update check sends, on the first-run screen and in Settings > About. */
+/** What the update check sends, in Settings > About. */
 const UPDATE_CHECK_NOTE =
   "Once a day MesoVibe asks GitHub whether a newer version is out. The request carries nothing about you or the game; GitHub sees your IP address, as any website does. An update installs only when you choose Restart to update.";
-
-// MARK: first run
-
-function disclosure(startup: Startup, os: string | undefined): void {
-  // On unless it can't be.
-  let openWithGame = startup.problem === null;
-  const start = (safeMode: boolean) => async () => shell(await host.acceptDisclosure(safeMode, openWithGame));
-  const opener = h("div", {});
-  const paintOpener = () =>
-    replace(
-      opener,
-      toggle(
-        "Open with MapleStory Classic",
-        openWithGame,
-        (on) => {
-          openWithGame = on;
-          paintOpener();
-        },
-        "open-with-game",
-        startup.problem !== null,
-      ),
-    );
-  paintOpener();
-  replace(
-    root,
-    h(
-      "div",
-      { class: "disclosure" },
-      h("p", { class: "wordmark" }, "MesoVibe"),
-      h("h1", {}, "Before you start"),
-      h(
-        "section",
-        { class: "block" },
-        h("h2", { class: "label" }, "What it reads"),
-        h(
-          "p",
-          {},
-          "MesoVibe looks at the bottom of the MapleStory Classic window, where the EXP bar and the chat box are, a few times a second: the way someone watching your stream would see it. The pictures never leave this computer.",
-        ),
-      ),
-      h(
-        "section",
-        { class: "block" },
-        h("h2", { class: "label" }, "What it never does"),
-        h(
-          "p",
-          {},
-          "It never sends keyboard or mouse input to the game, never reads or changes the game's memory or files, and never touches its network traffic.",
-        ),
-      ),
-      h(
-        "section",
-        { class: "block" },
-        h("h2", { class: "label" }, "What it sends"),
-        h("p", { attrs: { "data-key": "disclosure-updates" } }, UPDATE_CHECK_NOTE),
-      ),
-      h(
-        "section",
-        { class: "block" },
-        h("h2", { class: "label" }, "When it runs"),
-        opener,
-        h("p", { class: "text muted", attrs: { "data-key": "open-with-game-note" } }, startup.problem ?? startupNote(os)),
-      ),
-      h(
-        "p",
-        { class: "text muted" },
-        "On a Mac, the next step asks for Screen Recording permission. MesoVibe records only the game window.",
-      ),
-      h(
-        "div",
-        { class: "actions" },
-        button("Start reading the game", start(false), "primary", "start"),
-        button("Use Safe mode", start(true), "secondary", "safe"),
-      ),
-    ),
-  );
-  root.querySelector<HTMLElement>('[data-key="start"]')?.focus();
-}
 
 // MARK: the panel
 
@@ -524,13 +446,11 @@ function shell(initial: Settings): void {
 
     const status = panel.status;
     const blocked = !panel.settings.safeMode && status?.state === "blocked";
-    const looking = !panel.settings.safeMode && status?.state === "no_game";
     // Statuses arrive four times a second; rebuild the help row only when it changes, so a focused
     // button stays the same element and screen readers aren't told about it again.
     const helpKey = JSON.stringify([
       panel.settings.safeMode,
       blocked,
-      looking,
       panel.helpOpen,
       blocked ? (status?.error ?? null) : null,
       // The macOS "Open System Settings" button depends on it, and app info can arrive late.
@@ -541,47 +461,42 @@ function shell(initial: Settings): void {
       const helpHadFocus = helpSlot.contains(document.activeElement);
       replace(
         helpSlot,
-        // The Safe mode switch lives in Settings; the strip offers the way back.
+        // Safe mode is turned on only in Settings, so a new player isn't offered it before
+        // MesoVibe has had a chance to read the game; the strip offers the way back.
         panel.settings.safeMode
           ? h("div", { class: "actions" }, button("Start reading", () => void setSafeMode(false), "primary", "start-reading"))
           : blocked
-          ? h(
-              "div",
-              {},
-              panel.helpOpen
-                ? h(
-                    "div",
-                    { class: "help-body" },
-                    h("p", {}, status?.error ?? "Capture stopped."),
-                    h(
+            ? h(
+                "div",
+                {},
+                panel.helpOpen
+                  ? h(
+                      "div",
+                      { class: "help-body" },
+                      h("p", {}, status?.error ?? "Capture stopped."),
+                      h(
+                        "div",
+                        { class: "actions" },
+                        panel.info?.os === "macos"
+                          ? button("Open System Settings", () => void host.openPrivacySettings(), "primary", "help-open")
+                          : null,
+                        button("Try again", () => void host.retry(), "secondary", "help-retry"),
+                      ),
+                    )
+                  : h(
                       "div",
                       { class: "actions" },
-                      panel.info?.os === "macos"
-                        ? button("Open System Settings", () => void host.openPrivacySettings(), "primary", "help-open")
-                        : null,
-                      button("Try again", () => void host.retry(), "secondary", "help-retry"),
+                      button(
+                        "How to fix",
+                        () => {
+                          panel.helpOpen = true;
+                          paintStrip();
+                        },
+                        "primary",
+                        "help-how",
+                      ),
                     ),
-                  )
-                : null,
-              h(
-                "div",
-                { class: "actions" },
-                panel.helpOpen
-                  ? null
-                  : button(
-                      "How to fix",
-                      () => {
-                        panel.helpOpen = true;
-                        paintStrip();
-                      },
-                      "primary",
-                      "help-how",
-                    ),
-                button("Use Safe mode", () => void setSafeMode(true), "secondary", "help-safe"),
-              ),
-            )
-          : looking
-            ? h("div", { class: "actions" }, button("Use Safe mode", () => void setSafeMode(true), "secondary", "look-safe"))
+              )
             : null,
       );
       // Start reading removes itself; keep the keyboard place in the strip, as End and Reset do.
@@ -932,9 +847,8 @@ function shell(initial: Settings): void {
         h("p", {}, "The chat box: whisper, party and friend lines, as pictures."),
         h("h2", { class: "label" }, "Never reads"),
         h("p", {}, "Your keyboard or mouse · the game's memory · the game's files · network traffic"),
-        reading
-          ? button("Pause reading", () => void setSafeMode(true), "secondary", "sees-pause")
-          : button("Start reading", () => void setSafeMode(false), "primary", "sees-start"),
+        // Safe mode is turned on only in Settings; here, only the way back.
+        panel.settings.safeMode ? button("Start reading", () => void setSafeMode(false), "primary", "sees-start") : null,
       ),
     ];
   }
@@ -1194,12 +1108,7 @@ function shell(initial: Settings): void {
 async function boot(): Promise<void> {
   try {
     host = await connect();
-    const settings = await host.settings();
-    if (settings.disclosureAccepted) shell(settings);
-    else {
-      const [startup, info] = await Promise.all([host.startup(), host.appInfo()]);
-      disclosure(startup, info.os);
-    }
+    shell(await host.settings());
   } catch (error) {
     replace(root, h("p", { class: "state error" }, `MesoVibe couldn't start its panel: ${String(error)}`));
   }

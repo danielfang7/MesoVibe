@@ -413,6 +413,7 @@ pub struct Startup {
 /// Sets up the tray and the login item, then opens the panel, unless MesoVibe started at login
 /// and there's nothing to show until the game appears.
 pub fn start(app: &AppHandle, background: bool) {
+    first_start(app);
     let login = app.autolaunch().is_enabled().unwrap_or(false);
     if login {
         point_login_item_here(app);
@@ -425,24 +426,34 @@ pub fn start(app: &AppHandle, background: bool) {
     let after_update = app
         .try_state::<Store>()
         .is_some_and(|store| store.take_open_after_update());
-    if opens_at_start(
-        background,
-        settings(app).disclosure_accepted,
-        resident(app),
-        after_update,
-    ) {
+    if opens_at_start(background, resident(app), after_update) {
         open(app);
     } else {
         set_dock_icon(app, false);
     }
 }
 
+/// On MesoVibe's first start on this computer, turns "Open with MapleStory Classic" on, so it
+/// opens with the game from then on; the switch in Settings turns it off. A copy that can't keep
+/// a login item yet (run from the disk image) leaves this for its first start from Applications.
+/// Development builds never add one: it would point at the build folder.
+fn first_start(app: &AppHandle) {
+    if cfg!(debug_assertions) || settings(app).first_run_done || install_problem().is_some() {
+        return;
+    }
+    // Done whatever the OS says, so a refused login item isn't asked for at every start;
+    // Settings shows the switch as it really is.
+    let _ = app.autolaunch().enable();
+    if let Some(store) = app.try_state::<Store>() {
+        let _ = store.update(|s| s.first_run_done = true);
+    }
+}
+
 /// Whether the panel opens as MesoVibe starts. Started by the login item (`background`), it
-/// waits for the game in the tray, unless the first-run screen hasn't been accepted yet, or the
-/// player just clicked "Restart to update" in the panel and expects it back: a restart keeps the
-/// login item's `--background` (updater.rs).
-fn opens_at_start(background: bool, accepted: bool, resident: bool, after_update: bool) -> bool {
-    !(background && accepted && resident) || after_update
+/// waits for the game in the tray, unless the player just clicked "Restart to update" in the
+/// panel and expects it back: a restart keeps the login item's `--background` (updater.rs).
+fn opens_at_start(background: bool, resident: bool, after_update: bool) -> bool {
+    !(background && resident) || after_update
 }
 
 /// MesoVibe is about to restart into an update the player chose: keep where the panel is, and
@@ -750,33 +761,24 @@ mod tests {
     // Fails if --background wins over the marker, or a plain login start opens a window.
     #[test]
     fn the_panel_opens_at_start_unless_waiting_for_the_game() {
-        // (background, accepted, resident, after_update) → opens
+        // (background, resident, after_update) → opens
         let cases = [
-            ((false, true, true, false), true, "a normal launch"),
+            ((false, true, false), true, "a normal launch"),
             (
-                (true, true, true, false),
+                (true, true, false),
                 false,
                 "the login item: waits in the tray",
             ),
+            ((true, false, false), true, "no tray to come back from"),
             (
-                (true, false, true, false),
-                true,
-                "first run: the disclosure shows",
-            ),
-            (
-                (true, true, false, false),
-                true,
-                "no tray to come back from",
-            ),
-            (
-                (true, true, true, true),
+                (true, true, true),
                 true,
                 "back from an update the player chose",
             ),
         ];
-        for ((background, accepted, resident, after_update), opens, why) in cases {
+        for ((background, resident, after_update), opens, why) in cases {
             assert_eq!(
-                opens_at_start(background, accepted, resident, after_update),
+                opens_at_start(background, resident, after_update),
                 opens,
                 "{why}"
             );

@@ -12,21 +12,19 @@
 //! ```
 //!
 //! A look fetches the static `latest.json` of the newest release and sends nothing about the
-//! player or the game, only the plugin's user agent. Nothing is looked at before the first-run
-//! disclosure, which says so, is accepted. Debug builds never look: an update would replace the
-//! development build.
+//! player or the game, only the plugin's user agent. Settings > About says so. Debug builds
+//! never look: an update would replace the development build.
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::{Error as UpdateError, Update, UpdaterExt};
 
 use crate::dock;
 use crate::presence;
-use crate::store::Store;
 
 /// The first look after MesoVibe starts.
 const FIRST_CHECK: Duration = Duration::from_secs(30);
@@ -37,8 +35,6 @@ const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 /// The longest wait before the schedule is read again. The schedule is wall-clock time, which
 /// keeps going while the computer sleeps, so a long wait would oversleep a look that came due.
 const WAKE_EVERY: Duration = Duration::from_secs(10 * 60);
-/// Before the first-run disclosure is accepted, how often to see whether it has been.
-const DISCLOSURE_WAIT: Duration = Duration::from_secs(60);
 /// How long asking GitHub may take.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the download may take, on a slow connection.
@@ -179,16 +175,6 @@ fn run(app: &AppHandle, inner: &Mutex<Inner>, inbox: &Receiver<()>) {
         // One look answers every click made meanwhile.
         while inbox.try_recv().is_ok() {}
         if !asked && now_ms() < due {
-            continue;
-        }
-        // The first-run screen says what a look sends; nothing goes before it's accepted.
-        if !app
-            .try_state::<Store>()
-            .is_some_and(|store| store.settings().disclosure_accepted)
-        {
-            if let Err(RecvTimeoutError::Disconnected) = inbox.recv_timeout(DISCLOSURE_WAIT) {
-                return;
-            }
             continue;
         }
         last = Some((now_ms(), look(app, inner)));
@@ -396,7 +382,7 @@ mod tests {
     }
 
     // Fails if the intervals swap or a failure waits a day. The thread's wake-ups (WAKE_EVERY)
-    // and the disclosure gate aren't covered here.
+    // aren't covered here.
     #[test]
     fn looks_come_30_s_after_start_then_daily_or_an_hour_after_a_failure() {
         let start = 1_000_000;

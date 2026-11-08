@@ -15,7 +15,7 @@ the background, checks its signature against the public key built into it, and s
 
 The check sends nothing about the player or the game: a GET of a static file with the user agent
 `tauri-plugin-updater/<version>`. GitHub sees the IP address, as for any web request. This is what
-the first-run screen and Settings > About say.
+Settings > About says.
 
 ```
  Mac:  scripts/release-macos.sh ──► MesoVibe.app.tar.gz + .sig, MesoVibe_<v>_aarch64.dmg
