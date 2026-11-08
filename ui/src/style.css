@@ -476,6 +476,8 @@ dl {
   border: 0;
   padding: 0;
   color: var(--text);
+  /* A long name wraps in the narrow panel; buttons would center it. */
+  text-align: left;
   cursor: pointer;
 }
 
@@ -526,7 +528,41 @@ dl {
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-sm);
+}
+
+/* Below the version list. The startup switch sits in the even rhythm of the switches above it. */
+.update-settings {
   margin-top: var(--space-md);
+}
+
+/* A setting's explanation: it shows under the setting while the pointer is on it or it has
+   keyboard focus, over what follows, so Settings stays a short list of names. */
+.hinted {
+  position: relative;
+  align-self: stretch;
+}
+
+.hint {
+  display: none;
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + var(--space-xs));
+  left: 0;
+  right: 0;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  font-size: 14px;
+  /* The pointer goes through to the setting under it, whose own hint then takes over. */
+  pointer-events: none;
+}
+
+.hint-anchor:hover ~ .hint,
+.hint-anchor:focus-visible ~ .hint,
+.hint-anchor:has(:focus-visible) ~ .hint {
+  display: block;
 }
 
 /* Error copy: danger for the subject only, the rest in text. */

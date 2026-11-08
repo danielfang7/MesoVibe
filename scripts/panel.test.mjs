@@ -99,7 +99,14 @@ async function openPage(port, url) {
     evaluate(
       `(() => { const b = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === ${JSON.stringify(text)}); if (!b) return false; b.click(); return true; })()`,
     );
-  return { evaluate, until, click, errors, close: () => socket.close() };
+  /** Moves the mouse onto the middle of the first element matching `selector`, as a player would. */
+  const hover = async (selector) => {
+    const { x, y } = await evaluate(
+      `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+    );
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  };
+  return { evaluate, until, click, hover, errors, close: () => socket.close() };
 }
 
 test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME)", timeout: 180_000 }, async (t) => {
@@ -208,7 +215,10 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await openSettings(page);
     assert.equal(await page.until(checked("settings-startup"), "the startup switch"), "false");
     await page.until(`${disabled("settings-startup")} === true`, "the startup switch, disabled");
-    assert.match(await page.evaluate(textOf("settings-startup-note")), /Move MesoVibe to your Applications folder/);
+    // Why it can't be turned on is something to act on, so it stays in view rather than in a hint.
+    const problem = `document.querySelector('[data-key="settings-startup-problem"]')`;
+    assert.match(await page.evaluate(`${problem}.textContent`), /Move MesoVibe to your Applications folder/);
+    assert.equal(await page.evaluate(`${problem}.checkVisibility()`), true, "in view");
     assert.deepEqual(page.errors, []);
     page.close();
   });
@@ -348,6 +358,37 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await page.evaluate(`document.querySelector('[data-key="settings-hud"]').click()`);
     await page.until(`${checked("settings-hud")} === "false"`, "the mini-HUD off");
     assert.equal(await page.evaluate(`document.querySelector('[role="radiogroup"]')`), null, "no corner without a mini-HUD");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // Settings lists each switch by name; its explanation shows only while the pointer is on it or
+  // it has keyboard focus, and screen readers hear it as the switch's description. Fails if the
+  // explanations show all the time again, a hint doesn't appear or blocks the next switch, or a
+  // name that wraps is centered.
+  await t.test("Settings explains each switch in a hint that shows on hover or keyboard focus", async () => {
+    const page = await openPage(devtools, at("grind"));
+    await openSettings(page);
+    await page.until(checked("settings-startup"), "the startup switch");
+    const shown = (key) => `document.querySelector('[data-key="${key}"]').checkVisibility()`;
+    const hints = ["settings-safe-hint", "settings-startup-note", "settings-dock-hint", "settings-hud-hint", "settings-update-note"];
+    for (const key of hints) assert.equal(await page.evaluate(shown(key)), false, `${key} hidden at first`);
+    await page.hover('[data-key="settings-dock"]');
+    await page.until(shown("settings-dock-hint"), "the hint on hover");
+    assert.equal(await page.evaluate(shown("settings-hud-hint")), false, "only the hovered switch's");
+    // The next switch sits under that hint; the pointer reaches it, and its hint takes over.
+    await page.hover('[data-key="settings-hud"]');
+    await page.until(shown("settings-hud-hint"), "the next switch's hint");
+    assert.equal(await page.evaluate(shown("settings-dock-hint")), false);
+    const describedBy = `document.getElementById(document.querySelector('[data-key="settings-hud"]').getAttribute("aria-describedby"))?.dataset.key`;
+    assert.equal(await page.evaluate(describedBy), "settings-hud-hint");
+    await page.evaluate(`document.querySelector('[data-key="settings-safe"]').focus()`);
+    await page.until(shown("settings-safe-hint"), "the hint on keyboard focus");
+    // About's note on what an update check sends shows from the keyboard too, on Check now.
+    await page.evaluate(`document.querySelector('[data-key="settings-update-check"]').focus()`);
+    assert.match(await page.until(`${shown("settings-update-note")} && ${textOf("settings-update-note")}`, "the update note"), /^Once a day MesoVibe asks GitHub/);
+    const align = `getComputedStyle(document.querySelector('[data-key="settings-startup"]')).textAlign`;
+    assert.equal(await page.evaluate(align), "left");
     assert.deepEqual(page.errors, []);
     page.close();
   });
