@@ -90,15 +90,15 @@ pub struct ChatColors {
     pub friend: String,
 }
 
-/// Cyan: bright against the game's scenes, and none of the chat box's own colors.
-const CHAT_COLOR: &str = "#00ffff";
-
 impl Default for ChatColors {
+    /// The game's own colors for each chat type: green whispers, pink party chat and orange
+    /// friend chat, so a line over the game reads as the kind it is. Each is one of the panel's
+    /// named swatches (ui/src/main.ts).
     fn default() -> ChatColors {
         ChatColors {
-            whisper: CHAT_COLOR.into(),
-            party: CHAT_COLOR.into(),
-            friend: CHAT_COLOR.into(),
+            whisper: "#66ff66".into(),
+            party: "#ff88cc".into(),
+            friend: "#ffaa44".into(),
         }
     }
 }
@@ -121,14 +121,15 @@ impl ChatColors {
     }
 
     /// The same colors, with any that isn't `#rrggbb` (from a hand-edited or damaged settings
-    /// file) back to the default.
-    fn repaired(mut self) -> ChatColors {
-        for color in [&mut self.whisper, &mut self.party, &mut self.friend] {
-            if !is_color(color) {
-                *color = CHAT_COLOR.into();
-            }
+    /// file) back to that chat type's default.
+    fn repaired(self) -> ChatColors {
+        let default = ChatColors::default();
+        let keep = |color: String, default: String| if is_color(&color) { color } else { default };
+        ChatColors {
+            whisper: keep(self.whisper, default.whisper),
+            party: keep(self.party, default.party),
+            friend: keep(self.friend, default.friend),
         }
-        self
     }
 }
 
@@ -141,7 +142,7 @@ impl Default for Settings {
             mini_hud: true,
             mini_hud_corner: Corner::TopRight,
             chat_overlay: true,
-            chat_overlay_position: ChatPosition::AboveChat,
+            chat_overlay_position: ChatPosition::Left,
             chat_overlay_channels: ChatChannels::default(),
             chat_overlay_colors: ChatColors::default(),
             panel: None,
@@ -392,7 +393,7 @@ mod tests {
         assert_eq!(settings.panel, None);
         assert!(settings.chat_overlay);
         assert_eq!(settings.chat_overlay_colors, ChatColors::default());
-        assert_eq!(settings.chat_overlay_position, ChatPosition::AboveChat);
+        assert_eq!(settings.chat_overlay_position, ChatPosition::Left);
         assert!(!dir.join("settings.json.corrupt").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -400,12 +401,12 @@ mod tests {
     // A hand-edited or damaged chat color must not break the overlay or lose other settings.
     // Fails if the bad color is kept, or the whole file is set aside as corrupt.
     #[test]
-    fn a_bad_chat_color_in_the_file_falls_back_to_cyan() {
+    fn a_bad_chat_color_in_the_file_falls_back_to_that_chat_types_default() {
         let dir = temp_dir("bad-color");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("settings.json"),
-            r##"{ "disclosureAccepted": true, "chatOverlayColors": { "whisper": "#ffffff", "party": "red", "friend": "#ff88cc" } }"##,
+            r##"{ "disclosureAccepted": true, "chatOverlayColors": { "whisper": "#ffffff", "party": "red", "friend": "#00ffff" } }"##,
         )
         .unwrap();
         let settings = Store::open(dir.clone()).settings();
@@ -413,8 +414,7 @@ mod tests {
         let colors = &settings.chat_overlay_colors;
         assert_eq!(colors.whisper, "#ffffff");
         assert_eq!(colors.party, ChatColors::default().party);
-        assert_eq!(colors.party, "#00ffff");
-        assert_eq!(colors.friend, "#ff88cc");
+        assert_eq!(colors.friend, "#00ffff");
         assert!(!dir.join("settings.json.corrupt").exists());
         let _ = std::fs::remove_dir_all(dir);
     }

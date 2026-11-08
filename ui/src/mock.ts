@@ -97,8 +97,8 @@ export function mockHost(scenario: string): Host {
     miniHudCorner: "top-right",
     chatOverlay: true,
     chatOverlayChannels: { whisper: true, party: true, friend: true },
-    chatOverlayColors: { whisper: "#00ffff", party: "#00ffff", friend: "#00ffff" },
-    chatOverlayPosition: "above-chat",
+    chatOverlayColors: { whisper: "#66ff66", party: "#ff88cc", friend: "#ffaa44" },
+    chatOverlayPosition: "left",
   };
   const statusHandlers: ((status: Status) => void)[] = [];
   const eventHandlers: ((event: GameEvent, atMs: number) => void)[] = [];
@@ -227,9 +227,9 @@ export function mockChatHost(scenario: string): ChatHost {
     miniHudCorner: "top-right",
     chatOverlay: true,
     chatOverlayChannels: { whisper: true, party: true, friend: true },
-    chatOverlayColors: { whisper: "#00ffff", party: "#00ffff", friend: "#00ffff" },
-    // `?position=right` or `left` shows a side box in a browser.
-    chatOverlayPosition: (new URLSearchParams(location.search).get("position") as ChatPosition | null) ?? "above-chat",
+    chatOverlayColors: { whisper: "#66ff66", party: "#ff88cc", friend: "#ffaa44" },
+    // `?position=above-chat` or `right` shows the other places in a browser.
+    chatOverlayPosition: (new URLSearchParams(location.search).get("position") as ChatPosition | null) ?? "left",
   };
   return {
     settings: async () => settings,

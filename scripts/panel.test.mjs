@@ -42,7 +42,8 @@ function waitFor(stream, pattern, what) {
 
 /** A minimal DevTools-protocol client for one page. */
 async function openPage(port, url) {
-  const target = await (await fetch(`http://127.0.0.1:${port}/json/new?${url}`, { method: "PUT" })).json();
+  // Encoded, so a page URL with more than one query parameter reaches Chrome whole.
+  const target = await (await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, { method: "PUT" })).json();
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     socket.onopen = resolve;
@@ -426,20 +427,23 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await page.until(`${pick("whisper")}.getAttribute("aria-pressed") === "false"`, "whispers off the overlay");
     assert.equal(await page.evaluate(`${pick("whisper")}.textContent`), "Whispers");
     assert.equal(await page.evaluate(`${pick("party")}.getAttribute("aria-pressed")`), "true");
-    // Each chat type's color: cyan to start, named, and a pick sticks.
+    // Each chat type's color: green whispers, pink party and orange friends to start, named, and a
+    // pick sticks.
     const swatch = (channel, name) => `document.querySelector('[data-key="chat-color-${channel}-${name}"]')`;
-    assert.equal(await page.evaluate(`${swatch("party", "cyan")}.getAttribute("aria-checked")`), "true");
-    await page.evaluate(`${swatch("party", "pink")}.click()`);
-    await page.until(`${swatch("party", "pink")}.getAttribute("aria-checked") === "true"`, "party in pink");
-    assert.equal(await page.evaluate(`${swatch("party", "cyan")}.getAttribute("aria-checked")`), "false");
-    assert.equal(await page.evaluate(`${swatch("whisper", "cyan")}.getAttribute("aria-checked")`), "true", "only party changed");
-    assert.equal(await page.evaluate(`${swatch("party", "pink")}.getAttribute("aria-label")`), "Pink");
-    // Where it sits: above the chat box to start, and a pick sticks.
+    for (const [channel, name] of [["whisper", "green"], ["party", "pink"], ["friend", "orange"]]) {
+      assert.equal(await page.evaluate(`${swatch(channel, name)}.getAttribute("aria-checked")`), "true", `${channel} in ${name}`);
+    }
+    await page.evaluate(`${swatch("party", "cyan")}.click()`);
+    await page.until(`${swatch("party", "cyan")}.getAttribute("aria-checked") === "true"`, "party in cyan");
+    assert.equal(await page.evaluate(`${swatch("party", "pink")}.getAttribute("aria-checked")`), "false");
+    assert.equal(await page.evaluate(`${swatch("whisper", "green")}.getAttribute("aria-checked")`), "true", "only party changed");
+    assert.equal(await page.evaluate(`${swatch("party", "cyan")}.getAttribute("aria-label")`), "Cyan");
+    // Where it sits: on the left side to start, and a pick sticks.
     const place = (position) => `document.querySelector('[data-key="chat-position-${position}"]')`;
-    assert.equal(await page.evaluate(`${place("above-chat")}.getAttribute("aria-checked")`), "true");
+    assert.equal(await page.evaluate(`${place("left")}.getAttribute("aria-checked")`), "true");
     await page.evaluate(`${place("right")}.click()`);
     await page.until(`${place("right")}.getAttribute("aria-checked") === "true"`, "chat on the right");
-    assert.equal(await page.evaluate(`${place("above-chat")}.getAttribute("aria-checked")`), "false");
+    assert.equal(await page.evaluate(`${place("left")}.getAttribute("aria-checked")`), "false");
     assert.deepEqual(page.errors, []);
     page.close();
   });
@@ -461,7 +465,7 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
   // Fails if the wash changes shade, covers more than the lines or leaves the box's edges, a line
   // that arrives twice shows twice, or a color change doesn't reach them.
   await t.test("the chat overlay shows the newest lines in their colors, each once, and nothing before one", async () => {
-    const page = await openPage(devtools, at("levelup", "chat.html"));
+    const page = await openPage(devtools, `${at("levelup", "chat.html")}&position=above-chat`);
     await page.until(`window.mockChat && window.mockChoice`, "the overlay");
     assert.equal(await page.evaluate(`document.querySelector(".split-chat")`), null, "nothing over the game yet");
     const lines = [chatLine(1, "whisper"), chatLine(2, "whisper", { continues: true }), chatLine(3, "party")];
@@ -478,13 +482,13 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await page.until(`${partyWidth} > ${cutWidth * 1.5}`, "the whole picture in its place");
     assert.equal(await page.evaluate(`document.querySelectorAll(".split-line").length`), 3, "still each line once");
     const colors = `[...document.querySelectorAll(".split-message")].map((m) => getComputedStyle(m).color)`;
-    assert.deepEqual(await page.evaluate(colors), ["rgb(0, 255, 255)", "rgb(0, 255, 255)"], "cyan to start");
+    assert.deepEqual(await page.evaluate(colors), ["rgb(102, 255, 102)", "rgb(255, 136, 204)"], "the settings' colors to start");
     await page.evaluate(
-      `window.mockChoice({ channels: { whisper: true, party: true, friend: true }, colors: { whisper: "#00ffff", party: "#ff88cc", friend: "#00ffff" }, position: "above-chat" }), true`,
+      `window.mockChoice({ channels: { whisper: true, party: true, friend: true }, colors: { whisper: "#66ff66", party: "#ffff00", friend: "#ffaa44" }, position: "above-chat" }), true`,
     );
-    await page.until(`${colors}[1] === "rgb(255, 136, 204)"`, "party in pink");
+    await page.until(`${colors}[1] === "rgb(255, 255, 0)"`, "party in yellow");
     await page.evaluate(
-      `window.mockChoice({ channels: { whisper: false, party: true, friend: true }, colors: { whisper: "#00ffff", party: "#ff88cc", friend: "#00ffff" }, position: "above-chat" }), true`,
+      `window.mockChoice({ channels: { whisper: false, party: true, friend: true }, colors: { whisper: "#66ff66", party: "#ffff00", friend: "#ffaa44" }, position: "above-chat" }), true`,
     );
     await page.until(`document.querySelectorAll(".split-message").length === 1`, "whispers off");
     const wash = await page.evaluate(`(() => {

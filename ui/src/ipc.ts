@@ -60,7 +60,7 @@ export interface Settings {
   /** The mini-HUD may sit over the game when the panel has no room. */
   miniHud: boolean;
   miniHudCorner: Corner;
-  /** The chat overlay, just above the game's chat box. */
+  /** The chat overlay: the latest whisper, party and friend lines over the game. */
   chatOverlay: boolean;
   chatOverlayChannels: ChatChannels;
   chatOverlayColors: ChatColors;

@@ -97,11 +97,11 @@ pub enum Corner {
 #[serde(rename_all = "kebab-case")]
 pub enum ChatPosition {
     /// On the top edge of the game's chat box, as split chat.
-    #[default]
     AboveChat,
     /// In a box inside the game area's right edge.
     Right,
     /// In a box inside its left edge.
+    #[default]
     Left,
 }
 
