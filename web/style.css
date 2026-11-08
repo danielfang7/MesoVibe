@@ -283,9 +283,16 @@ h1 {
 .feature-pair {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 48px 64px;
+  gap: 0 64px;
   padding-block: 64px;
   border-top: 1px solid var(--line);
+}
+/* The two features share rows (subgrid), so their pictures are the same height and the
+   headings below them line up, however the text inside a picture wraps. */
+.feature-pair > .feature {
+  display: grid;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
 }
 .feature-pair .panel {
   margin-bottom: 24px;
@@ -410,11 +417,6 @@ h1 {
   color: var(--app-muted);
 }
 
-/* Same height side by side, so the headings below them line up. */
-.mock-exp,
-.mock-radar {
-  min-height: 188px;
-}
 
 .status {
   display: flex;
@@ -522,6 +524,13 @@ h1 {
   .feature-lead,
   .feature-pair {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .feature-pair {
+    row-gap: 48px;
+  }
+  .feature-pair > .feature {
+    display: block;
+    grid-row: auto;
   }
   .feature-lead .panel {
     max-width: 420px;
