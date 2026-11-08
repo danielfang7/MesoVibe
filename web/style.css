@@ -145,6 +145,11 @@ a:focus-visible,
   letter-spacing: 0.01em;
 }
 
+.header-links {
+  display: flex;
+  gap: 24px;
+}
+
 .header-link,
 .header-link:visited {
   color: var(--ink);
@@ -500,6 +505,81 @@ h1 {
   color: var(--app-accent);
 }
 
+/* FAQ: one reading column; each question opens in place (native <details>, no script). */
+
+.faq {
+  padding-block: 64px;
+  border-top: 1px solid var(--line);
+}
+.faq h2 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.faq-group {
+  max-width: 46rem;
+  margin-top: 40px;
+}
+.faq-group h3 {
+  margin: 0 0 8px;
+  color: var(--ink-muted);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.faq details {
+  border-top: 1px solid var(--line);
+}
+.faq details:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
+.faq summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 56px;
+  padding-block: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  list-style: none;
+  cursor: pointer;
+}
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+.faq summary:hover span {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+.faq summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.faq-marker {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  fill: var(--ink-muted);
+}
+.faq details[open] .faq-marker .v {
+  display: none;
+}
+
+.answer {
+  max-width: 40em;
+  padding-bottom: 24px;
+}
+.answer p + p,
+.answer ul + p,
+.answer .points {
+  margin-top: 12px;
+}
+
 /* Footer */
 
 .site-footer {
@@ -552,7 +632,8 @@ h1 {
     justify-content: center;
   }
   .feature-lead,
-  .feature-pair {
+  .feature-pair,
+  .faq {
     padding-block: 48px;
   }
 }
