@@ -53,7 +53,6 @@ export interface ChatLine {
 }
 
 export interface Settings {
-  disclosureAccepted: boolean;
   safeMode: boolean;
   /** Keep MesoVibe with the game: docked beside it, or the mini-HUD. */
   dock: boolean;
@@ -138,8 +137,6 @@ export interface Status {
 export interface Host {
   appInfo(): Promise<AppInfo>;
   settings(): Promise<Settings>;
-  /** The first-run choice: start reading or Safe mode, and whether MesoVibe opens with the game. */
-  acceptDisclosure(safeMode: boolean, openWithGame: boolean): Promise<Settings>;
   startup(): Promise<Startup>;
   /** Turns the login item on or off; rejects with the reason when it can't. */
   setStartup(on: boolean): Promise<Startup>;
@@ -179,7 +176,6 @@ function hear<T>(event: string, handler: (payload: T) => void): Promise<unknown>
 const tauri: Host = {
   appInfo: () => invoke<AppInfo>("app_info"),
   settings: () => invoke<Settings>("get_settings"),
-  acceptDisclosure: (safeMode, openWithGame) => invoke<Settings>("accept_disclosure", { safeMode, openWithGame }),
   startup: () => invoke<Startup>("get_startup"),
   setStartup: (on) => invoke<Startup>("set_startup", { on }),
   setSafeMode: (on) => invoke<Settings>("set_safe_mode", { on }),

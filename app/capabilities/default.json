@@ -8,7 +8,6 @@
     "core:event:allow-unlisten",
     "allow-app-info",
     "allow-get-settings",
-    "allow-accept-disclosure",
     "allow-set-safe-mode",
     "allow-retry-capture",
     "allow-watch-capture",

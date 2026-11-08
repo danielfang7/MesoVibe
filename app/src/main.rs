@@ -50,15 +50,14 @@ fn main() {
         .setup(move |app| {
             let store = Store::open(app.path().app_data_dir()?);
             let settings = store.settings();
-            // Nothing is captured before the first-run disclosure is accepted, or in Safe mode.
-            let reading = settings.disclosure_accepted && !settings.safe_mode;
+            // MesoVibe reads the game from its first start; Safe mode in Settings turns that off.
+            let reading = !settings.safe_mode;
             // Before the engine starts: it reads the display settings every tick.
             app.manage(store);
             app.manage(dock::Latest::default());
             app.manage(chat::ChatLog::default());
             app.manage(Engine::start(app.handle().clone(), reading));
             presence::start(app.handle(), background);
-            // After the store: it waits for the first-run disclosure before its first look.
             app.manage(updater::Updates::start(app.handle()));
             Ok(())
         })
@@ -72,7 +71,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             get_settings,
-            accept_disclosure,
             set_safe_mode,
             retry_capture,
             watch_capture,
@@ -135,26 +133,6 @@ fn get_settings(store: State<'_, Store>) -> Settings {
     store.settings()
 }
 
-/// The player read the first-run disclosure and chose to start reading, or Safe mode, and
-/// whether MesoVibe opens with the game.
-#[tauri::command]
-fn accept_disclosure(
-    safe_mode: bool,
-    open_with_game: bool,
-    app: AppHandle,
-    store: State<'_, Store>,
-    engine: State<'_, Engine>,
-) -> Result<Settings, String> {
-    let settings = store.update(|s| {
-        s.disclosure_accepted = true;
-        s.safe_mode = safe_mode;
-    })?;
-    engine.send(Command::SetReading(!safe_mode));
-    // Accepted whatever the login item does; Settings shows the switch as it really is.
-    let _ = presence::set_startup(&app, open_with_game);
-    Ok(settings)
-}
-
 /// "Open with MapleStory Classic" (Settings > Reading): the OS login item.
 #[tauri::command]
 fn get_startup(app: AppHandle) -> presence::Startup {
@@ -195,7 +173,7 @@ fn set_safe_mode(
     engine: State<'_, Engine>,
 ) -> Result<Settings, String> {
     let settings = store.update(|s| s.safe_mode = on)?;
-    engine.send(Command::SetReading(settings.disclosure_accepted && !on));
+    engine.send(Command::SetReading(!on));
     Ok(settings)
 }
 
