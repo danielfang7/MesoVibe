@@ -73,6 +73,23 @@ function toggle(label: string, on: boolean, onChange: (on: boolean) => void, key
   );
 }
 
+let hints = 0;
+/**
+ * A control with its explanation in a hint that shows while the pointer is on it or it has
+ * keyboard focus, so Settings reads as a short list of names. Screen readers hear the hint as the
+ * control's description. Anything the player must act on, like why a switch is off, stays on the
+ * page instead.
+ */
+function hinted(control: HTMLElement, hint: string, key?: string): HTMLElement {
+  hints += 1;
+  const id = `hint-${hints}`;
+  control.classList.add("hint-anchor");
+  for (const button of control.matches("button") ? [control] : control.querySelectorAll("button")) {
+    button.setAttribute("aria-describedby", id);
+  }
+  return h("div", { class: "hinted" }, control, h("p", { class: "hint", attrs: { id, role: "tooltip", "data-key": key } }, hint));
+}
+
 /** Where MesoVibe waits while its panel is closed, in the OS's own words. */
 function trayName(os: string | undefined): string {
   return os === "macos" ? "menu bar" : "system tray";
@@ -945,17 +962,15 @@ function shell(initial: Settings): void {
       "section",
       { class: "block" },
       h("h2", { class: "label" }, "Display"),
-      toggle("Keep MesoVibe with the game", s.dock, (on) => void setDisplay({ dock: on }), "settings-dock"),
-      h(
-        "p",
-        { class: "text muted" },
+      hinted(
+        toggle("Keep MesoVibe with the game", s.dock, (on) => void setDisplay({ dock: on }), "settings-dock"),
         "With room beside the game window, this panel sits against it and follows it when it moves.",
+        "settings-dock-hint",
       ),
-      toggle("Mini-HUD when there's no room", s.miniHud, (on) => void setDisplay({ miniHud: on }), "settings-hud"),
-      h(
-        "p",
-        { class: "text muted" },
+      hinted(
+        toggle("Mini-HUD when there's no room", s.miniHud, (on) => void setDisplay({ miniHud: on }), "settings-hud"),
         "A small card in a corner of the game with your EXP/hr and time to level. Clicks go through it to the game. Off, MesoVibe never draws over the game.",
+        "settings-hud-hint",
       ),
       s.dock && s.miniHud
         ? h(
@@ -985,18 +1000,24 @@ function shell(initial: Settings): void {
   function startupSettings(): Node {
     const startup = panel.startup;
     const os = panel.info?.os;
-    const note = startup?.problem ?? `${startupNote(os)} Off, closing the panel quits MesoVibe.`;
     return h(
       "div",
       { class: "startup" },
-      toggle(
-        "Open with MapleStory Classic",
-        startup?.on ?? false,
-        (on) => void setStartup(on),
-        "settings-startup",
-        startup === null || (startup.problem !== null && !startup.on),
+      hinted(
+        toggle(
+          "Open with MapleStory Classic",
+          startup?.on ?? false,
+          (on) => void setStartup(on),
+          "settings-startup",
+          startup === null || (startup.problem !== null && !startup.on),
+        ),
+        `${startupNote(os)} Off, closing the panel quits MesoVibe.`,
+        "settings-startup-note",
       ),
-      h("p", { class: "text muted", attrs: { "data-key": "settings-startup-note" } }, note),
+      // Why the switch can't be turned on: something the player can act on, so it stays in view.
+      startup?.problem
+        ? h("p", { class: "text muted", attrs: { "data-key": "settings-startup-problem" } }, startup.problem)
+        : null,
       // Safe mode reads nothing, not even whether the game is open.
       panel.settings.safeMode && startup?.on
         ? h(
@@ -1053,12 +1074,15 @@ function shell(initial: Settings): void {
       "settings-update-check",
     );
     check.disabled = busy;
-    return h(
-      "div",
-      { class: "update-settings" },
-      h("p", { class: "text", attrs: { "data-key": "settings-update-status" } }, update === null ? "…" : updateWords(update)),
-      h("div", { class: "actions" }, check, update?.state === "ready" ? restartButton("settings-update-restart") : null),
-      h("p", { class: "text muted" }, UPDATE_CHECK_NOTE),
+    return hinted(
+      h(
+        "div",
+        { class: "update-settings" },
+        h("p", { class: "text", attrs: { "data-key": "settings-update-status" } }, update === null ? "…" : updateWords(update)),
+        h("div", { class: "actions" }, check, update?.state === "ready" ? restartButton("settings-update-restart") : null),
+      ),
+      UPDATE_CHECK_NOTE,
+      "settings-update-note",
     );
   }
 
@@ -1069,8 +1093,11 @@ function shell(initial: Settings): void {
         "section",
         { class: "block" },
         h("h2", { class: "label" }, "Reading"),
-        toggle("Safe mode", panel.settings.safeMode, (on) => void setSafeMode(on), "settings-safe"),
-        h("p", { class: "text muted" }, "Safe mode turns capture off. MesoVibe then reads nothing at all."),
+        hinted(
+          toggle("Safe mode", panel.settings.safeMode, (on) => void setSafeMode(on), "settings-safe"),
+          "Safe mode turns capture off. MesoVibe then reads nothing at all.",
+          "settings-safe-hint",
+        ),
         startupSettings(),
       ),
       displaySettings(),
@@ -1147,7 +1174,9 @@ function shell(initial: Settings): void {
         paintedChatNote = note;
         paintChat();
       }
-    } else if (panel.view !== "session") paintView();
+      // Of the other views, only What MesoVibe sees shows the status. Settings isn't rebuilt
+      // under the pointer four times a second, which would drop the hint it's showing.
+    } else if (panel.view === "sees") paintView();
   });
   void host.onChat(addChat);
   void host.chatHistory().then((lines) => {
