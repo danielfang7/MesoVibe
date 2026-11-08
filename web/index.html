@@ -34,7 +34,10 @@
       <img class="mark" src="favicon.svg" alt="" width="32" height="32">
       <span class="wordmark">MesoVibe</span>
     </a>
-    <a class="header-link" href="https://github.com/danielfang7/MesoVibe">GitHub</a>
+    <nav class="header-links" aria-label="Site">
+      <a class="header-link" href="#faq">FAQ</a>
+      <a class="header-link" href="https://github.com/danielfang7/MesoVibe">GitHub</a>
+    </nav>
   </header>
 
   <main>
@@ -129,6 +132,105 @@
         <p>MesoVibe will count the players on your minimap as you change channels, so you can tell which ones are crowded before you settle in.</p>
       </section>
     </div>
+
+    <section class="faq wrap" id="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">Common questions</h2>
+
+      <!-- Every answer here must stay true of the shipped app. Change the copy when the app changes. -->
+      <div class="faq-group">
+        <h3>Privacy and safety</h3>
+        <details>
+          <summary><span>Does MesoVibe collect my data?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>No. There's no account to sign up for, no ads and no tracking. MesoVibe doesn't send your chat, your EXP, your screen or anything about you to us or anyone else.</p>
+            <p>The few things it keeps stay on your computer:</p>
+            <ul class="points">
+              <li>Your settings.</li>
+              <li>Your past sessions: EXP gained and time played. You can delete them anytime in Settings.</li>
+              <li>The EXP bar's numbers it has learned to read, so it can start reading right away next time.</li>
+            </ul>
+            <p>Chat is never saved. MesoVibe holds it only while it's open, and it's gone when you quit. The only time MesoVibe goes online is to check for updates and download them.</p>
+          </div>
+        </details>
+        <details>
+          <summary><span>What can MesoVibe see?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>Only the MapleStory window. It can't see your other apps, your browser or your desktop.</p>
+            <p>Inside the game, it reads a few spots, like the EXP bar and the chat box. It doesn't record video of your game.</p>
+            <p>You can check this yourself: open "What MesoVibe sees" in the app to see exactly what it's reading right now.</p>
+          </div>
+        </details>
+        <details>
+          <summary><span>Why does my Mac ask for Screen Recording permission?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>A Mac asks before any app can see another app's window. Streaming and screen-sharing apps ask for the same thing. MesoVibe uses it to see the MapleStory window and nothing else.</p>
+          </div>
+        </details>
+        <details>
+          <summary><span>Will MesoVibe ask for my Nexon login?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>Never. MesoVibe doesn't need your account, email or password. If something calling itself MesoVibe asks for your login, it's a fake trying to steal your account.</p>
+            <p>Only download MesoVibe from this site or from our <a href="https://github.com/danielfang7/MesoVibe">GitHub page</a>.</p>
+          </div>
+        </details>
+        <details>
+          <summary><span>Is MesoVibe safe to install?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>Yes. MesoVibe is open source: all of its code is <a href="https://github.com/danielfang7/MesoVibe">public on GitHub</a>, so anyone can check what it does. The Mac version is signed and checked by Apple.</p>
+            <p>On Windows, you may see a blue "Windows protected your PC" box the first time. Windows shows it for new apps that not many people have installed yet. Choose "More info", then "Run anyway". We're working on signing the Windows version so Windows can confirm it comes from us.</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="faq-group">
+        <h3>Performance</h3>
+        <details>
+          <summary><span>Will MesoVibe slow down my game?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>You shouldn't notice it. MesoVibe is built to stay out of your game's way:</p>
+            <ul class="points">
+              <li>It's a small, separate app. It doesn't run inside the game.</li>
+              <li>It glances at the game 4 times a second, not every time the game draws a new frame.</li>
+              <li>It only copies the strips of the picture it reads, like the EXP bar and the chat box, not your whole screen.</li>
+              <li>When the game is minimized or closed, it stops looking and waits.</li>
+            </ul>
+            <p>If you ever do notice a slowdown, turn on Safe mode in Settings and <a href="https://github.com/danielfang7/MesoVibe/issues">tell us on GitHub</a>.</p>
+          </div>
+        </details>
+        <details>
+          <summary><span>How big is MesoVibe?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>About 5 MB to download, the size of a photo from your phone.</p>
+            <p>Many desktop apps carry a whole web browser inside them. MesoVibe uses the one already built into Windows and macOS, so it stays small.</p>
+          </div>
+        </details>
+        <details>
+          <summary><span>Does MesoVibe run when I'm not playing?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>Only if you ask it to. With "Open with MapleStory Classic" turned on, MesoVibe waits as a small icon by the clock (in the menu bar on a Mac) and appears when the game opens. While it waits, it only checks every couple of seconds for the game, which costs next to nothing.</p>
+            <p>Turn that off in Settings, and MesoVibe runs only when you open it.</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="faq-group">
+        <h3>Bans and fair play</h3>
+        <details>
+          <summary><span>Will using MesoVibe get me banned?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>We can't promise anything.</p>
+            <p>But what we can promise is how it works. Tools that get players banned generally change the game, look inside it, or play it for you. MesoVibe does none of that:</p>
+            <ul class="points">
+              <li>It only looks at the game window, the way someone watching your stream would. It never changes the game or looks inside it.</li>
+              <li>It never presses a key or clicks for you: no auto-potting, no macros, no botting. MesoVibe has no way to control the game at all.</li>
+              <li>It never touches the connection between your game and Nexon's servers.</li>
+              <li>It won't help with the Lie Detector, the game's anti-bot check.</li>
+            </ul>
+            <p>If Nexon ever asks us to remove a feature, we'll remove it. If you'd rather take no chances, turn on Safe mode in Settings. MesoVibe then stops looking at the game entirely, so EXP tracking and chat tabs pause too.</p>
+          </div>
+        </details>
+      </div>
+    </section>
   </main>
 
   <footer class="site-footer wrap">
