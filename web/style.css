@@ -471,7 +471,15 @@ h1 {
   background: var(--app-accent);
 }
 
-.channels {
+.loot-total {
+  margin-top: 4px;
+  color: var(--app-muted);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+/* One row per monster: its name and mesos on top, the items it dropped underneath. */
+.mobs {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -479,32 +487,23 @@ h1 {
   padding: 0;
   list-style: none;
 }
-.channels li {
+.mobs li {
   display: grid;
-  grid-template-columns: 3.25em minmax(0, 1fr) 2ch 3.5em;
-  gap: 10px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--app-line);
   font-size: 0.875rem;
 }
-.ch {
-  color: var(--app-muted);
-}
-.track {
-  height: 6px;
-  background: var(--app-raised);
-}
-.track span {
-  display: block;
-  height: 100%;
-  background: var(--app-muted);
-}
-.n {
+.mob-mesos {
   font-family: var(--font-mono);
   font-feature-settings: "tnum";
   text-align: right;
 }
-.note {
-  color: var(--app-accent);
+.mob-drops {
+  grid-column: 1 / -1;
+  color: var(--app-muted);
+  overflow-wrap: anywhere;
 }
 
 /* FAQ: one reading column; each question opens in place (native <details>, no script). */
