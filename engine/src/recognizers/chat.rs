@@ -15,8 +15,8 @@
 //! those colors (a party member left, a pet out of potions); they have no name and colon, so they
 //! stay out of the hub, along with the indented rest of them.
 //!
-//! New lines are counted by how far the box's lines moved up since the last frame, the way the
-//! notice stack is counted, so a friend saying "ok" twice shows twice. When the lines can't be
+//! New lines are counted by how far the box's lines moved up since the last frame
+//! ([`crate::lines`], shared with the pickup notices), so a friend saying "ok" twice shows twice. When the lines can't be
 //! lined up (the box was scrolled back, covered, or just came into view), every colored line on
 //! screen counts as new unless it was handed back recently, and the reading says lines may be
 //! missing. While the player has scrolled back through the
@@ -42,6 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::Serialize;
 
 use crate::frame::Frame;
+use crate::lines::{self, StackLine};
 use crate::unstretch::{self, No1x};
 
 /// The HUD bar's width at 1x.
@@ -241,7 +242,7 @@ struct Line {
     said: bool,
 }
 
-impl Line {
+impl StackLine for Line {
     /// The same line: a band of the same color, or text with nearly the same pixels, up to
     /// [`DRIFT`] pixels away each way. Columns the pointer covers in either line are left out.
     fn matches(&self, other: &Line) -> bool {
@@ -270,7 +271,13 @@ impl Line {
         }
         let same_at = |(right, down): Offset| {
             let by = down * TEXT_WIDTH as i32 + right;
-            differ(&self.ink, &other.ink, by, hidden.as_deref()) <= allowed
+            lines::differ(
+                &self.ink,
+                &other.ink,
+                TEXT_WIDTH * LINE_HEIGHT,
+                by,
+                hidden.as_deref(),
+            ) <= allowed
         };
         // Almost always where it was; only then a pixel or two away.
         same_at((0, 0))
@@ -279,6 +286,12 @@ impl Line {
                 .any(same_at)
     }
 
+    fn is_blank(&self) -> bool {
+        self.kind == Kind::Blank
+    }
+}
+
+impl Line {
     fn channel(&self) -> Option<Channel> {
         match self.kind {
             Kind::Text(channel) => channel,
@@ -305,41 +318,6 @@ fn hidden_bits(a: Option<&Range<u32>>, b: Option<&Range<u32>>) -> Option<Vec<u64
         }
     }
     Some(bits)
-}
-
-/// How many pixels differ between `a` and `b` moved `by` pixels along, both as [`Line::ink`],
-/// leaving out the `hidden` ones. A row's end runs on into the next row's start, but text never
-/// reaches the line's edges.
-fn differ(a: &[u64], b: &[u64], by: i32, hidden: Option<&[u64]>) -> u32 {
-    let len = (TEXT_WIDTH * LINE_HEIGHT) as i64;
-    // The 64 pixels of `b` moved along that land at `start`: none from outside the line.
-    let moved = |start: i64| -> u64 {
-        let from = start - i64::from(by);
-        let word = |i: i64| {
-            usize::try_from(i)
-                .ok()
-                .and_then(|i| b.get(i))
-                .copied()
-                .unwrap_or(0)
-        };
-        let (q, r) = (from.div_euclid(64), from.rem_euclid(64) as u32);
-        let low = word(q) >> r;
-        let high = if r == 0 { 0 } else { word(q + 1) << (64 - r) };
-        low | high
-    };
-    a.iter()
-        .enumerate()
-        .map(|(i, &word)| {
-            let start = i as i64 * 64;
-            // The last word's pixels past the line's end, where `b`'s bottom row may move to.
-            let inside = match len - start {
-                n if n >= 64 => u64::MAX,
-                n => (1u64 << n) - 1,
-            };
-            let shown = !hidden.map_or(0, |hidden| hidden[i]);
-            ((word ^ moved(start)) & inside & shown).count_ones()
-        })
-        .sum()
 }
 
 /// Bright enough to be a megaphone's band, or text.
@@ -705,25 +683,6 @@ fn picture(pixels: &[[u8; 3]], channel: Channel) -> ChatLine {
     }
 }
 
-/// How many lines arrived at the bottom: the smallest shift that lines up the last frame's lines
-/// with this one's. One line may differ when four or more line up, for something drawn over it.
-/// `None` when no shift does.
-fn arrived(before: &[Line], now: &[Line]) -> Option<usize> {
-    (0..=now.len()).find(|&shift| {
-        let pairs: Vec<bool> = before
-            .iter()
-            .zip(now.iter().skip(shift))
-            .map(|(b, n)| b.matches(n))
-            .collect();
-        let misses = pairs.iter().filter(|&&m| !m).count();
-        match shift == now.len() {
-            // Everything on screen is new: that only lines up if the last frame had no lines.
-            true => before.iter().all(|l| l.kind == Kind::Blank),
-            false => misses == 0 || (pairs.len() >= 4 && misses <= 1),
-        }
-    })
-}
-
 /// Follows the chat box from frame to frame and hands back each new whisper, party and friend
 /// line once.
 #[derive(Debug, Default)]
@@ -798,7 +757,7 @@ impl ChatReader {
         let lined_up = self
             .lines
             .as_deref()
-            .and_then(|before| arrived(before, &now));
+            .and_then(|before| lines::arrived(before, &now));
         let (fresh, gap) = match lined_up {
             Some(n) => (n, false),
             // Can't line up: everything on screen may be new.
