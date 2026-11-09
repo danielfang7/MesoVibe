@@ -27,6 +27,11 @@ pub const NATIVE_HEIGHT: u32 = 768;
 /// the solved band are the least constrained.
 const GUARD_ROWS: usize = 2;
 
+/// Extra 1x columns solved left of a right-edge band ([`bottom_right`]) and then dropped. The
+/// band's edge pulls on its neighbours less with every column, so this many columns leave the
+/// kept ones as the full-width recovery has them, to the byte.
+const GUARD_COLUMNS: usize = 32;
+
 /// The width of the picture the game stretches to fill a game area taller than 768 lines: the
 /// nearest even width with the same shape, which keeps the centered HUD on whole pixels.
 /// Measured: 1228 at 1920x1200 (1228.8 by shape), 1366 at 2560x1440 (1365.3).
@@ -231,6 +236,73 @@ pub fn bottom_rows(frame: &Frame, rows: u32) -> Option<Picture> {
     })
 }
 
+/// [`bottom_rows`] for a reader that needs only the picture's right edge (the pickup notices):
+/// only the rightmost `columns` 1x columns are recovered, and the columns left of them are left
+/// black. It reads and solves only the frame columns those depend on, so it costs about
+/// `columns` over the picture's width of the full recovery. `None` as for [`bottom_rows`].
+pub fn bottom_right(frame: &Frame, rows: u32, columns: u32) -> Option<Picture> {
+    let (width, height) = (frame.width(), frame.height());
+    let picture_width = picture_width(width, height);
+    if picture_width == 0 {
+        return None;
+    }
+    if columns >= picture_width {
+        return bottom_rows(frame, rows);
+    }
+    let vertical = vertical(height, rows)?;
+    if vertical
+        .taps
+        .first()
+        .is_none_or(|&(j, ..)| j < frame.first_row() as usize)
+    {
+        return None;
+    }
+    let first = (picture_width - columns) as usize;
+    let horizontal = Inverse::new(width as usize, picture_width as usize, first, GUARD_COLUMNS)?;
+    let (width, rows, picture_width) = (width as usize, rows as usize, picture_width as usize);
+    let dropped_rows = vertical.unknowns - rows;
+    let dropped_columns = horizontal.unknowns - (picture_width - first);
+    // The frame columns the band's solve reads: from the first one it uses to the right edge.
+    let from = horizontal.taps.first()?.0;
+    let span = width - from;
+
+    // Vertical pass, for those frame columns only. `band[(row * span + x - from) * 3 + c]`.
+    let mut band = vec![0f64; rows * span * 3];
+    let mut solved = vec![0f64; vertical.unknowns];
+    for x in from..width {
+        for c in 0..3 {
+            vertical.solve(|j| f64::from(frame.rgb(x as u32, j as u32)[c]), &mut solved);
+            for (row, value) in solved[dropped_rows..].iter().enumerate() {
+                band[(row * span + x - from) * 3 + c] = *value;
+            }
+        }
+    }
+
+    // Horizontal pass, for the band's 1x columns; the guard columns are solved and dropped.
+    // Opaque black everywhere first, so the columns left of the band stay black.
+    let mut bgra = vec![0u8; rows * picture_width * 4];
+    bgra.iter_mut()
+        .skip(3)
+        .step_by(4)
+        .for_each(|alpha| *alpha = 255);
+    let mut solved = vec![0f64; horizontal.unknowns];
+    for row in 0..rows {
+        for c in 0..3 {
+            horizontal.solve(|j| band[(row * span + j - from) * 3 + c], &mut solved);
+            for (k, value) in solved[dropped_columns..].iter().enumerate() {
+                bgra[(row * picture_width + first + k) * 4 + 2 - c] =
+                    value.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    Some(Picture {
+        width: picture_width as u32,
+        height: NATIVE_HEIGHT,
+        first_row: NATIVE_HEIGHT - rows as u32,
+        bgra,
+    })
+}
+
 /// Why a frame has no 1x picture to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum No1x {
@@ -262,11 +334,32 @@ pub fn with_bottom_1x<T>(
     rows: u32,
     read: impl FnOnce(&Frame) -> T,
 ) -> Result<T, No1x> {
+    with_1x(frame, rows, None, read)
+}
+
+/// [`with_bottom_1x`] for a reader that needs only the picture's rightmost `columns` columns: a
+/// stretched frame recovers only those ([`bottom_right`]), and the columns left of them are black.
+/// Unstretched frames are read as they are, all columns included.
+pub fn with_bottom_right_1x<T>(
+    frame: &Frame,
+    rows: u32,
+    columns: u32,
+    read: impl FnOnce(&Frame) -> T,
+) -> Result<T, No1x> {
+    with_1x(frame, rows, Some(columns), read)
+}
+
+fn with_1x<T>(
+    frame: &Frame,
+    rows: u32,
+    columns: Option<u32>,
+    read: impl FnOnce(&Frame) -> T,
+) -> Result<T, No1x> {
     let scale = frame.scale();
     if scale > 1 {
         let held = scaled_rows(rows_for(frame.height() / scale, rows), scale);
         let picture = unscale(&frame.bottom_rows(held)).ok_or(No1x::Scale(scale))?;
-        return with_bottom_1x(&picture.frame(), rows, read);
+        return with_1x(&picture.frame(), rows, columns, read);
     }
     if frame.first_row() + rows_for(frame.height(), rows) > frame.height() {
         return Err(No1x::Rows);
@@ -274,7 +367,11 @@ pub fn with_bottom_1x<T>(
     if frame.height() <= NATIVE_HEIGHT {
         return Ok(read(frame));
     }
-    let picture = bottom_rows(frame, rows).ok_or(No1x::Stretch)?;
+    let picture = match columns {
+        Some(columns) => bottom_right(frame, rows, columns),
+        None => bottom_rows(frame, rows),
+    }
+    .ok_or(No1x::Stretch)?;
     Ok(read(&picture.frame()))
 }
 
@@ -475,6 +572,50 @@ mod tests {
                 }
             }
             assert!(worst <= 3, "{width}x{height}: off by up to {worst}");
+        }
+    }
+
+    // Guards the right-edge window: it must give exactly the full recovery's pixels in its
+    // columns (so a reader can't tell which one ran) and leave the rest black.
+    #[test]
+    fn a_right_edge_window_matches_the_full_recovery_in_its_columns() {
+        for (width, height) in [(1920, 1200), (2560, 1440), (1920, 1080)] {
+            let narrow = picture_width(width, height);
+            let picture = busy_picture(narrow);
+            let (rows, columns) = (40, 370);
+            let from_row = height - rows_needed(height, rows).unwrap();
+            let bgra = stretch(&picture, narrow, width, height, from_row);
+            let stride = width as usize * 4;
+            let frame = Frame::bottom(
+                width,
+                height,
+                from_row,
+                stride,
+                &bgra[from_row as usize * stride..],
+            )
+            .unwrap();
+            let full = bottom_rows(&frame, rows).unwrap();
+            let window = bottom_right(&frame, rows, columns).unwrap();
+            let (full, window) = (full.frame(), window.frame());
+            assert_eq!(
+                (window.width(), window.height(), window.first_row()),
+                (full.width(), full.height(), full.first_row())
+            );
+            for y in NATIVE_HEIGHT - rows..NATIVE_HEIGHT {
+                for x in 0..narrow {
+                    let want = if x >= narrow - columns {
+                        full.rgb(x, y)
+                    } else {
+                        [0, 0, 0]
+                    };
+                    assert_eq!(window.rgb(x, y), want, "{width}x{height} at ({x}, {y})");
+                }
+            }
+            // A window as wide as the picture is the full recovery.
+            assert_eq!(
+                bottom_right(&frame, rows, narrow),
+                bottom_rows(&frame, rows)
+            );
         }
     }
 
