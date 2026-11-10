@@ -46,6 +46,7 @@
 use crate::frame::Frame;
 use crate::glyph::{Atlas, Glyph, MAX_GLYPH_WIDTH};
 use crate::lines::{self, StackLine};
+pub use crate::recognizers::NamePicture;
 use crate::recognizers::exp_bar::ExpReading;
 use crate::unstretch::{self, No1x};
 
@@ -161,15 +162,6 @@ pub struct ItemName {
     /// The name as far as its letters are known, `?` for each letter that isn't.
     pub text: String,
     pub picture: NamePicture,
-}
-
-/// The letters of a name as the game drew them, for showing it before its text is known.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NamePicture {
-    pub width: u32,
-    pub height: u32,
-    /// Which pixels are letter, row by row: 255 is letter, 0 is not.
-    pub coverage: Vec<u8>,
 }
 
 /// Why lines may have been missed.

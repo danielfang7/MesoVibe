@@ -14,9 +14,11 @@
 //! - `--record` writes every frame the engine read, for a test run on the engine's own capture:
 //!   meta.json (with `cropBottom` and `scale`), numbered strip PNGs and frames.jsonl, with one line
 //!   per grab and what the engine read from it. `replay_exp <folder>` then checks the run. Grabs
-//!   with no new frame are logged without a PNG, because the engine didn't read them. On a Retina
-//!   Mac a strip is about 90 KB, so an hour is about 0.3 GB at 1 Hz and 1.3 GB at 4 Hz. A run
-//!   stopped with Ctrl-C keeps every frame and log line up to the stop, but prints no summary.
+//!   with no new frame are logged without a PNG, because the engine didn't read them. The
+//!   engine grabs the whole game area now and then, to read the map's name; those frames are
+//!   saved whole, so `replay_map` can read them. On a Retina Mac a strip is about 90 KB, so an
+//!   hour is about 0.3 GB at 1 Hz and 1.3 GB at 4 Hz. A run stopped with Ctrl-C keeps every frame
+//!   and log line up to the stop, but prints no summary.
 //!
 //! Like every capture, recordings stay off the repo. On macOS, run it from a terminal that
 //! has Screen Recording permission (System Settings > Privacy & Security > Screen & System Audio
@@ -266,8 +268,9 @@ mod strip {
     pub struct Recorder {
         folder: PathBuf,
         hz: f64,
-        /// (width, height, rows, scale) of the first grab, which meta.json describes.
-        shape: Option<(u32, u32, u32, u32)>,
+        /// (width, height, scale) of the first grab, which meta.json describes. Grabs may hold
+        /// more rows than the first: the whole game area, for the map's name.
+        shape: Option<(u32, u32, u32)>,
         grabs: u32,
         saved: u32,
         /// Grabs not saved because the game area's size changed after the first.
@@ -318,12 +321,7 @@ mod strip {
             };
             let frames = self.frames.as_ref().ok_or("stopped")?;
             self.grabs += 1;
-            let shape = (
-                grab.width,
-                grab.height,
-                grab.height - grab.first_row,
-                grab.scale,
-            );
+            let shape = (grab.width, grab.height, grab.scale);
             if self.shape.is_none() {
                 let meta = meta(
                     grab,
@@ -362,6 +360,7 @@ mod strip {
                 "sizeChanged": resized,
                 "width": grab.width,
                 "height": grab.height,
+                "rows": grab.height - grab.first_row,
                 "scale": grab.scale,
                 "reading": reading,
             });

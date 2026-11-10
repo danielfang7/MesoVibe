@@ -7,7 +7,7 @@ use ts_rs::TS;
 
 /// Version of the event schema. Bump on any change plugins can observe.
 /// 2: `ExpChanged` gained `needed`, and its `level` became optional.
-/// 3: `MesosGained`, `ItemGained` and `NoticesMissed`, from the pickup notices.
+/// 3: `MesosGained`, `ItemGained` and `NoticesMissed`, from the pickup notices, and `MapChanged`.
 pub const SCHEMA_VERSION: u32 = 3;
 
 /// Events the engine emits after a confident read (below the confidence
@@ -44,6 +44,10 @@ pub enum Event {
         count: u32,
         tab: Option<&'static str>,
     },
+    /// The player is on another map, or the first map since the game was found. `map` is the
+    /// exact shape of the minimap's name for it as text, the same every time on this computer, or
+    /// `null` when the name can't be read (the minimap closed or covered).
+    MapChanged { map: Option<String> },
     /// Pickup notices may have been missed, so the mesos and items counted from them are at
     /// least what was picked up. `reason`: `unaligned` (the notices moved in a way that lines up
     /// with nothing, as when something covered them), `unreadable` (a new line couldn't be read),

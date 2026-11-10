@@ -82,6 +82,16 @@ impl<'a> Frame<'a> {
         }
     }
 
+    /// The frame's top-left `width` x `height` corner (or as much as it has), as a frame of that
+    /// size. `None` unless the frame holds its top rows.
+    pub fn top_left(&self, width: u32, height: u32) -> Option<Frame<'a>> {
+        (self.first_row == 0).then(|| Frame {
+            width: width.min(self.width),
+            height: height.min(self.height),
+            ..*self
+        })
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }

@@ -210,7 +210,8 @@ pub fn load(run: &Path, png_path: &Path) -> Result<Image, String> {
         }
     };
     // A run saved with --crop-bottom holds only the bottom rows of the game area (more than asked
-    // for above 768 lines, where the tool scales the strip with the game).
+    // for above 768 lines, where the tool scales the strip with the game). Each PNG says how many:
+    // a recording by `live_exp` saves the frames the engine grabbed whole, for the map's name.
     let (cx, cy, rows) = match meta["cropBottom"].as_u64() {
         Some(_) => (0, 0, info.height.min(ch)),
         None => (cx, cy, ch),

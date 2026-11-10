@@ -78,11 +78,16 @@ pub fn scaled_rows(rows: u32, scale: u32) -> u32 {
 /// scale 1, when it holds no whole block, or when no placement of the blocks makes every block
 /// one color in both directions (something scaled the game another way, which isn't supported).
 pub fn unscale(frame: &Frame) -> Option<Picture> {
+    unscale_found_in(frame, frame)
+}
+
+/// [`unscale`], with where the blocks start found in `probe`: the frame, or part of it.
+fn unscale_found_in(frame: &Frame, probe: &Frame) -> Option<Picture> {
     let scale = frame.scale();
     if scale < 2 {
         return None;
     }
-    let (px, py) = (phase(frame, false)?, phase(frame, true)?);
+    let (px, py) = (phase(probe, false)?, phase(probe, true)?);
     let (width, height) = (frame.width() / scale, frame.height() / scale);
     // The first game row whose block starts inside the rows the frame holds.
     let first_row = frame.first_row().saturating_sub(py).div_ceil(scale);
@@ -303,6 +308,58 @@ pub fn bottom_right(frame: &Frame, rows: u32, columns: u32) -> Option<Picture> {
     })
 }
 
+/// The top `rows` rows and left `columns` columns of the 1x picture behind a stretched frame:
+/// the game's top-left corner, where the minimap is, as a picture `columns` wide and `rows` tall.
+/// It reads and solves only the frame pixels those depend on. `None` when the frame isn't
+/// stretched (768 lines or fewer), doesn't hold its top rows, or `rows` or `columns` is 0 or more
+/// than the picture has.
+pub fn top_left(frame: &Frame, rows: u32, columns: u32) -> Option<Picture> {
+    let (width, height) = (frame.width(), frame.height());
+    if frame.first_row() != 0 || height <= NATIVE_HEIGHT {
+        return None;
+    }
+    let picture_width = picture_width(width, height) as usize;
+    let (rows, columns) = (rows as usize, columns as usize);
+    let vertical = Inverse::leading(height as usize, NATIVE_HEIGHT as usize, rows, GUARD_COLUMNS)?;
+    let horizontal = Inverse::leading(width as usize, picture_width, columns, GUARD_COLUMNS)?;
+    // The frame columns the horizontal solve reads: from the left edge to its last tap.
+    let span = horizontal.taps.last()?.0 + 1;
+
+    // Vertical pass, for those frame columns only. `band[(row * span + x) * 3 + c]`.
+    let mut band = vec![0f64; rows * span * 3];
+    let mut solved = vec![0f64; vertical.unknowns];
+    for x in 0..span {
+        for c in 0..3 {
+            vertical.solve(|j| f64::from(frame.rgb(x as u32, j as u32)[c]), &mut solved);
+            for (row, value) in solved[..rows].iter().enumerate() {
+                band[(row * span + x) * 3 + c] = *value;
+            }
+        }
+    }
+
+    // Horizontal pass, for the corner's 1x columns; the guard columns are solved and dropped.
+    let mut bgra = vec![255u8; rows * columns * 4];
+    let mut solved = vec![0f64; horizontal.unknowns];
+    for row in 0..rows {
+        for c in 0..3 {
+            horizontal.solve(|j| band[(row * span + j) * 3 + c], &mut solved);
+            for (x, value) in solved[..columns].iter().enumerate() {
+                bgra[(row * columns + x) * 4 + 2 - c] = value.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    Some(Picture {
+        width: columns as u32,
+        height: rows as u32,
+        first_row: 0,
+        bgra,
+    })
+}
+
+/// Pixel rows at the top of a Mac window's game area that macOS draws itself, under its title
+/// bar, rather than in the game's blocks (seen in recorded runs).
+const WINDOW_EDGE: u32 = 4;
+
 /// Why a frame has no 1x picture to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum No1x {
@@ -347,6 +404,40 @@ pub fn with_bottom_right_1x<T>(
     read: impl FnOnce(&Frame) -> T,
 ) -> Result<T, No1x> {
     with_1x(frame, rows, Some(columns), read)
+}
+
+/// Calls `read` with the top-left `columns` x `rows` corner of the 1x picture of a frame that
+/// holds the whole game area: a frame that declares a backing scale is undone first; then it's the
+/// frame itself up to 768 lines (all of it, so a reader must stay in the corner it asked for), or
+/// else the corner recovered from the picture the game stretched ([`top_left`]). `No1x::Rows`
+/// when the frame doesn't hold its top rows.
+pub fn with_top_left_1x<T>(
+    frame: &Frame,
+    rows: u32,
+    columns: u32,
+    read: impl FnOnce(&Frame) -> T,
+) -> Result<T, No1x> {
+    let scale = frame.scale();
+    let corner = match scale > 1 && frame.height() / scale <= NATIVE_HEIGHT {
+        // Not stretched: the corner's own pixels are all a 1x read needs.
+        true => frame.top_left(
+            scaled_rows(columns, scale).min(frame.width()),
+            scaled_rows(rows, scale).min(frame.height()),
+        ),
+        false => frame.top_left(frame.width(), frame.height()),
+    }
+    .ok_or(No1x::Rows)?;
+    if scale > 1 {
+        // Where the blocks start is found below the window's edge rows, which aren't blocks.
+        let probe = corner.bottom_rows(corner.height().saturating_sub(WINDOW_EDGE));
+        let picture = unscale_found_in(&corner, &probe).ok_or(No1x::Scale(scale))?;
+        return with_top_left_1x(&picture.frame(), rows, columns, read);
+    }
+    if frame.height() <= NATIVE_HEIGHT {
+        return Ok(read(frame));
+    }
+    let picture = top_left(frame, rows, columns).ok_or(No1x::Stretch)?;
+    Ok(read(&picture.frame()))
 }
 
 fn with_1x<T>(
@@ -399,8 +490,22 @@ impl Inverse {
         if stretched <= source || first >= source {
             return None;
         }
-        let start = first.saturating_sub(guard);
-        let unknowns = source - start;
+        Inverse::band(stretched, source, first.saturating_sub(guard), source)
+    }
+
+    /// The inverse for the first `count` source pixels, solved with `guard` more past them and
+    /// only from the stretched pixels that fall inside those.
+    fn leading(stretched: usize, source: usize, count: usize, guard: usize) -> Option<Inverse> {
+        if stretched <= source || count == 0 || count > source {
+            return None;
+        }
+        Inverse::band(stretched, source, 0, (count + guard).min(source))
+    }
+
+    /// The inverse for the source pixels `start..end`, from the stretched pixels whose taps both
+    /// fall among them.
+    fn band(stretched: usize, source: usize, start: usize, end: usize) -> Option<Inverse> {
+        let unknowns = end - start;
         let scale = source as f64 / stretched as f64;
         let mut taps = Vec::new();
         for j in 0..stretched {
@@ -409,7 +514,7 @@ impl Inverse {
             let weight = t - left;
             let clamp = |i: f64| i.clamp(0.0, (source - 1) as f64) as usize;
             let (left_tap, right_tap) = (clamp(left), clamp(left + 1.0));
-            if left_tap < start {
+            if left_tap < start || right_tap >= end {
                 continue;
             }
             let weight = if right_tap == left_tap { 0.0 } else { weight };
@@ -617,6 +722,73 @@ mod tests {
                 bottom_rows(&frame, rows)
             );
         }
+    }
+
+    // Guards the top-left corner (the minimap): it must give exactly the full recovery's pixels,
+    // so a map's name has one shape at every size. Fails if the band's guard is too thin or its
+    // edges are solved from pixels outside it.
+    #[test]
+    fn a_top_left_corner_matches_the_full_recovery() {
+        for (width, height) in [(1920, 1200), (2560, 1440), (1920, 1080)] {
+            let narrow = picture_width(width, height);
+            let picture = busy_picture(narrow);
+            let (rows, columns) = (96, 512);
+            let bgra = stretch(&picture, narrow, width, height, 0);
+            let frame = Frame::new(width, height, width as usize * 4, &bgra).unwrap();
+            let full = bottom_rows(&frame, NATIVE_HEIGHT).unwrap();
+            let corner = top_left(&frame, rows, columns).unwrap();
+            let (full, corner) = (full.frame(), corner.frame());
+            assert_eq!((corner.width(), corner.height()), (columns, rows));
+            for y in 0..rows {
+                for x in 0..columns {
+                    assert_eq!(
+                        corner.rgb(x, y),
+                        full.rgb(x, y),
+                        "{width}x{height} at ({x}, {y})"
+                    );
+                }
+            }
+            // A bottom strip has no top-left corner to recover.
+            let strip = Frame::bottom(
+                width,
+                height,
+                1,
+                width as usize * 4,
+                &bgra[width as usize * 4..],
+            );
+            assert_eq!(top_left(&strip.unwrap(), rows, columns), None);
+        }
+    }
+
+    // Guards reading the corner of a Retina frame: the doubling is undone from the corner's own
+    // pixels, at every phase. Fails if a row or column of the corner comes out shifted.
+    #[test]
+    fn the_top_left_corner_of_a_doubled_frame_comes_back_exactly() {
+        let (width, height) = (120, 40);
+        let picture: Vec<[u8; 3]> = busy_picture(width)[..(width * height) as usize].to_vec();
+        for phase in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let bgra = doubled(&picture, width, phase);
+            let frame = Frame::new(2 * width, 2 * height, (2 * width * 4) as usize, &bgra)
+                .and_then(|f| f.with_scale(2))
+                .unwrap();
+            let (rows, columns) = (20, 50);
+            let read = with_top_left_1x(&frame, rows, columns, |corner| {
+                assert!(corner.width() >= columns && corner.height() >= rows);
+                for y in 0..rows {
+                    for x in 0..columns {
+                        assert_eq!(
+                            corner.rgb(x, y),
+                            picture[(y * width + x) as usize],
+                            "{phase:?} at ({x}, {y})"
+                        );
+                    }
+                }
+            });
+            assert!(read.is_ok());
+        }
+        let bgra = vec![0u8; 100 * 40 * 4];
+        let strip = Frame::bottom(100, 50, 10, 100 * 4, &bgra).unwrap();
+        assert_eq!(with_top_left_1x(&strip, 5, 5, |_| ()), Err(No1x::Rows));
     }
 
     /// `picture` (RGB rows of `width`) as a Mac shows it at backing scale 2: every pixel a 2x2
