@@ -12,20 +12,22 @@ pub trait StackLine {
 }
 
 /// How many lines arrived at the bottom: the smallest shift that lines up the last frame's lines
-/// with this one's. Both lists run from the bottom line up. One line may differ when four or more
-/// line up, for something drawn over it. `None` when no shift does.
+/// with this one's. Both lists run from the bottom line up. One line may differ, for something
+/// drawn over it, when four or more pairs of lines with something showing on both sides line up:
+/// blank lines say nothing about where the stack moved. `None` when no shift lines up.
 pub fn arrived<L: StackLine>(before: &[L], now: &[L]) -> Option<usize> {
     (0..=now.len()).find(|&shift| {
-        let pairs: Vec<bool> = before
+        let pairs: Vec<(bool, bool)> = before
             .iter()
             .zip(now.iter().skip(shift))
-            .map(|(b, n)| b.matches(n))
+            .map(|(b, n)| (b.matches(n), !b.is_blank() && !n.is_blank()))
             .collect();
-        let misses = pairs.iter().filter(|&&m| !m).count();
+        let misses = pairs.iter().filter(|(m, _)| !m).count();
+        let shown = pairs.iter().filter(|(_, shown)| *shown).count();
         match shift == now.len() {
             // Everything on screen is new: that only lines up if the last frame had no lines.
             true => before.iter().all(StackLine::is_blank),
-            false => misses == 0 || (pairs.len() >= 4 && misses <= 1),
+            false => misses == 0 || (shown >= 4 && misses <= 1),
         }
     })
 }
@@ -122,6 +124,12 @@ mod tests {
             arrived(&lines(&["x", "y", "z"]), &lines(&["a", "b", "c"])),
             None
         );
+        // One line may differ among four that line up, for something drawn over it. Blank lines
+        // don't count toward the four: they line up with any shift.
+        let full = lines(&["a", "b", "c", "d", "e"]);
+        assert_eq!(arrived(&full, &lines(&["?", "b", "c", "d", "e"])), Some(0));
+        let sparse = lines(&["a", "", "", "", ""]);
+        assert_eq!(arrived(&sparse, &lines(&["?", "", "", "", ""])), None);
     }
 
     // Guards the width parameter: the same shape a pixel to the right, or a row down, differs

@@ -43,6 +43,17 @@ pub struct Glyph {
 }
 
 impl Glyph {
+    /// A glyph from its rows' bit masks, left pixel in bit 0, for readers that tell ink from
+    /// more than one pixel's color. `None` when it's wider than [`MAX_GLYPH_WIDTH`], or a row has
+    /// ink past `width`.
+    pub fn from_rows(width: u32, rows: Vec<u32>) -> Option<Glyph> {
+        let fits = |row: &u32| width == MAX_GLYPH_WIDTH || *row >> width == 0;
+        (width > 0 && width <= MAX_GLYPH_WIDTH && rows.iter().all(fits)).then_some(Glyph {
+            width: width as u8,
+            rows,
+        })
+    }
+
     pub fn width(&self) -> u32 {
         u32::from(self.width)
     }

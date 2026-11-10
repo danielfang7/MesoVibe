@@ -3,3 +3,4 @@
 pub mod chat;
 pub mod exp_bar;
 pub mod exp_table;
+pub mod notices;

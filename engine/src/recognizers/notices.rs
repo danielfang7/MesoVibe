@@ -1,0 +1,1603 @@
+//! Pickup notice reader: the EXP, mesos and items the game reports at the bottom right.
+//!
+//! When the player gains EXP or picks something up, the game writes a line at the bottom right of
+//! the screen: "You received EXP (+60)", "You have gained mesos (+72)", "Fire Boar's Tooth x1
+//! earned. (Etc)", and in a party "Bonus EXP for PARTY (+4)" in yellow. A new line enters at the
+//! bottom and pushes the others up; lines are 14 px apart at 1x, and up to six show. Each line
+//! is drawn at full strength when it arrives and fades from then on: on Windows recordings at 1x a
+//! line had lost about a fifth of its strength a second later, and was too faint to compare after
+//! about three seconds.
+//!
+//! The text is a one-bit pixel font, a white core with a black shadow one pixel down and to the
+//! right, drawn over the scene at the line's strength. So the end of a stroke is a pixel much
+//! brighter than the one below and to the right of it, whatever the scene behind: over white
+//! clouds the core looks like the cloud, but its shadow doesn't. How much brighter says how far
+//! the line has faded. The rest of a letter is the white pixels that lead down and to the right to
+//! a stroke's end, as bright as it.
+//!
+//! New lines are counted by how far the lines already on screen moved up ([`crate::lines`]), so
+//! the same pickup twice counts twice. A line only ever fades, so a line brighter than the one in
+//! its place a frame earlier is a new one. A faded line shows too much of the scene to compare its
+//! shape, so it takes part by its strength alone.
+//!
+//! **It learns the letters itself**, on the player's device; nothing learned leaves it, and no game
+//! pixels ship. An EXP line's amount must be the EXP the HUD gained, so the first EXP lines that
+//! arrive one at a time name the digits and the letters of "You received EXP". The other phrases'
+//! letters follow from the ones known. Readings are confirmed once three EXP amounts in a row
+//! match the HUD; until then they're marked unconfirmed, and nothing should be shown from them.
+//! Only EXP amounts name digits, so a digit no EXP amount has had yet stays unknown, and a mesos
+//! amount with it can't be read.
+//!
+//! A line's letters are cut from the first frame it shows in, while it's still at full strength:
+//! at four frames a second that's within a quarter second of its arrival. Letters are compared
+//! exactly, but phrases are matched from the line's end allowing a letter or two to differ, so
+//! two touching letters or a speck of the scene costs a letter of a name, not the line.
+//!
+//! **Missed lines are reported, never guessed.** A stack that lines up with nothing, a new line
+//! that can't be read (covered, or a digit not learned yet), or EXP lines that add up to less or
+//! more than the HUD gained all mark the reading [`NoticeReading::missed`]. In a party, the party
+//! members' HP list sits over the stack where the game puts it, and its lines can't be read there.
+//!
+//! An item's identity is the exact shape of its name ([`ItemName::key`]): its letters needn't be
+//! known. Its text has the letters that are, and `?` for the rest.
+
+use crate::frame::Frame;
+use crate::glyph::{Atlas, Glyph, MAX_GLYPH_WIDTH};
+use crate::lines::{self, StackLine};
+use crate::recognizers::exp_bar::ExpReading;
+use crate::unstretch::{self, No1x};
+
+/// Lines the stack shows at most.
+const SLOTS: usize = 6;
+/// Rows from one line's top to the next one's, at 1x.
+const LINE_PITCH: u32 = 14;
+/// The bottom line's top row, counted up from the bottom of the 1x picture.
+const BOTTOM_LINE_UP: u32 = 162;
+/// A line's rows, from the top of its brackets to the bottom of its descenders. The game clips
+/// each line to these rows, so its bottom row has no shadow.
+const LINE_ROWS: u32 = 11;
+/// Columns read, from the picture's right edge. Lines end 8 columns in; "Fire Boar's Tooth x1
+/// earned. (Etc)" is 186 wide.
+pub const NOTICE_COLUMNS: u32 = 400;
+/// The columns a line can be compared in: all but the rightmost, which has no neighbor to its
+/// right.
+const TEXT_COLUMNS: u32 = NOTICE_COLUMNS - 1;
+/// A line's last column, counted in from the picture's right edge.
+const RIGHT_MARGIN: u32 = 8;
+/// How far, in game pixels up or down, the stack may sit from where the picture's height puts it.
+/// Wine on a Mac places the game up to a point off.
+const MAX_SHIFT: u32 = 1;
+/// 1x rows the reader looks at, up from the bottom: the top line's, with room for the stack to sit
+/// a row higher.
+pub const NOTICE_ROWS: u32 = BOTTOM_LINE_UP + LINE_PITCH * (SLOTS as u32 - 1) + MAX_SHIFT + 1;
+
+/// A stroke's end at least this much brighter than its shadow counts toward its line's strength.
+/// Textured scenery (rock, bark) makes some pixels this much brighter than their neighbor too, so
+/// a slot needs [`MIN_PIXELS`] of them.
+const FAINT: i16 = 96;
+/// Pixels a slot needs at [`FAINT`] to hold a line.
+const MIN_PIXELS: usize = 16;
+/// A line at least this strong is compared by its shape. Fainter, its shape is lost in the scene.
+const SOLID: u8 = 160;
+/// A solid line's shape: its pixels at least this much brighter than their shadow.
+const INK: i16 = 120;
+/// A line is read only while this strong. Fainter, too much of the scene shows through to tell
+/// every pixel of its letters. Captured four times a second, a line is first seen at about 230.
+const READ: u8 = 215;
+/// How much stronger a line may measure than in the frame before and still be the same line. Its
+/// strength is measured over a different part of the scene once it has moved up.
+const BRIGHTER: u8 = 16;
+/// A gap of at least this many columns between letters is a space. Letters of a word are at most
+/// three apart (after a 1), and words at least four.
+const SPACE: u32 = 4;
+/// A gap wider than this ends the line: whatever is further left is the scene.
+const MAX_SPACE: u32 = 10;
+/// The strongest a stroke's end can be: white over a black shadow.
+const FULL: i16 = 255;
+/// Frames a group of EXP lines may wait for the HUD's EXP to match it, and the HUD's gain for the
+/// lines: the two needn't change in the same frame.
+const SETTLE: u32 = 3;
+/// EXP amounts read in a row that must match the HUD before readings are confirmed.
+const CONFIRM_AFTER: usize = 3;
+/// EXP amounts in a row that may disagree with the HUD while learning before what was learned is
+/// dropped and learned again.
+const FORGET_AFTER: usize = 3;
+
+/// The inventory tab a picked-up item went to, as the notice names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Tab {
+    Equip,
+    Use,
+    Setup,
+    Etc,
+    Cash,
+}
+
+impl Tab {
+    const ALL: [Tab; 5] = [Tab::Equip, Tab::Use, Tab::Setup, Tab::Etc, Tab::Cash];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Tab::Equip => "Equip",
+            Tab::Use => "Use",
+            Tab::Setup => "Setup",
+            Tab::Etc => "Etc",
+            Tab::Cash => "Cash",
+        }
+    }
+}
+
+/// One new notice line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Notice {
+    /// "You received EXP (+N)".
+    Exp(u64),
+    /// "Bonus EXP for PARTY (+N)", in a party.
+    PartyBonus(u64),
+    /// "You have gained mesos (+N)".
+    Mesos(u64),
+    /// "<name> xN earned. (<tab>)". The tab is `None` while its letters can't tell it yet.
+    Item {
+        name: ItemName,
+        count: u32,
+        tab: Option<Tab>,
+    },
+    /// A line that isn't a pickup, such as "This item is unavailable for pick-up."
+    Other,
+}
+
+/// An item's name as the notice drew it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemName {
+    /// The name's exact shape as text: the same name gives the same key every time, at every size.
+    pub key: String,
+    /// The name as far as its letters are known, `?` for each letter that isn't.
+    pub text: String,
+    pub picture: NamePicture,
+}
+
+/// The letters of a name as the game drew them, for showing it before its text is known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamePicture {
+    pub width: u32,
+    pub height: u32,
+    /// Which pixels are letter, row by row: 255 is letter, 0 is not.
+    pub coverage: Vec<u8>,
+}
+
+/// Why lines may have been missed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Missed {
+    /// The stack couldn't be lined up with the last frame's.
+    Unaligned,
+    /// A new line couldn't be read: covered, or a letter or digit not learned yet.
+    Unreadable,
+    /// The HUD gained more EXP than the EXP lines read add up to.
+    ExpShort,
+    /// The EXP lines read add up to more than the HUD gained.
+    ExpOver,
+    /// The stack was out of sight for a while, so lines may have come and gone unseen.
+    Lost,
+}
+
+/// What one frame of the notice stack brought.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NoticeReading {
+    /// New lines, oldest first.
+    pub notices: Vec<Notice>,
+    /// Lines may have been missed since the last reading.
+    pub missed: Option<Missed>,
+    /// False while the letters' names haven't been checked against the HUD enough times: nothing
+    /// should be shown from the reading.
+    pub confirmed: bool,
+}
+
+/// Why a frame couldn't be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeUnreadable {
+    /// The game area is too small to hold the stack.
+    UnsupportedSize { width: u32, height: u32 },
+    /// The frame has no 1x picture to read.
+    Unsupported(No1x),
+}
+
+/// Where the stack is in a 1x picture.
+#[derive(Debug, Clone, Copy)]
+struct Layout {
+    /// The first column read, and one past the last one compared.
+    left: u32,
+    right: u32,
+    bottom: u32,
+}
+
+impl Layout {
+    fn of(frame: &Frame) -> Option<Layout> {
+        let (w, h) = (frame.width(), frame.height());
+        (w > NOTICE_COLUMNS && h > NOTICE_ROWS && frame.first_row() + NOTICE_ROWS <= h).then(|| {
+            Layout {
+                left: w - NOTICE_COLUMNS,
+                right: w - 1,
+                bottom: h,
+            }
+        })
+    }
+
+    /// The top row of slot `k` (0 is the bottom line) with the stack `shift` rows down.
+    fn top(self, k: usize, shift: i32) -> u32 {
+        (self.bottom - BOTTOM_LINE_UP - LINE_PITCH * k as u32).wrapping_add_signed(shift)
+    }
+}
+
+/// White and yellow are bright in red and green.
+fn lum(p: [u8; 3]) -> i16 {
+    i16::from(p[0].min(p[1]))
+}
+
+/// How much brighter the pixel at (x, y) is than the one below and to its right, in the lesser of
+/// red and green.
+fn diff(frame: &Frame, x: u32, y: u32) -> i16 {
+    let (a, b) = (frame.rgb(x, y), frame.rgb(x + 1, y + 1));
+    (i16::from(a[0]) - i16::from(b[0])).min(i16::from(a[1]) - i16::from(b[1]))
+}
+
+/// One slot of the stack as seen in a frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Slot {
+    /// How bright its strokes are: the middle difference of its pixels at [`FAINT`], 0 when it
+    /// holds no line.
+    strength: u8,
+    /// A solid line's shape, bit `row * TEXT_COLUMNS + column`; empty when it isn't solid.
+    ink: Vec<u64>,
+    count: u32,
+}
+
+impl Slot {
+    fn solid(&self) -> bool {
+        self.strength >= SOLID
+    }
+}
+
+impl StackLine for Slot {
+    /// `self` is the line in the frame before. A line that's faded since lines up with anything:
+    /// lines fade. A solid one is the same line only if it's no brighter than it was and has the
+    /// same shape, up to a pixel away each way.
+    fn matches(&self, now: &Slot) -> bool {
+        match (self.solid(), now.solid()) {
+            (_, false) => true,
+            (false, true) => false,
+            (true, true) => {
+                now.strength <= self.strength.saturating_add(BRIGHTER) && same_shape(self, now)
+            }
+        }
+    }
+
+    fn is_blank(&self) -> bool {
+        !self.solid()
+    }
+}
+
+fn same_shape(a: &Slot, b: &Slot) -> bool {
+    let allowed = (a.count.max(b.count) / 10).max(6);
+    if a.count.abs_diff(b.count) > allowed {
+        return false;
+    }
+    let same_at = |(right, down): (i32, i32)| {
+        let by = down * TEXT_COLUMNS as i32 + right;
+        lines::differ(&a.ink, &b.ink, TEXT_COLUMNS * LINE_ROWS, by, None) <= allowed
+    };
+    same_at((0, 0))
+        || (-1..=1)
+            .flat_map(|down| (-1..=1).map(move |right| (right, down)))
+            .any(same_at)
+}
+
+/// The slot whose top row is `top`. A line ends at the right, [`RIGHT_MARGIN`] columns in, and
+/// runs left from there to a gap wider than a space; what's beyond that, a name tag or the scene,
+/// isn't part of it.
+fn slot(frame: &Frame, layout: Layout, top: u32) -> Slot {
+    let blank = Slot {
+        strength: 0,
+        ink: Vec::new(),
+        count: 0,
+    };
+    let faint: Vec<bool> = (layout.left..layout.right)
+        .map(|x| (top..top + LINE_ROWS).any(|y| diff(frame, x, y) >= FAINT))
+        .collect();
+    let end = (layout.right + 1 - RIGHT_MARGIN - layout.left) as usize;
+    let ends_right = (end - 2..(end + 2).min(faint.len())).any(|col| faint[col]);
+    if !ends_right {
+        return blank;
+    }
+    let mut from = end;
+    let mut gap = 0;
+    for col in (0..end).rev() {
+        if faint[col] {
+            from = col;
+            gap = 0;
+        } else {
+            gap += 1;
+            if gap > MAX_SPACE {
+                break;
+            }
+        }
+    }
+    let from = layout.left + from as u32;
+    let mut seen = Vec::new();
+    for y in top..top + LINE_ROWS {
+        for x in from..layout.right {
+            let d = diff(frame, x, y);
+            if d >= FAINT {
+                seen.push(d);
+            }
+        }
+    }
+    if seen.len() < MIN_PIXELS {
+        return blank;
+    }
+    let middle = seen.len() / 2;
+    let strength = (*seen.select_nth_unstable(middle).1).clamp(0, FULL) as u8;
+    if strength < SOLID {
+        return Slot {
+            strength,
+            ink: Vec::new(),
+            count: 0,
+        };
+    }
+    let mut ink = vec![0u64; (TEXT_COLUMNS * LINE_ROWS).div_ceil(64) as usize];
+    let mut count = 0;
+    for row in 0..LINE_ROWS {
+        for col in from - layout.left..TEXT_COLUMNS {
+            if diff(frame, layout.left + col, top + row) >= INK {
+                let bit = (row * TEXT_COLUMNS + col) as usize;
+                ink[bit / 64] |= 1 << (bit % 64);
+                count += 1;
+            }
+        }
+    }
+    Slot {
+        strength,
+        ink,
+        count,
+    }
+}
+
+/// Every place the stack may be, rows down from where the picture's height puts it, `prefer` first.
+fn shifts(prefer: i32) -> impl Iterator<Item = i32> {
+    let max = MAX_SHIFT as i32;
+    std::iter::once(prefer).chain((-max..=max).filter(move |&s| s != prefer))
+}
+
+/// Where the stack sits. In the right place, a solid line has no stroke ends in the row above it,
+/// nor in its bottom row, where the game clips the shadow off; a row off either way, one of those
+/// is a row of its strokes (the tops of its capitals, or its baseline). Each line is scored in its
+/// own columns at its own strength, so the scene beside it counts for little. Without solid lines
+/// on screen, `prefer`.
+fn find_shift(frame: &Frame, layout: Layout, prefer: i32) -> i32 {
+    let solid: Vec<(usize, i16, u32, u32)> = (0..SLOTS)
+        .filter_map(|k| {
+            let top = layout.top(k, prefer);
+            let line = slot(frame, layout, top);
+            if !line.solid() {
+                return None;
+            }
+            let strong = i16::from(line.strength) * 3 / 4;
+            let columns: Vec<u32> = (layout.left..layout.right)
+                .filter(|&x| (top..top + LINE_ROWS).any(|y| diff(frame, x, y) >= strong))
+                .collect();
+            Some((k, strong, *columns.first()?, *columns.last()? + 1))
+        })
+        .collect();
+    if solid.is_empty() {
+        return prefer;
+    }
+    let stray = |shift: i32| -> usize {
+        solid
+            .iter()
+            .map(|&(k, strong, from, to)| {
+                let top = layout.top(k, shift);
+                [top - 1, top + LINE_ROWS - 1]
+                    .into_iter()
+                    .map(|y| (from..to).filter(|&x| diff(frame, x, y) >= strong).count())
+                    .sum::<usize>()
+            })
+            .sum()
+    };
+    // Only clear evidence moves it: Wine's offset doesn't change while the game runs, and
+    // something drawn just above a line (the party's HP list ends there) can look like strokes.
+    let here = stray(prefer);
+    shifts(prefer)
+        .map(|shift| (stray(shift), shift))
+        .min_by_key(|&(stray, _)| stray)
+        .filter(|&(best, _)| here >= 4 && best * 3 <= here)
+        .map_or(prefer, |(_, shift)| shift)
+}
+
+/// One letter of a line: where its cell starts, and its shape.
+#[derive(Debug, Clone)]
+struct Piece {
+    x: u32,
+    glyph: Glyph,
+}
+
+/// A solid line cut into letters and words.
+#[derive(Debug, Clone)]
+struct Cut {
+    words: Vec<Vec<Piece>>,
+    yellow: bool,
+}
+
+/// Cuts the solid line whose top row is `top` into letters. `None` when something wider than a
+/// letter is there, or the line runs past the columns read.
+fn cut(frame: &Frame, layout: Layout, top: u32, strength: u8) -> Option<Cut> {
+    let (w, h) = ((layout.right - layout.left) as usize, LINE_ROWS as usize);
+    // Pixels at least this bright, against their shadow or as themselves, belong to the line.
+    let bright = i16::from(strength) * 3 / 4;
+    let at = |row: usize, col: usize| (layout.left + col as u32, top + row as u32);
+    // How bright the line's stroke ends are: what its other pixels are measured against.
+    let mut ends: Vec<i16> = (0..h - 1)
+        .flat_map(|row| (0..w).map(move |col| (row, col)))
+        .filter_map(|(row, col)| {
+            let (x, y) = at(row, col);
+            (diff(frame, x, y) >= bright).then(|| lum(frame.rgb(x, y)))
+        })
+        .collect();
+    if ends.is_empty() {
+        return None;
+    }
+    let middle = ends.len() / 2;
+    let white = *ends.select_nth_unstable(middle).1;
+    let mut core = vec![false; w * h];
+    // The bottom row has no shadow: the game clips each line to its rows. Its pixels are the
+    // ends of brackets and descenders, as bright as the line, under a bright pixel.
+    for col in 0..w {
+        let (x, y) = at(h - 1, col);
+        let p = lum(frame.rgb(x, y));
+        let above = (col.saturating_sub(1)..(col + 2).min(w))
+            .any(|c| lum(frame.rgb(at(h - 2, c).0, y - 1)) >= bright);
+        core[(h - 1) * w + col] = p >= bright && p + 12 >= white && above;
+    }
+    let (mut yellow, mut whites) = (0u32, 0u32);
+    for row in (0..h - 1).rev() {
+        for col in (0..w).rev() {
+            let (x, y) = at(row, col);
+            let p = frame.rgb(x, y);
+            let end = diff(frame, x, y) >= bright;
+            // A letter's pixel whose shadow is hidden under the letter's next pixel down and to
+            // the right: as bright as that one, which belongs to the letter.
+            let inside = !end
+                && col + 1 < w
+                && core[(row + 1) * w + col + 1]
+                && lum(p) >= bright
+                && lum(p) + 8 >= lum(frame.rgb(x + 1, y + 1));
+            core[row * w + col] = end || inside;
+            if end {
+                if p[2] < p[0] / 2 {
+                    yellow += 1;
+                } else {
+                    whites += 1;
+                }
+            }
+        }
+    }
+    // A bottom-row pixel belongs to a letter only under one of its pixels.
+    for col in 0..w {
+        let under = (col.saturating_sub(1)..(col + 2).min(w)).any(|c| core[(h - 2) * w + c]);
+        core[(h - 1) * w + col] &= under;
+    }
+    let inked = |col: usize| (0..h).any(|row| core[row * w + col]);
+    if inked(0) {
+        return None;
+    }
+    let mut words: Vec<Vec<Piece>> = Vec::new();
+    let mut start = None;
+    let mut last_end = None;
+    for col in 0..=w {
+        let ink = col < w && inked(col);
+        match (start, ink) {
+            (None, true) => start = Some(col),
+            (Some(from), false) => {
+                let width = (col - from) as u32;
+                if width > MAX_GLYPH_WIDTH {
+                    return None;
+                }
+                let rows = (0..h)
+                    .map(|row| {
+                        (from..col)
+                            .filter(|&c| core[row * w + c])
+                            .fold(0u32, |mask, c| mask | 1 << (c - from))
+                    })
+                    .collect();
+                let glyph = Glyph::from_rows(width, rows)?;
+                let piece = Piece {
+                    x: from as u32,
+                    glyph,
+                };
+                match (last_end, words.last_mut()) {
+                    (Some(end), Some(word)) if (from - end) < SPACE as usize => word.push(piece),
+                    _ => words.push(vec![piece]),
+                }
+                last_end = Some(col);
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    // Lines end at the right: a word far left of the rest is something in the scene.
+    let keep = (1..words.len())
+        .rev()
+        .find(|&i| {
+            let end = words[i - 1].last().map_or(0, |p| p.x + p.glyph.width());
+            words[i][0].x - end > MAX_SPACE
+        })
+        .unwrap_or(0);
+    words.drain(..keep);
+    (!words.is_empty()).then_some(Cut {
+        words,
+        yellow: yellow > whites,
+    })
+}
+
+/// The game's phrases, word by word, for learning their letters from a line that splits into
+/// exactly those words.
+const EXP_PHRASE: &[&str] = &["You", "received", "EXP"];
+const MESOS_PHRASE: &[&str] = &["You", "have", "gained", "mesos"];
+const PARTY_PHRASE: &[&str] = &["Bonus", "EXP", "for", "PARTY"];
+/// "PARTY" as the party bonus line draws it: T and Y touch, so they're one piece, named with
+/// this stand-in for "TY".
+const PARTY_PHRASE_JOINED: &[&str] = &["Bonus", "EXP", "for", "PAR\u{E000}"];
+/// The same phrases as their letters run, for reading.
+const EXP_TEXT: &str = "YoureceivedEXP";
+const MESOS_TEXT: &str = "Youhavegainedmesos";
+const PARTY_TEXT: &str = "BonusEXPforPARTY";
+const PARTY_TEXT_JOINED: &str = "BonusEXPforPAR\u{E000}";
+/// Letters a phrase may have unknown, wrong, missing or extra and still be read as that phrase:
+/// two touching letters cost two.
+const PHRASE_ERRORS: usize = 2;
+/// Most digits and commas an amount has: "1,234,567".
+const MAX_AMOUNT: usize = 9;
+
+/// How many letters differ between what was read and `text`, counting each unknown, wrong,
+/// missing or extra letter once (edit distance).
+fn distance(read: &[Option<char>], text: &str) -> usize {
+    let text: Vec<char> = text.chars().collect();
+    let mut row: Vec<usize> = (0..=text.len()).collect();
+    for (i, r) in read.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, &c) in text.iter().enumerate() {
+            let substitute = diagonal + usize::from(*r != Some(c));
+            diagonal = row[j + 1];
+            row[j + 1] = substitute.min(row[j] + 1).min(diagonal + 1);
+        }
+    }
+    row[text.len()]
+}
+
+/// How a line's words fit one of the game's phrases: the phrase's own letters and the glyphs that
+/// show them, and the glyphs of its number.
+struct Fit<'a> {
+    fixed: Vec<(&'a Glyph, char)>,
+    number: &'a [Piece],
+}
+
+/// Pairs each glyph of `words` with the letter of `texts` in its place, when the word lengths fit.
+fn spell<'a>(words: &'a [Vec<Piece>], texts: &[&str], fixed: &mut Vec<(&'a Glyph, char)>) -> bool {
+    let fits = words.len() == texts.len()
+        && words
+            .iter()
+            .zip(texts)
+            .all(|(word, text)| word.len() == text.chars().count());
+    if fits {
+        for (word, text) in words.iter().zip(texts) {
+            fixed.extend(word.iter().map(|p| &p.glyph).zip(text.chars()));
+        }
+    }
+    fits
+}
+
+/// The amount at the end of a line, "(+N)": its digits, with the brackets and plus added to
+/// `fixed`.
+fn amount<'a>(word: &'a [Piece], fixed: &mut Vec<(&'a Glyph, char)>) -> Option<&'a [Piece]> {
+    let last = word.len().checked_sub(1).filter(|&last| last >= 3)?;
+    fixed.push((&word[0].glyph, '('));
+    fixed.push((&word[1].glyph, '+'));
+    fixed.push((&word[last].glyph, ')'));
+    Some(&word[2..last])
+}
+
+/// The words of an amount line, "<phrase> (+N)", fitted to `phrase`.
+fn fit_amount<'a>(cut: &'a Cut, phrase: &[&str]) -> Option<Fit<'a>> {
+    let (last, words) = cut.words.split_last()?;
+    let mut fixed = Vec::new();
+    if !spell(words, phrase, &mut fixed) {
+        return None;
+    }
+    let number = amount(last, &mut fixed)?;
+    Some(Fit { fixed, number })
+}
+
+/// An item line, "<name> xN earned. (<tab>)", with the tab `tab`.
+fn fit_item(cut: &Cut, tab: Option<Tab>) -> Option<Fit<'_>> {
+    let n = cut.words.len();
+    if n < 4 {
+        return None;
+    }
+    let rest = &cut.words[n - 3..];
+    let (count, earned, bracket) = (&rest[0], &rest[1], &rest[2]);
+    let mut fixed = Vec::new();
+    if count.len() < 2 || !spell(std::slice::from_ref(earned), &["earned."], &mut fixed) {
+        return None;
+    }
+    fixed.push((&count[0].glyph, 'x'));
+    let (open, close) = (bracket.first()?, bracket.last()?);
+    let letters = bracket.len().checked_sub(2).filter(|&n| n >= 3)?;
+    fixed.push((&open.glyph, '('));
+    fixed.push((&close.glyph, ')'));
+    if let Some(tab) = tab {
+        if tab.name().len() != letters {
+            return None;
+        }
+        fixed.extend(
+            bracket[1..=letters]
+                .iter()
+                .map(|p| &p.glyph)
+                .zip(tab.name().chars()),
+        );
+    }
+    Some(Fit {
+        fixed,
+        number: &count[1..],
+    })
+}
+
+/// How many of the fit's letters the atlas already names as the fit does, or `None` when the fit
+/// contradicts the atlas or itself (one shape as two letters, or one letter as two shapes).
+fn agreement(atlas: &Atlas, fixed: &[(&Glyph, char)]) -> Option<usize> {
+    let mut trial = atlas.clone();
+    let glyphs: Vec<Glyph> = fixed.iter().map(|(g, _)| (*g).clone()).collect();
+    let text: String = fixed.iter().map(|(_, c)| *c).collect();
+    trial.learn(&glyphs, &text).ok()?;
+    Some(
+        fixed
+            .iter()
+            .filter(|(g, c)| atlas.name(g) == Some(*c))
+            .count(),
+    )
+}
+
+/// Learns the fit's letters, if they agree with the atlas.
+fn learn_fixed(atlas: &mut Atlas, fixed: &[(&Glyph, char)]) -> bool {
+    let glyphs: Vec<Glyph> = fixed.iter().map(|(g, _)| (*g).clone()).collect();
+    let text: String = fixed.iter().map(|(_, c)| *c).collect();
+    atlas.learn(&glyphs, &text).is_ok()
+}
+
+/// Digits with a comma every three from the right: `1,234`.
+fn group_digits(digits: &str) -> String {
+    let mut text = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            text.push(',');
+        }
+        text.push(c);
+    }
+    text
+}
+
+/// A number as a notice may write it: digits, with commas every three from the right or none.
+fn parse_number(text: &str) -> Option<u64> {
+    let digits: String = text.chars().filter(|&c| c != ',').collect();
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if text.contains(',') && group_digits(&digits) != text {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// The number the glyphs show, when every one is a known digit or comma.
+fn read_number<'a>(atlas: &Atlas, glyphs: impl IntoIterator<Item = &'a Glyph>) -> Option<u64> {
+    let text: Option<String> = glyphs.into_iter().map(|g| atlas.name(g)).collect();
+    parse_number(&text?)
+}
+
+/// An EXP line waiting for the HUD's EXP to say what it's worth: its phrase's letters and its
+/// amount's glyphs, and the amount if they're all known.
+#[derive(Debug, Clone)]
+struct ExpLine {
+    fixed: Vec<(Glyph, char)>,
+    digits: Vec<Glyph>,
+    value: Option<u64>,
+}
+
+impl ExpLine {
+    fn of(fit: &Fit, atlas: &Atlas) -> ExpLine {
+        ExpLine {
+            fixed: fit.fixed.iter().map(|(g, c)| ((*g).clone(), *c)).collect(),
+            digits: fit.number.iter().map(|p| p.glyph.clone()).collect(),
+            value: read_number(atlas, fit.number.iter().map(|p| &p.glyph)),
+        }
+    }
+
+    /// Learns its letters, and its digits as `amount`, if they agree with the atlas.
+    fn teach(&self, atlas: &mut Atlas, amount: u64) -> bool {
+        let mut trial = atlas.clone();
+        let (glyphs, text): (Vec<Glyph>, String) = self.fixed.iter().cloned().unzip();
+        if trial.learn(&glyphs, &text).is_err() {
+            return false;
+        }
+        let plain = amount.to_string();
+        for text in [group_digits(&plain), plain] {
+            let mut digits = trial.clone();
+            if text.chars().count() == self.digits.len()
+                && digits.learn(&self.digits, &text).is_ok()
+            {
+                *atlas = digits;
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// EXP lines read and EXP the HUD gained since they last matched.
+#[derive(Debug, Clone, Default)]
+struct Window {
+    lines: Vec<ExpLine>,
+    hud: u64,
+    /// Frames since the window opened.
+    age: u32,
+    /// A line in the window that may have carried EXP couldn't be read, so the window can't
+    /// teach or check anything.
+    blocked: bool,
+}
+
+/// What the HUD said the EXP did since the last frame it was read in.
+enum Gain {
+    /// Not read in this frame.
+    Unknown,
+    /// Read, but not comparable with the last reading: the first one, a death, a skipped level.
+    Restart,
+    Gained(u64),
+}
+
+/// The EXP gained from `before` to `now`, across a level-up when the level's EXP needed is known.
+fn gained(before: &ExpReading, now: &ExpReading) -> Option<u64> {
+    match (before.level, now.level) {
+        (a, b) if a == b => now.exp.checked_sub(before.exp),
+        (Some(a), Some(b)) if b == a + 1 => Some(before.needed?.checked_sub(before.exp)? + now.exp),
+        _ => None,
+    }
+}
+
+/// A line read from the stack.
+enum Read {
+    Exp(ExpLine),
+    PartyBonus(ExpLine),
+    Mesos(Option<u64>),
+    Item(Option<(ItemName, u32, Option<Tab>)>),
+    Other,
+    /// It may be a pickup, but it can't be read.
+    Unknown,
+}
+
+/// Follows the notice stack from frame to frame and reads each new line once.
+#[derive(Debug, Clone, Default)]
+pub struct NoticeReader {
+    atlas: Atlas,
+    /// The stack last frame, bottom first; `None` after a frame that couldn't be read.
+    lines: Option<Vec<Slot>>,
+    /// The stack was being followed and then wasn't.
+    lost: bool,
+    /// Where the stack was last found, rows down from where the picture's height puts it.
+    shift: i32,
+    /// The last confirmed HUD reading.
+    hud: Option<ExpReading>,
+    window: Window,
+    /// EXP amounts read that matched the HUD, in a row, while learning.
+    checks: usize,
+    /// EXP amounts that didn't, in a row, while learning.
+    misses: usize,
+    confirmed: bool,
+}
+
+impl NoticeReader {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn confirmed(&self) -> bool {
+        self.confirmed
+    }
+
+    /// The new lines in this frame, which holds at least [`rows_needed`] rows. `hud` is the EXP
+    /// bar's reading of the same frame, when it has one: the EXP lines are checked against it, and
+    /// learned from it.
+    pub fn observe(
+        &mut self,
+        frame: &Frame,
+        hud: Option<&ExpReading>,
+    ) -> Result<NoticeReading, NoticeUnreadable> {
+        let result = unstretch::with_bottom_right_1x(frame, NOTICE_ROWS, NOTICE_COLUMNS, |p| {
+            self.observe_1x(p, hud)
+        })
+        .map_err(NoticeUnreadable::Unsupported)
+        .and_then(|r| r);
+        if result.is_err() {
+            self.reset();
+        }
+        result
+    }
+
+    /// Forgets the stack on screen, for when capture stopped or the game window changed. Lines
+    /// on screen when it's next seen aren't counted, and the reading says lines may be missing.
+    pub fn reset(&mut self) {
+        self.lost |= self.lines.is_some();
+        self.lines = None;
+    }
+
+    fn observe_1x(
+        &mut self,
+        picture: &Frame,
+        hud: Option<&ExpReading>,
+    ) -> Result<NoticeReading, NoticeUnreadable> {
+        let layout = Layout::of(picture).ok_or(NoticeUnreadable::UnsupportedSize {
+            width: picture.width(),
+            height: picture.height(),
+        })?;
+        let shift = find_shift(picture, layout, self.shift);
+        self.shift = shift;
+        let now: Vec<Slot> = (0..SLOTS)
+            .map(|k| slot(picture, layout, layout.top(k, shift)))
+            .collect();
+        let mut missed = None;
+        let fresh = match self.lines.as_deref() {
+            Some(before) => lines::arrived(before, &now).unwrap_or_else(|| {
+                missed = Some(Missed::Unaligned);
+                newer_than(before, &now)
+            }),
+            None => {
+                if self.lost {
+                    missed = Some(Missed::Lost);
+                }
+                0
+            }
+        };
+        let mut notices = Vec::new();
+        // Oldest first: the highest new line.
+        for k in (0..fresh).rev() {
+            let line = &now[k];
+            let read = match line.strength >= READ {
+                true => cut(picture, layout, layout.top(k, shift), line.strength)
+                    .map_or(Read::Unknown, |cut| self.read(&cut)),
+                false => Read::Unknown,
+            };
+            match read {
+                Read::Exp(line) => {
+                    notices.extend(line.value.map(Notice::Exp));
+                    self.window.lines.push(line);
+                }
+                Read::PartyBonus(line) => {
+                    notices.extend(line.value.map(Notice::PartyBonus));
+                    self.window.lines.push(line);
+                }
+                Read::Mesos(Some(amount)) => notices.push(Notice::Mesos(amount)),
+                Read::Item(Some((name, count, tab))) => {
+                    notices.push(Notice::Item { name, count, tab });
+                }
+                Read::Other => notices.push(Notice::Other),
+                Read::Mesos(None) | Read::Item(None) | Read::Unknown => {
+                    missed.get_or_insert(Missed::Unreadable);
+                    self.window.blocked = true;
+                }
+            }
+        }
+        self.lines = Some(now);
+        self.lost = false;
+        // Lines may have come and gone unseen: the EXP window can't teach or check anything.
+        if missed.is_some() {
+            self.window.blocked = true;
+        }
+        let gain = self.follow_hud(hud);
+        if let Some(short) = self.settle(gain) {
+            missed.get_or_insert(short);
+        }
+        Ok(NoticeReading {
+            notices,
+            missed,
+            confirmed: self.confirmed,
+        })
+    }
+
+    /// What a solid line says.
+    fn read(&mut self, cut: &Cut) -> Read {
+        if self.atlas.is_empty() {
+            // Before any letter is known, a line shaped like an EXP line waits for the HUD to
+            // name its letters and digits.
+            return match fit_amount(cut, EXP_PHRASE) {
+                Some(fit) if !cut.yellow && agreement(&self.atlas, &fit.fixed).is_some() => {
+                    Read::Exp(ExpLine::of(&fit, &self.atlas))
+                }
+                _ if cut.yellow => Read::Unknown,
+                _ => Read::Other,
+            };
+        }
+        self.learn_from(cut);
+        self.parse(cut)
+    }
+
+    /// Learns the letters of a line that splits exactly into one of the game's phrases, when the
+    /// atlas already knows at least half of them as that phrase has them.
+    fn learn_from(&mut self, cut: &Cut) {
+        let amounts = match cut.yellow {
+            true => [
+                fit_amount(cut, PARTY_PHRASE),
+                fit_amount(cut, PARTY_PHRASE_JOINED),
+            ],
+            false => [fit_amount(cut, EXP_PHRASE), fit_amount(cut, MESOS_PHRASE)],
+        };
+        let mut fits: Vec<Fit> = amounts.into_iter().flatten().collect();
+        // The tab whose letters the atlas knows best, if just one does.
+        let tabs: Vec<(usize, Fit)> = Tab::ALL
+            .iter()
+            .filter_map(|&tab| fit_item(cut, Some(tab)))
+            .filter_map(|fit| agreement(&self.atlas, &fit.fixed).map(|n| (n, fit)))
+            .collect();
+        let best = tabs.iter().map(|(n, _)| *n).max();
+        match best {
+            Some(n) if tabs.iter().filter(|(m, _)| *m == n).count() == 1 => {
+                fits.extend(tabs.into_iter().find(|(m, _)| *m == n).map(|(_, fit)| fit));
+            }
+            _ => fits.extend(fit_item(cut, None)),
+        }
+        let known = |fit: &Fit| {
+            agreement(&self.atlas, &fit.fixed).is_some_and(|known| known * 2 >= fit.fixed.len())
+        };
+        if let Some(fit) = fits.into_iter().find(known) {
+            learn_fixed(&mut self.atlas, &fit.fixed);
+        }
+    }
+
+    /// Reads a line from its end with the letters known: every pickup ends with a bracket. A
+    /// letter drawn over, or two touching, costs a letter here and there, not the line.
+    fn parse(&self, cut: &Cut) -> Read {
+        let pieces: Vec<&Piece> = cut.words.iter().flatten().collect();
+        let names: Vec<Option<char>> = pieces.iter().map(|p| self.atlas.name(&p.glyph)).collect();
+        let n = names.len();
+        if names.last() != Some(&Some(')')) {
+            return match cut.yellow {
+                true => Read::Unknown,
+                false => Read::Other,
+            };
+        }
+        // An amount: a phrase, then "(+", digits and ")".
+        let open = (n.saturating_sub(MAX_AMOUNT + 3)..n.saturating_sub(2))
+            .rev()
+            .find(|&i| names[i] == Some('(') && names[i + 1] == Some('+'));
+        if let Some(open) = open {
+            let phrase = &names[..open];
+            let line = ExpLine {
+                fixed: Vec::new(),
+                digits: pieces[open + 2..n - 1]
+                    .iter()
+                    .map(|p| p.glyph.clone())
+                    .collect(),
+                value: read_number(
+                    &self.atlas,
+                    pieces[open + 2..n - 1].iter().map(|p| &p.glyph),
+                ),
+            };
+            let near = |text: &str| distance(phrase, text) <= PHRASE_ERRORS;
+            return match cut.yellow {
+                true if near(PARTY_TEXT) || near(PARTY_TEXT_JOINED) => Read::PartyBonus(line),
+                false if near(EXP_TEXT) => Read::Exp(line),
+                false if near(MESOS_TEXT) => Read::Mesos(line.value),
+                _ => Read::Unknown,
+            };
+        }
+        self.parse_item(&pieces, &names).unwrap_or(Read::Unknown)
+    }
+
+    /// An item line: its name, "x", the count, "earned.", and the tab in brackets.
+    fn parse_item(&self, pieces: &[&Piece], names: &[Option<char>]) -> Option<Read> {
+        let n = names.len();
+        let open = (n.checked_sub(7)?..=n.checked_sub(5)?)
+            .rev()
+            .find(|&i| names[i] == Some('('))?;
+        let tab_names = &names[open + 1..n - 1];
+        let tab = Tab::ALL.into_iter().find(|t| {
+            t.name().len() == tab_names.len()
+                && tab_names
+                    .iter()
+                    .zip(t.name().chars())
+                    .filter(|(name, c)| **name != Some(*c))
+                    .count()
+                    <= 1
+        });
+        let earned = [7, 6, 8]
+            .into_iter()
+            .find(|&len| open >= len && distance(&names[open - len..open], "earned.") <= 1)?;
+        let count_end = open - earned;
+        let count_start = (0..count_end)
+            .rev()
+            .take_while(|&i| names[i].is_some_and(|c| c.is_ascii_digit()))
+            .last()?;
+        let x = count_start
+            .checked_sub(1)
+            .filter(|&x| x > 0 && names[x] == Some('x'))?;
+        let count = read_number(
+            &self.atlas,
+            pieces[count_start..count_end].iter().map(|p| &p.glyph),
+        )?;
+        Some(Read::Item(
+            u32::try_from(count)
+                .ok()
+                .map(|count| (self.name(&pieces[..x]), count, tab)),
+        ))
+    }
+
+    /// An item's name: its key, its text so far, and its picture.
+    fn name(&self, pieces: &[&Piece]) -> ItemName {
+        // FNV-1a over the letters' shapes, which don't depend on how wide the gaps between them
+        // came out: stable across sessions and machines.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut text = String::new();
+        let mut last_end = None;
+        for piece in pieces {
+            for &b in piece.glyph.encode().as_bytes().iter().chain(b";") {
+                hash ^= u64::from(b);
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
+            if last_end.is_some_and(|end| piece.x - end >= SPACE) {
+                text.push(' ');
+            }
+            text.push(self.atlas.name(&piece.glyph).unwrap_or('?'));
+            last_end = Some(piece.x + piece.glyph.width());
+        }
+        let from = pieces.first().map_or(0, |p| p.x);
+        let to = pieces.last().map_or(0, |p| p.x + p.glyph.width());
+        // A pixel of margin each side.
+        let width = to - from + 2;
+        let mut coverage = vec![0u8; (width * LINE_ROWS) as usize];
+        for piece in pieces {
+            for row in 0..LINE_ROWS {
+                for dx in 0..piece.glyph.width() {
+                    if piece.glyph.is_ink(dx, row) {
+                        let col = piece.x - from + 1 + dx;
+                        coverage[(row * width + col) as usize] = 255;
+                    }
+                }
+            }
+        }
+        ItemName {
+            key: format!("{hash:016x}"),
+            text,
+            picture: NamePicture {
+                width,
+                height: LINE_ROWS,
+                coverage,
+            },
+        }
+    }
+
+    fn follow_hud(&mut self, hud: Option<&ExpReading>) -> Gain {
+        let Some(now) = hud.filter(|r| r.confirmed) else {
+            return Gain::Unknown;
+        };
+        let gain = self.hud.as_ref().and_then(|before| gained(before, now));
+        self.hud = Some(*now);
+        gain.map_or(Gain::Restart, Gain::Gained)
+    }
+
+    /// Checks the EXP lines read against the HUD's gain, learns digits from a single EXP line,
+    /// and confirms the reader. The reason lines were missed, if the two don't add up.
+    fn settle(&mut self, gain: Gain) -> Option<Missed> {
+        match gain {
+            Gain::Gained(g) => self.window.hud += g,
+            Gain::Restart => {
+                self.window = Window::default();
+                return None;
+            }
+            // No HUD to check against: a window can't be judged until there's one again.
+            Gain::Unknown if self.hud.is_none() => {
+                self.window = Window::default();
+                return None;
+            }
+            Gain::Unknown => return None,
+        }
+        let window = &mut self.window;
+        if window.lines.is_empty() && window.hud == 0 {
+            *window = Window::default();
+            return None;
+        }
+        window.age += 1;
+        let read: Option<u64> = window.lines.iter().map(|l| l.value).sum();
+        if read == Some(window.hud) && !window.lines.is_empty() {
+            if !window.blocked && !self.confirmed {
+                self.checks += 1;
+                self.misses = 0;
+                self.confirmed = self.checks >= CONFIRM_AFTER;
+            }
+            self.window = Window::default();
+            return None;
+        }
+        // One line whose digits aren't all known: the HUD says what it's worth.
+        let unknown: Vec<&ExpLine> = window.lines.iter().filter(|l| l.value.is_none()).collect();
+        if let [line] = unknown[..] {
+            let rest: u64 = window.lines.iter().filter_map(|l| l.value).sum();
+            if !window.blocked
+                && window.hud > rest
+                && line.teach(&mut self.atlas, window.hud - rest)
+            {
+                self.window = Window::default();
+                return None;
+            }
+        }
+        if window.age < SETTLE {
+            return None;
+        }
+        let short = read.is_none_or(|read| read < window.hud);
+        let evidence = !window.blocked && read.is_some();
+        self.window = Window::default();
+        if self.confirmed {
+            return Some(if short {
+                Missed::ExpShort
+            } else {
+                Missed::ExpOver
+            });
+        }
+        // EXP amounts all read that don't add up to the HUD's gain are evidence against the
+        // digits' names; a window with a line that couldn't be read is not.
+        if evidence {
+            self.checks = 0;
+            self.misses += 1;
+            if self.misses >= FORGET_AFTER {
+                self.atlas = Atlas::default();
+                self.misses = 0;
+            }
+        }
+        None
+    }
+}
+
+/// After a frame that lines up with nothing: the new lines at the bottom that are surely new,
+/// brighter than every line in the frame before.
+fn newer_than(before: &[Slot], now: &[Slot]) -> usize {
+    let brightest = before.iter().map(|s| s.strength).max().unwrap_or(0);
+    now.iter()
+        .take_while(|s| s.solid() && s.strength > brightest.saturating_add(BRIGHTER))
+        .count()
+}
+
+/// How many of a game area's bottom rows the reader looks at when the area is `height` game
+/// pixels tall, in game rows.
+pub fn rows_needed(height: u32) -> u32 {
+    unstretch::rows_for(height, NOTICE_ROWS)
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use crate::recognizers::exp_bar::test_support::{Canvas, Font, NEEDED_41, pct_of};
+
+    /// Every character the invented notice font has: the phrases' letters, the test items', and
+    /// digits and punctuation.
+    const CHARS: &str = "abcdefghijklmnopqrstuvwxyzABEPRSTUXY0123456789(+).,' ";
+    pub(crate) const WHITE: [u8; 3] = [255, 255, 255];
+    pub(crate) const YELLOW: [u8; 3] = [255, 255, 0];
+    /// How much strength a line loses each frame: about what four frames a second see.
+    const FADE: u8 = 12;
+
+    /// What shows behind the stack.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) enum Scene {
+        /// Brown and textured, like rock.
+        Rock,
+        /// Near white, like the clouds a white letter vanishes into.
+        Cloud,
+    }
+
+    impl Scene {
+        fn at(self, x: u32, y: u32) -> [u8; 3] {
+            let v = ((x * 7 + y * 13) % 29) as u8;
+            match self {
+                Scene::Rock => [85 + v, 51 + v / 2, 34],
+                Scene::Cloud => [226 + v / 2, 232 + v / 3, 240],
+            }
+        }
+    }
+
+    fn blend(top: [u8; 3], under: [u8; 3], strength: u8) -> [u8; 3] {
+        let a = f32::from(strength) / 255.0;
+        std::array::from_fn(|i| {
+            (f32::from(top[i]) * a + f32::from(under[i]) * (1.0 - a)).round() as u8
+        })
+    }
+
+    /// A line on screen: its text, its color, and how strong it still is (255 as it arrives).
+    struct Shown {
+        text: String,
+        color: [u8; 3],
+        strength: u8,
+    }
+
+    /// The notice stack over a scene, drawn the way the game draws it, frame after frame, with
+    /// the HUD's EXP beside it.
+    pub(crate) struct Game {
+        pub(crate) width: u32,
+        pub(crate) height: u32,
+        pub(crate) scene: Scene,
+        font: Font,
+        /// Bottom line first.
+        lines: Vec<Shown>,
+        pub(crate) exp: u64,
+        /// An opaque box over the bottom line, as something drawn over it.
+        pub(crate) covered: bool,
+    }
+
+    impl Game {
+        pub(crate) fn new(scene: Scene) -> Game {
+            Game {
+                width: 1366,
+                height: 768,
+                scene,
+                font: Font::new(CHARS, 11),
+                lines: Vec::new(),
+                exp: 100_000,
+                covered: false,
+            }
+        }
+
+        /// The next frame: the lines on screen fade, `arrive` (oldest first) enter at the
+        /// bottom, and the HUD gains `gained`.
+        pub(crate) fn next(&mut self, arrive: &[(&str, [u8; 3])], gained: u64) -> Canvas {
+            for line in &mut self.lines {
+                line.strength = line.strength.saturating_sub(FADE);
+            }
+            self.lines.retain(|l| l.strength > 60);
+            for (text, color) in arrive {
+                self.lines.insert(
+                    0,
+                    Shown {
+                        text: text.to_string(),
+                        color: *color,
+                        strength: 255,
+                    },
+                );
+            }
+            self.lines.truncate(SLOTS);
+            self.exp += gained;
+            self.draw()
+        }
+
+        pub(crate) fn hud(&self) -> ExpReading {
+            ExpReading {
+                level: Some(41),
+                exp: self.exp,
+                pct_hundredths: pct_of(self.exp, NEEDED_41),
+                needed: Some(NEEDED_41),
+                confirmed: true,
+            }
+        }
+
+        pub(crate) fn draw(&self) -> Canvas {
+            let (w, h) = (self.width, self.height);
+            let mut canvas = Canvas::new(w, h);
+            for y in h - NOTICE_ROWS - 4..h {
+                for x in 0..w {
+                    canvas.set(x, y, self.scene.at(x, y));
+                }
+            }
+            for (k, line) in self.lines.iter().enumerate() {
+                let top = h - BOTTOM_LINE_UP - LINE_PITCH * k as u32;
+                let columns: Vec<&[u8]> = line.text.chars().map(|c| self.font.columns(c)).collect();
+                let width: u32 = columns.iter().map(|c| c.len() as u32 + 1).sum::<u32>() - 1;
+                let mut x = w - RIGHT_MARGIN + 1 - width;
+                let mut core = std::collections::HashSet::new();
+                for glyph in columns {
+                    for &bits in glyph {
+                        for row in 0..7 {
+                            if bits >> row & 1 == 1 {
+                                core.insert((x, top + 1 + row));
+                            }
+                        }
+                        x += 1;
+                    }
+                    x += 1;
+                }
+                // The shadow, one pixel down and to the right, under the letters.
+                for &(x, y) in &core {
+                    if !core.contains(&(x + 1, y + 1)) {
+                        let under = self.scene.at(x + 1, y + 1);
+                        canvas.set(x + 1, y + 1, blend([0, 0, 0], under, line.strength));
+                    }
+                }
+                for &(x, y) in &core {
+                    let under = self.scene.at(x, y);
+                    canvas.set(x, y, blend(line.color, under, line.strength));
+                }
+            }
+            if self.covered {
+                let top = h - BOTTOM_LINE_UP - 2;
+                canvas.fill(w - 300, top, 300, LINE_ROWS + 4, [60, 60, 70]);
+            }
+            canvas
+        }
+    }
+
+    /// "You received EXP (+N)".
+    pub(crate) fn exp(amount: &str) -> String {
+        format!("You received EXP (+{amount})")
+    }
+
+    pub(crate) fn mesos(amount: &str) -> String {
+        format!("You have gained mesos (+{amount})")
+    }
+
+    pub(crate) fn party(amount: &str) -> String {
+        format!("Bonus EXP for PARTY (+{amount})")
+    }
+
+    pub(crate) fn item(name: &str, count: u32, tab: &str) -> String {
+        format!("{name} x{count} earned. ({tab})")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::*;
+    use super::*;
+
+    /// A frame: the lines that arrive in it, oldest first, and the EXP the HUD gains.
+    type Step = (Vec<(String, [u8; 3])>, u64);
+
+    /// One line arriving, with the HUD's gain.
+    fn one(text: &str, gained: u64) -> Step {
+        (vec![(text.to_string(), WHITE)], gained)
+    }
+
+    /// Plays frames into the reader.
+    fn run(game: &mut Game, reader: &mut NoticeReader, steps: Vec<Step>) -> Vec<NoticeReading> {
+        steps
+            .into_iter()
+            .map(|(arrive, gained)| {
+                let arrive: Vec<(&str, [u8; 3])> =
+                    arrive.iter().map(|(t, c)| (t.as_str(), *c)).collect();
+                let canvas = game.next(&arrive, gained);
+                reader.observe(&canvas.frame(), Some(&game.hud())).unwrap()
+            })
+            .collect()
+    }
+
+    /// EXP lines one at a time, each worth what the HUD gains, a few quiet frames between: they
+    /// name every digit, then three in a row check out.
+    fn learning(amounts: &[u64]) -> Vec<Step> {
+        let mut frames = vec![(Vec::new(), 0)];
+        for &n in amounts {
+            frames.push(one(&exp(&group_digits(&n.to_string())), n));
+            frames.push((Vec::new(), 0));
+        }
+        frames
+    }
+
+    const EVERY_DIGIT: [u64; 8] = [21, 43, 60, 57, 89, 21, 43, 60];
+
+    fn confirmed_reader(game: &mut Game) -> NoticeReader {
+        let mut reader = NoticeReader::new();
+        run(game, &mut reader, learning(&EVERY_DIGIT));
+        assert!(
+            reader.confirmed(),
+            "three EXP amounts in a row matched the HUD"
+        );
+        reader
+    }
+
+    fn notices(readings: &[NoticeReading]) -> Vec<Notice> {
+        readings.iter().flat_map(|r| r.notices.clone()).collect()
+    }
+
+    // Guards self-calibration: EXP lines name the digits only as the HUD's gain says, nothing
+    // is confirmed until three amounts in a row match, and then mesos, items and party bonus
+    // lines read. Fails if a reading shows before it's checked, or a kind of line misreads.
+    #[test]
+    fn learns_from_exp_lines_and_the_hud_then_reads_every_kind_of_line() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = NoticeReader::new();
+        let readings = run(&mut game, &mut reader, learning(&EVERY_DIGIT));
+        let first_confirmed = readings.iter().position(|r| r.confirmed).unwrap();
+        assert!(
+            readings[..first_confirmed].iter().all(|r| !r.confirmed),
+            "nothing confirmed while learning"
+        );
+        assert_eq!(notices(&readings[first_confirmed..]), [Notice::Exp(60)]);
+
+        let readings = run(
+            &mut game,
+            &mut reader,
+            vec![
+                one(&mesos("75"), 0),
+                (Vec::new(), 0),
+                one(&item("Red Potion", 1, "Use"), 0),
+                (Vec::new(), 0),
+                (vec![(exp("17"), WHITE), (party("5"), YELLOW)], 22),
+                (Vec::new(), 0),
+                (Vec::new(), 0),
+            ],
+        );
+        assert!(readings.iter().all(|r| r.confirmed && r.missed.is_none()));
+        let read = notices(&readings);
+        assert_eq!(read[0], Notice::Mesos(75));
+        let Notice::Item { name, count, tab } = &read[1] else {
+            panic!("an item: {read:?}");
+        };
+        // R and t are in no phrase seen yet; the Use tab is told by its s and e.
+        assert_eq!(
+            (name.text.as_str(), *count, *tab),
+            ("?ed Po?ion", 1, Some(Tab::Use))
+        );
+        assert_eq!(read[2..], [Notice::Exp(17), Notice::PartyBonus(5)]);
+    }
+
+    // Guards counting by movement: the same pickup twice, in two frames or in one, is two
+    // pickups. Fails if identical lines are taken for one line seen again.
+    #[test]
+    fn the_same_pickup_twice_counts_twice() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        let twelve = mesos("12");
+        let readings = run(
+            &mut game,
+            &mut reader,
+            vec![
+                one(&twelve, 0),
+                one(&twelve, 0),
+                (vec![(twelve.clone(), WHITE), (twelve.clone(), WHITE)], 0),
+                (Vec::new(), 0),
+            ],
+        );
+        assert_eq!(notices(&readings), vec![Notice::Mesos(12); 4]);
+        assert!(readings.iter().all(|r| r.missed.is_none()));
+    }
+
+    // Guards reading over a scene as white as the letters: the shadow tells them apart. Fails if
+    // the cloud is taken for letters.
+    #[test]
+    fn reads_over_white_clouds() {
+        let mut game = Game::new(Scene::Cloud);
+        let mut reader = confirmed_reader(&mut game);
+        let readings = run(
+            &mut game,
+            &mut reader,
+            vec![one(&mesos("98"), 0), (Vec::new(), 0)],
+        );
+        assert_eq!(notices(&readings), [Notice::Mesos(98)]);
+    }
+
+    // Guards item identity: the same name gives the same key, another name another key, and the
+    // text has the letters the phrases taught with `?` for the rest. Fails if a key depends on
+    // more than the name's shape.
+    #[test]
+    fn an_item_is_known_by_its_name_s_shape() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        let readings = run(
+            &mut game,
+            &mut reader,
+            vec![
+                one(&item("Snail Shell", 1, "Etc"), 0),
+                (Vec::new(), 0),
+                one(&item("Red Potion", 3, "Use"), 0),
+                one(&item("Snail Shell", 2, "Etc"), 0),
+            ],
+        );
+        let items: Vec<(String, String, u32)> = notices(&readings)
+            .into_iter()
+            .map(|n| match n {
+                Notice::Item { name, count, .. } => (name.key, name.text, count),
+                other => panic!("not an item: {other:?}"),
+            })
+            .collect();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].0, items[2].0, "the same name, the same key");
+        assert_ne!(items[0].0, items[1].0);
+        // S, h and l are in no phrase the reader has seen.
+        assert_eq!(items[0].1, "?nai? ??e??");
+        assert_eq!((items[0].2, items[1].2, items[2].2), (1, 3, 2));
+        let Notice::Item { name, .. } = &notices(&readings)[0] else {
+            unreachable!()
+        };
+        assert_eq!(name.picture.height, LINE_ROWS);
+        assert!(name.picture.coverage.contains(&255));
+    }
+
+    // Guards the honesty rules: a new line that can't be seen, a digit never learned, and EXP
+    // lines short of the HUD all say lines were missed, and none is guessed. Fails if a missed
+    // pickup passes silently.
+    #[test]
+    fn lines_that_cant_be_read_are_reported_missed() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = NoticeReader::new();
+        // Learned from amounts without a 5, 7, 8 or 9.
+        run(&mut game, &mut reader, learning(&[21, 43, 60, 21, 43, 60]));
+        assert!(reader.confirmed());
+
+        let unknown = run(&mut game, &mut reader, vec![one(&mesos("75"), 0)]);
+        assert_eq!(unknown[0].missed, Some(Missed::Unreadable));
+        assert!(unknown[0].notices.is_empty());
+
+        game.covered = true;
+        let covered = run(&mut game, &mut reader, vec![one(&mesos("12"), 0)]);
+        game.covered = false;
+        assert!(covered[0].notices.is_empty());
+        assert!(covered[0].missed.is_some());
+
+        let short = run(
+            &mut game,
+            &mut reader,
+            vec![
+                (Vec::new(), 0),
+                (Vec::new(), 0),
+                one(&exp("21"), 64),
+                (Vec::new(), 0),
+                (Vec::new(), 0),
+                (Vec::new(), 0),
+            ],
+        );
+        assert_eq!(notices(&short), [Notice::Exp(21)]);
+        assert!(short.iter().any(|r| r.missed == Some(Missed::ExpShort)));
+    }
+
+    // Guards amounts over a thousand: the HUD's gain names the comma too.
+    #[test]
+    fn amounts_with_commas() {
+        assert_eq!(parse_number("1,234"), Some(1234));
+        assert_eq!(parse_number("1234"), Some(1234));
+        assert_eq!(parse_number("12,34"), None);
+        assert_eq!(parse_number(",123"), None);
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = NoticeReader::new();
+        let readings = run(
+            &mut game,
+            &mut reader,
+            learning(&[1_234, 5_678, 9_012, 1_234, 5_678, 9_012]),
+        );
+        assert!(reader.confirmed());
+        assert_eq!(notices(&readings).last(), Some(&Notice::Exp(9_012)));
+    }
+
+    // Guards the stretched sizes: the stack's letters come back from the picture the game
+    // stretched exactly as at 1x, so what was learned at one size reads another.
+    #[test]
+    fn reads_a_frame_the_game_stretched() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        let canvas = game.next(&[(&mesos("39"), WHITE)], 0);
+        let rgb: Vec<[u8; 3]> = canvas
+            .bgra
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| [p[2], p[1], p[0]])
+            .collect();
+        let (width, height) = (1920, 1080);
+        let from = height - (NOTICE_ROWS + 8) * height / 768;
+        let bgra = unstretch::stretch(&rgb, canvas.width, width, height, from);
+        let frame = Frame::new(width, height, width as usize * 4, &bgra).unwrap();
+        let reading = reader.observe(&frame, Some(&game.hud())).unwrap();
+        assert_eq!(reading.notices, [Notice::Mesos(39)]);
+        assert!(reading.missed.is_none());
+    }
+
+    // Guards the edit distance that lets a touching pair or a speck cost a letter, not a line.
+    #[test]
+    fn phrases_are_read_with_a_letter_or_two_unknown() {
+        let read = |text: &str| -> Vec<Option<char>> {
+            text.chars().map(|c| (c != '?').then_some(c)).collect()
+        };
+        assert_eq!(distance(&read("YoureceivedEXP"), EXP_TEXT), 0);
+        assert_eq!(distance(&read("You?eceivedEXP"), EXP_TEXT), 1);
+        assert_eq!(distance(&read("Youhave?inedmesos"), MESOS_TEXT), 2);
+        assert!(distance(&read("Youhavegainedmesos"), EXP_TEXT) > PHRASE_ERRORS);
+    }
+}
