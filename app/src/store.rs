@@ -1,6 +1,7 @@
 //! What MesoVibe keeps on this computer: settings, each plugin's own data (JSON files), and the
-//! EXP bar digits the reader confirmed (`exp-bar.txt`, so later sessions read from the first
-//! frame), all in the app's data folder. Nothing leaves the device.
+//! shapes the readers confirmed (the EXP bar's digits in `exp-bar.txt`, the pickup notices'
+//! letters in `notices.txt`, so later sessions read from the first frame), all in the app's data
+//! folder. Nothing leaves the device.
 //!
 //! Writes go to a temporary file that is then renamed over the old one, so a crash never leaves a
 //! half-written file. A file that can't be read back (a disk error, a hand edit) is set aside as
@@ -16,8 +17,24 @@ use crate::dock::{ChatPosition, Corner};
 
 /// The largest blob a plugin may keep: enough for months of session history.
 const MAX_PLUGIN_BYTES: usize = 4 * 1024 * 1024;
-/// The EXP bar digits the reader confirmed.
-const EXP_BAR_FILE: &str = "exp-bar.txt";
+/// A reader whose confirmed shapes are kept between sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Learned {
+    /// The EXP bar's digits ([`mesovibe_engine::recognizers::exp_bar::ExpBarReader::knowledge`]).
+    ExpBar,
+    /// The pickup notices' letters and digits
+    /// ([`mesovibe_engine::recognizers::notices::NoticeReader::knowledge`]).
+    Notices,
+}
+
+impl Learned {
+    fn file(self) -> &'static str {
+        match self {
+            Learned::ExpBar => "exp-bar.txt",
+            Learned::Notices => "notices.txt",
+        }
+    }
+}
 /// There while MesoVibe restarts into an update the player chose: the next start opens the
 /// panel, whatever it was started with (presence.rs). A one-time marker, not a choice, so it
 /// isn't in [`Settings`].
@@ -209,15 +226,14 @@ impl Store {
         write_json(&path, value)
     }
 
-    /// What the EXP bar reader confirmed in an earlier session
-    /// ([`mesovibe_engine::recognizers::exp_bar::ExpBarReader::knowledge`]), if any.
-    pub fn exp_bar_knowledge(&self) -> Option<String> {
-        std::fs::read_to_string(self.dir.join(EXP_BAR_FILE)).ok()
+    /// What a reader confirmed in an earlier session, if any.
+    pub fn knowledge(&self, reader: Learned) -> Option<String> {
+        std::fs::read_to_string(self.dir.join(reader.file())).ok()
     }
 
-    /// Keeps what the EXP bar reader confirmed, or forgets it (`None`: it no longer fits the HUD).
-    pub fn keep_exp_bar_knowledge(&self, text: Option<&str>) -> Result<(), String> {
-        let path = self.dir.join(EXP_BAR_FILE);
+    /// Keeps what a reader confirmed, or forgets it (`None`: it no longer fits the game).
+    pub fn keep_knowledge(&self, reader: Learned, text: Option<&str>) -> Result<(), String> {
+        let path = self.dir.join(reader.file());
         match text {
             Some(text) => write_bytes(&path, text.as_bytes()),
             None => match std::fs::remove_file(&path) {
@@ -303,22 +319,34 @@ mod tests {
         dir
     }
 
+    // Each reader's shapes come back after a restart, apart from the other's, until forgotten.
+    // Fails if one reader's file overwrites the other's, or forgetting leaves the file behind.
     #[test]
-    fn the_exp_bar_digits_survive_a_restart_until_forgotten() {
-        let dir = temp_dir("exp-bar");
+    fn what_the_readers_learned_survives_a_restart_until_forgotten() {
+        let dir = temp_dir("learned");
         let store = Store::open(dir.clone());
-        assert_eq!(store.exp_bar_knowledge(), None);
+        assert_eq!(store.knowledge(Learned::ExpBar), None);
+        assert_eq!(store.knowledge(Learned::Notices), None);
         store
-            .keep_exp_bar_knowledge(Some("mesovibe exp-bar 1\n"))
+            .keep_knowledge(Learned::ExpBar, Some("mesovibe exp-bar 1\n"))
+            .unwrap();
+        store
+            .keep_knowledge(Learned::Notices, Some("mesovibe notices 1\n"))
             .unwrap();
         let again = Store::open(dir.clone());
         assert_eq!(
-            again.exp_bar_knowledge().as_deref(),
+            again.knowledge(Learned::ExpBar).as_deref(),
             Some("mesovibe exp-bar 1\n")
         );
-        again.keep_exp_bar_knowledge(None).unwrap();
-        again.keep_exp_bar_knowledge(None).unwrap();
-        assert_eq!(Store::open(dir.clone()).exp_bar_knowledge(), None);
+        assert_eq!(
+            again.knowledge(Learned::Notices).as_deref(),
+            Some("mesovibe notices 1\n")
+        );
+        again.keep_knowledge(Learned::ExpBar, None).unwrap();
+        again.keep_knowledge(Learned::ExpBar, None).unwrap();
+        let last = Store::open(dir.clone());
+        assert_eq!(last.knowledge(Learned::ExpBar), None);
+        assert!(last.knowledge(Learned::Notices).is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -10,9 +10,9 @@
 //! with the game window (`dock.rs`) and decides whether the panel should be built, hidden or
 //! destroyed (`presence.rs`). Nothing is captured while reading is off (Safe mode).
 //!
-//! The EXP bar digits the reader confirms are kept on this computer (`Store`), and the next time
-//! reading starts the reader begins from them, so it reads level and EXP from the first frame
-//! instead of learning again.
+//! The shapes the readers confirm (the EXP bar's digits, the pickup notices' letters) are kept on
+//! this computer (`Store`), and the next time reading starts the readers begin from them, so they
+//! read level, EXP and pickups from the first frame instead of learning again.
 
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -22,6 +22,7 @@ use mesovibe_engine::capture::{Backend, CaptureState, Grab};
 use mesovibe_engine::events::Event;
 use mesovibe_engine::recognizers::chat::ChatUnreadable;
 use mesovibe_engine::recognizers::exp_bar::{Calibration, ExpBarReader, Unreadable};
+use mesovibe_engine::recognizers::notices::NoticeReader;
 use mesovibe_engine::runner::{Runner, Tick};
 use mesovibe_engine::unstretch;
 use serde::Serialize;
@@ -30,7 +31,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::chat::ChatLog;
 use crate::dock::{self, Docker};
 use crate::presence::{self, Presence};
-use crate::store::Store;
+use crate::store::{Learned, Store};
 
 /// One engine tick: 4 Hz, the capture ceiling.
 const TICK: Duration = Duration::from_millis(250);
@@ -154,8 +155,7 @@ fn run(app: &AppHandle, inbox: &Receiver<Command>, mut reading: bool) {
     let mut last_snapshot: Option<Instant> = None;
     // Why capture is blocked, kept while it stays blocked: the error comes on one tick only.
     let mut blocked: Option<String> = None;
-    // The EXP bar digits as last kept on this computer.
-    let mut kept: Option<String> = None;
+    let mut kept = Kept::default();
     loop {
         let started = Instant::now();
         for command in woke.take().into_iter().chain(inbox.try_iter()) {
@@ -223,15 +223,18 @@ fn tick(
     docker: &mut Docker,
     presence: &mut Presence,
     blocked: &mut Option<String>,
-    kept: &mut Option<String>,
+    kept: &mut Kept,
 ) -> (CaptureState, bool) {
     let runner = runner.get_or_insert_with(|| {
-        let (reader, knowledge) = kept_reader(app);
-        *kept = knowledge;
-        Runner::with_reader(platform(), reader)
+        let (runner, now) = kept_runner(app);
+        *kept = now;
+        runner
     });
     let tick = runner.tick();
-    keep_knowledge(app, runner.exp_reader(), kept);
+    let exp_bar = runner.exp_reader().knowledge();
+    keep(app, Learned::ExpBar, exp_bar, &mut kept.exp_bar);
+    let notices = runner.notice_reader().knowledge();
+    keep(app, Learned::Notices, notices, &mut kept.notices);
     if let Some(error) = &tick.error {
         *blocked = Some(error.0.clone());
     }
@@ -268,30 +271,42 @@ fn tick(
     (tick.state, tick.exp.is_some() || tick.stale)
 }
 
-/// An EXP bar reader that starts from the digits kept on this computer, if any still read, and
-/// the text it would keep.
-fn kept_reader(app: &AppHandle) -> (ExpBarReader, Option<String>) {
-    let reader = app
-        .try_state::<Store>()
-        .and_then(|store| store.exp_bar_knowledge())
-        .and_then(|text| ExpBarReader::from_knowledge(&text))
-        .unwrap_or_default();
-    let knowledge = reader.knowledge();
-    (reader, knowledge)
+/// The readers' confirmed shapes as last kept on this computer.
+#[derive(Default)]
+struct Kept {
+    exp_bar: Option<String>,
+    notices: Option<String>,
 }
 
-/// Keeps the reader's confirmed digits when they change (a new digit or level tile learned), and
-/// forgets them when the reader dropped them because they no longer fit the HUD: a confirmed
-/// reader has knowledge until it drops it.
-fn keep_knowledge(app: &AppHandle, reader: &ExpBarReader, kept: &mut Option<String>) {
-    let now = reader.knowledge();
+/// A runner whose readers start from the shapes kept on this computer, where they still read,
+/// and the text each would keep.
+fn kept_runner(app: &AppHandle) -> (Runner<Platform>, Kept) {
+    let store = app.try_state::<Store>();
+    let text = |reader| store.as_ref().and_then(|store| store.knowledge(reader));
+    let exp = text(Learned::ExpBar)
+        .and_then(|text| ExpBarReader::from_knowledge(&text))
+        .unwrap_or_default();
+    let notices = text(Learned::Notices)
+        .and_then(|text| NoticeReader::from_knowledge(&text))
+        .unwrap_or_default();
+    let kept = Kept {
+        exp_bar: exp.knowledge(),
+        notices: notices.knowledge(),
+    };
+    (Runner::with_readers(platform(), exp, notices), kept)
+}
+
+/// Keeps a reader's confirmed shapes when they change (one more learned), and forgets them when
+/// the reader dropped them because they no longer fit the game: a confirmed reader has knowledge
+/// until it drops it.
+fn keep(app: &AppHandle, reader: Learned, now: Option<String>, kept: &mut Option<String>) {
     if now == *kept {
         return;
     }
     let Some(store) = app.try_state::<Store>() else {
         return;
     };
-    if store.keep_exp_bar_knowledge(now.as_deref()).is_ok() {
+    if store.keep_knowledge(reader, now.as_deref()).is_ok() {
         *kept = now;
     }
 }

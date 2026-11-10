@@ -26,7 +26,9 @@
 //! letters follow from the ones known. Readings are confirmed once three EXP amounts in a row
 //! match the HUD; until then they're marked unconfirmed, and nothing should be shown from them.
 //! Only EXP amounts name digits, so a digit no EXP amount has had yet stays unknown, and a mesos
-//! amount with it can't be read.
+//! amount with it can't be read. What was confirmed can be kept on the device
+//! ([`NoticeReader::knowledge`]), so the next session reads from its first pickup and the digits
+//! add up across sessions.
 //!
 //! A line's letters are cut from the first frame it shows in, while it's still at full strength:
 //! at four frames a second that's within a quarter second of its arrival. Letters are compared
@@ -102,6 +104,11 @@ const CONFIRM_AFTER: usize = 3;
 /// EXP amounts in a row that may disagree with the HUD while learning before what was learned is
 /// dropped and learned again.
 const FORGET_AFTER: usize = 3;
+/// The first line of [`NoticeReader::knowledge`]'s text. A reader refuses any other.
+const KNOWLEDGE_HEADER: &str = "mesovibe notices 1";
+/// EXP lines in a row that letters kept from an earlier session can't read before the reader
+/// drops them and learns again. Only a game update that redrew the font should get there.
+const RESTORE_PATIENCE: usize = 3;
 
 /// The inventory tab a picked-up item went to, as the notice names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -170,14 +177,30 @@ pub struct NamePicture {
 pub enum Missed {
     /// The stack couldn't be lined up with the last frame's.
     Unaligned,
-    /// A new line couldn't be read: covered, or a letter or digit not learned yet.
+    /// A new line couldn't be read: covered, or its letters not learned yet.
     Unreadable,
+    /// A mesos line whose amount has a digit not learned yet.
+    NotLearned,
     /// The HUD gained more EXP than the EXP lines read add up to.
     ExpShort,
     /// The EXP lines read add up to more than the HUD gained.
     ExpOver,
     /// The stack was out of sight for a while, so lines may have come and gone unseen.
     Lost,
+}
+
+impl Missed {
+    /// A stable name for the reason, for events.
+    pub fn name(self) -> &'static str {
+        match self {
+            Missed::Unaligned => "unaligned",
+            Missed::Unreadable => "unreadable",
+            Missed::NotLearned => "not_learned",
+            Missed::ExpShort => "exp_short",
+            Missed::ExpOver => "exp_over",
+            Missed::Lost => "lost",
+        }
+    }
 }
 
 /// What one frame of the notice stack brought.
@@ -556,6 +579,23 @@ const PHRASE_ERRORS: usize = 2;
 /// Most digits and commas an amount has: "1,234,567".
 const MAX_AMOUNT: usize = 9;
 
+/// Whether the reader could have learned `c`: a letter of one of the game's phrases or tabs, a
+/// digit, or an amount's punctuation.
+fn learnable(c: char) -> bool {
+    c.is_ascii_digit()
+        || ",(+)x".contains(c)
+        || [
+            EXP_TEXT,
+            MESOS_TEXT,
+            PARTY_TEXT,
+            PARTY_TEXT_JOINED,
+            "earned.",
+        ]
+        .iter()
+        .any(|text| text.contains(c))
+        || Tab::ALL.iter().any(|tab| tab.name().contains(c))
+}
+
 /// How many letters differ between what was read and `text`, counting each unknown, wrong,
 /// missing or extra letter once (edit distance).
 fn distance(read: &[Option<char>], text: &str) -> usize {
@@ -800,6 +840,10 @@ pub struct NoticeReader {
     /// EXP amounts that didn't, in a row, while learning.
     misses: usize,
     confirmed: bool,
+    /// Started from letters kept in an earlier session ([`NoticeReader::from_knowledge`]) that
+    /// no EXP line has checked against the HUD yet this session: how many EXP lines in a row they
+    /// couldn't read.
+    restored: Option<usize>,
 }
 
 impl NoticeReader {
@@ -809,6 +853,49 @@ impl NoticeReader {
 
     pub fn confirmed(&self) -> bool {
         self.confirmed
+    }
+
+    /// What the reader has confirmed, as text to keep on the player's device so the next session
+    /// reads from its first pickup ([`NoticeReader::from_knowledge`]): each letter's shape. The
+    /// shapes never leave the device. `None` until the letters are confirmed.
+    pub fn knowledge(&self) -> Option<String> {
+        if !self.confirmed {
+            return None;
+        }
+        let mut text = format!("{KNOWLEDGE_HEADER}\n");
+        for (name, glyph) in self.atlas.entries() {
+            text.push_str(&format!("{:x} {}\n", u32::from(name), glyph.encode()));
+        }
+        Some(text)
+    }
+
+    /// A reader that starts from [`NoticeReader::knowledge`] kept in an earlier session, so it
+    /// reads the first pickup. If the kept letters can't read EXP lines that are plainly there,
+    /// as after a game update that redrew the font, it drops them and learns again. `None` for
+    /// text it couldn't have written.
+    pub fn from_knowledge(text: &str) -> Option<NoticeReader> {
+        let mut lines = text.lines();
+        if lines.next()? != KNOWLEDGE_HEADER {
+            return None;
+        }
+        let mut reader = NoticeReader::new();
+        for line in lines.filter(|l| !l.is_empty()) {
+            let (name, glyph) = line.split_once(' ')?;
+            let name = u32::from_str_radix(name, 16)
+                .ok()
+                .and_then(char::from_u32)
+                .filter(|&c| learnable(c))?;
+            reader
+                .atlas
+                .learn(&[Glyph::decode(glyph)?], &name.to_string())
+                .ok()?;
+        }
+        if reader.atlas.is_empty() {
+            return None;
+        }
+        reader.confirmed = true;
+        reader.restored = Some(0);
+        Some(reader)
     }
 
     /// The new lines in this frame, which holds at least [`rows_needed`] rows. `hud` is the EXP
@@ -835,6 +922,16 @@ impl NoticeReader {
     pub fn reset(&mut self) {
         self.lost |= self.lines.is_some();
         self.lines = None;
+    }
+
+    /// Starts over for a game that was closed and started again, maybe with another character:
+    /// nothing on screen carries over, and nothing could be picked up meanwhile. What was learned
+    /// stays.
+    pub fn restart(&mut self) {
+        self.lines = None;
+        self.lost = false;
+        self.hud = None;
+        self.window = Window::default();
     }
 
     fn observe_1x(
@@ -887,7 +984,16 @@ impl NoticeReader {
                     notices.push(Notice::Item { name, count, tab });
                 }
                 Read::Other => notices.push(Notice::Other),
-                Read::Mesos(None) | Read::Item(None) | Read::Unknown => {
+                // A mesos line whose amount has a digit not learned yet: missed, but it carried
+                // no EXP, so the EXP lines can still teach and check.
+                Read::Mesos(None) => {
+                    missed.get_or_insert(Missed::NotLearned);
+                }
+                // An item count too large to be one.
+                Read::Item(None) => {
+                    missed.get_or_insert(Missed::Unreadable);
+                }
+                Read::Unknown => {
                     missed.get_or_insert(Missed::Unreadable);
                     self.window.blocked = true;
                 }
@@ -896,7 +1002,7 @@ impl NoticeReader {
         self.lines = Some(now);
         self.lost = false;
         // Lines may have come and gone unseen: the EXP window can't teach or check anything.
-        if missed.is_some() {
+        if matches!(missed, Some(Missed::Unaligned | Missed::Lost)) {
             self.window.blocked = true;
         }
         let gain = self.follow_hud(hud);
@@ -912,6 +1018,7 @@ impl NoticeReader {
 
     /// What a solid line says.
     fn read(&mut self, cut: &Cut) -> Read {
+        self.check_restored(cut);
         if self.atlas.is_empty() {
             // Before any letter is known, a line shaped like an EXP line waits for the HUD to
             // name its letters and digits.
@@ -925,6 +1032,33 @@ impl NoticeReader {
         }
         self.learn_from(cut);
         self.parse(cut)
+    }
+
+    /// Checks letters kept from an earlier session against a line shaped like an EXP line. Kept
+    /// letters that can't read most of its phrase count against them, and after
+    /// [`RESTORE_PATIENCE`] such lines in a row they're dropped and learned again. Lines drawn
+    /// over by something else rarely split into the phrase's words, so they don't count.
+    fn check_restored(&mut self, cut: &Cut) {
+        let Some(strikes) = self.restored else {
+            return;
+        };
+        let Some(fit) = fit_amount(cut, EXP_PHRASE).filter(|_| !cut.yellow) else {
+            return;
+        };
+        let reads =
+            agreement(&self.atlas, &fit.fixed).is_some_and(|known| known * 2 >= fit.fixed.len());
+        self.restored = match reads {
+            true => Some(0),
+            false if strikes + 1 < RESTORE_PATIENCE => Some(strikes + 1),
+            false => {
+                self.atlas = Atlas::default();
+                self.confirmed = false;
+                self.checks = 0;
+                self.misses = 0;
+                self.window = Window::default();
+                None
+            }
+        };
     }
 
     /// Learns the letters of a line that splits exactly into one of the game's phrases, when the
@@ -965,11 +1099,12 @@ impl NoticeReader {
         let pieces: Vec<&Piece> = cut.words.iter().flatten().collect();
         let names: Vec<Option<char>> = pieces.iter().map(|p| self.atlas.name(&p.glyph)).collect();
         let n = names.len();
-        if names.last() != Some(&Some(')')) {
-            return match cut.yellow {
-                true => Read::Unknown,
-                false => Read::Other,
-            };
+        match names.last() {
+            Some(Some(')')) => {}
+            // A white line ending in a letter it knows, like "This item is unavailable for
+            // pick-up.": not a pickup. One ending in a letter it doesn't know may be one.
+            Some(Some(_)) if !cut.yellow => return Read::Other,
+            _ => return Read::Unknown,
         }
         // An amount: a phrase, then "(+", digits and ")".
         let open = (n.saturating_sub(MAX_AMOUNT + 3)..n.saturating_sub(2))
@@ -1119,6 +1254,10 @@ impl NoticeReader {
                 self.misses = 0;
                 self.confirmed = self.checks >= CONFIRM_AFTER;
             }
+            // Letters kept from an earlier session read an EXP amount the HUD agrees with.
+            if !window.blocked {
+                self.restored = None;
+            }
             self.window = Window::default();
             return None;
         }
@@ -1249,6 +1388,19 @@ pub(crate) mod test_support {
             }
         }
 
+        /// The same game after an update that redrew the font's letters, digits and brackets:
+        /// each one's rows below the top flipped, so none keeps any old letter's shape.
+        pub(crate) fn redrawn(mut self) -> Game {
+            for (c, columns) in &mut self.font.glyphs {
+                if c.is_alphanumeric() || "(+)".contains(*c) {
+                    for column in columns {
+                        *column ^= 0b111_1110;
+                    }
+                }
+            }
+            self
+        }
+
         /// The next frame: the lines on screen fade, `arrive` (oldest first) enter at the
         /// bottom, and the HUD gains `gained`.
         pub(crate) fn next(&mut self, arrive: &[(&str, [u8; 3])], gained: u64) -> Canvas {
@@ -1342,23 +1494,21 @@ pub(crate) mod test_support {
     pub(crate) fn item(name: &str, count: u32, tab: &str) -> String {
         format!("{name} x{count} earned. ({tab})")
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::test_support::*;
-    use super::*;
 
     /// A frame: the lines that arrive in it, oldest first, and the EXP the HUD gains.
-    type Step = (Vec<(String, [u8; 3])>, u64);
+    pub(crate) type Step = (Vec<(String, [u8; 3])>, u64);
 
     /// One line arriving, with the HUD's gain.
-    fn one(text: &str, gained: u64) -> Step {
+    pub(crate) fn one(text: &str, gained: u64) -> Step {
         (vec![(text.to_string(), WHITE)], gained)
     }
 
     /// Plays frames into the reader.
-    fn run(game: &mut Game, reader: &mut NoticeReader, steps: Vec<Step>) -> Vec<NoticeReading> {
+    pub(crate) fn run(
+        game: &mut Game,
+        reader: &mut NoticeReader,
+        steps: Vec<Step>,
+    ) -> Vec<NoticeReading> {
         steps
             .into_iter()
             .map(|(arrive, gained)| {
@@ -1372,7 +1522,7 @@ mod tests {
 
     /// EXP lines one at a time, each worth what the HUD gains, a few quiet frames between: they
     /// name every digit, then three in a row check out.
-    fn learning(amounts: &[u64]) -> Vec<Step> {
+    pub(crate) fn learning(amounts: &[u64]) -> Vec<Step> {
         let mut frames = vec![(Vec::new(), 0)];
         for &n in amounts {
             frames.push(one(&exp(&group_digits(&n.to_string())), n));
@@ -1381,9 +1531,10 @@ mod tests {
         frames
     }
 
-    const EVERY_DIGIT: [u64; 8] = [21, 43, 60, 57, 89, 21, 43, 60];
+    pub(crate) const EVERY_DIGIT: [u64; 8] = [21, 43, 60, 57, 89, 21, 43, 60];
 
-    fn confirmed_reader(game: &mut Game) -> NoticeReader {
+    /// A reader that learned every digit from `game`'s EXP lines and confirmed them.
+    pub(crate) fn confirmed_reader(game: &mut Game) -> NoticeReader {
         let mut reader = NoticeReader::new();
         run(game, &mut reader, learning(&EVERY_DIGIT));
         assert!(
@@ -1392,6 +1543,12 @@ mod tests {
         );
         reader
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::*;
+    use super::*;
 
     fn notices(readings: &[NoticeReading]) -> Vec<Notice> {
         readings.iter().flat_map(|r| r.notices.clone()).collect()
@@ -1523,7 +1680,7 @@ mod tests {
         assert!(reader.confirmed());
 
         let unknown = run(&mut game, &mut reader, vec![one(&mesos("75"), 0)]);
-        assert_eq!(unknown[0].missed, Some(Missed::Unreadable));
+        assert_eq!(unknown[0].missed, Some(Missed::NotLearned));
         assert!(unknown[0].notices.is_empty());
 
         game.covered = true;
@@ -1546,6 +1703,105 @@ mod tests {
         );
         assert_eq!(notices(&short), [Notice::Exp(21)]);
         assert!(short.iter().any(|r| r.missed == Some(Missed::ExpShort)));
+    }
+
+    // A mesos line with a digit not learned yet carries no EXP, so it mustn't stop EXP lines
+    // from teaching. Fails if the 9 is never learned because the mesos line beside it blocked.
+    #[test]
+    fn a_mesos_line_it_cant_read_doesnt_stop_exp_lines_teaching() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = NoticeReader::new();
+        run(&mut game, &mut reader, learning(&[21, 43, 60, 21, 43, 60]));
+        assert!(reader.confirmed());
+        let readings = run(
+            &mut game,
+            &mut reader,
+            vec![
+                (vec![(mesos("57"), WHITE), (exp("29"), WHITE)], 29),
+                (Vec::new(), 0),
+                one(&mesos("99"), 0),
+            ],
+        );
+        assert_eq!(readings[0].missed, Some(Missed::NotLearned));
+        assert_eq!(notices(&readings), [Notice::Mesos(99)], "the 9 was learned");
+    }
+
+    // Guards keeping letters between launches: the next session reads its first pickup, and
+    // saves back the same text. Fails if kept letters read unconfirmed or don't round-trip.
+    #[test]
+    fn what_it_confirmed_is_kept_and_read_at_once_next_session() {
+        let mut game = Game::new(Scene::Rock);
+        assert_eq!(
+            NoticeReader::new().knowledge(),
+            None,
+            "nothing to keep before confirming"
+        );
+        let kept = confirmed_reader(&mut game).knowledge().unwrap();
+        let mut next = NoticeReader::from_knowledge(&kept).unwrap();
+        assert!(next.confirmed());
+        assert_eq!(next.knowledge(), Some(kept.clone()), "saved back the same");
+        // A file that picked up Windows line endings reads the same.
+        assert!(NoticeReader::from_knowledge(&kept.replace('\n', "\r\n")).is_some());
+        let mut game = Game::new(Scene::Cloud);
+        let readings = run(
+            &mut game,
+            &mut next,
+            vec![(Vec::new(), 0), one(&mesos("85"), 0)],
+        );
+        assert_eq!(notices(&readings), [Notice::Mesos(85)]);
+        assert!(readings.iter().all(|r| r.confirmed && r.missed.is_none()));
+        // The mesos line taught its phrase's letters, and what was kept is still there.
+        let grown = next.knowledge().unwrap();
+        assert!(grown.len() > kept.len());
+        assert!(kept.lines().all(|line| grown.lines().any(|l| l == line)));
+    }
+
+    #[test]
+    fn kept_letters_must_be_text_a_reader_wrote() {
+        let kept = confirmed_reader(&mut Game::new(Scene::Rock))
+            .knowledge()
+            .unwrap();
+        let first = kept.lines().nth(1).unwrap();
+        let (name, glyph) = first.split_once(' ').unwrap();
+        for bad in [
+            String::new(),
+            "hello".to_string(),
+            KNOWLEDGE_HEADER.to_string(),
+            kept.replace("notices 1", "notices 2"),
+            // A letter no phrase has.
+            format!("{kept}5a {glyph}\n"),
+            // A second shape named the same.
+            format!("{kept}{name} 1:1\n"),
+            format!("{kept}junk\n"),
+        ] {
+            assert!(NoticeReader::from_knowledge(&bad).is_none(), "{bad:?}");
+        }
+    }
+
+    // After a game update that redrew the font, kept letters must never read wrong, and the
+    // reader must learn the new ones. Fails if it stays unreadable for good or shows a wrong
+    // amount.
+    #[test]
+    fn kept_letters_that_no_longer_fit_are_dropped_and_learned_again() {
+        let kept = confirmed_reader(&mut Game::new(Scene::Rock))
+            .knowledge()
+            .unwrap();
+        let mut reader = NoticeReader::from_knowledge(&kept).unwrap();
+        let mut game = Game::new(Scene::Rock).redrawn();
+        let amounts: Vec<u64> = EVERY_DIGIT.iter().chain(&EVERY_DIGIT).copied().collect();
+        let readings = run(&mut game, &mut reader, learning(&amounts));
+        for r in readings.iter().filter(|r| r.confirmed) {
+            for n in &r.notices {
+                assert!(matches!(n, Notice::Exp(v) if amounts.contains(v)), "{n:?}");
+            }
+        }
+        assert!(reader.confirmed(), "learned the redrawn letters");
+        let relearned = reader.knowledge().unwrap();
+        assert_ne!(relearned, kept);
+        assert_eq!(
+            notices(&run(&mut game, &mut reader, vec![one(&mesos("70"), 0)])),
+            [Notice::Mesos(70)]
+        );
     }
 
     // Guards amounts over a thousand: the HUD's gain names the comma too.

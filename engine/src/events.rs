@@ -7,7 +7,8 @@ use ts_rs::TS;
 
 /// Version of the event schema. Bump on any change plugins can observe.
 /// 2: `ExpChanged` gained `needed`, and its `level` became optional.
-pub const SCHEMA_VERSION: u32 = 2;
+/// 3: `MesosGained`, `ItemGained` and `NoticesMissed`, from the pickup notices.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Events the engine emits after a confident read (below the confidence
 /// threshold a recognizer reports "unreadable" and no value event is sent).
@@ -29,6 +30,27 @@ pub enum Event {
     },
     /// The level went up by one or more.
     LevelUp { level: u16 },
+    /// Mesos picked up: the game's "You have gained mesos (+N)".
+    MesosGained {
+        #[ts(type = "number")]
+        amount: u64,
+    },
+    /// An item picked up: the game's "<name> xN earned. (<tab>)". `item` is the name's exact
+    /// shape as text, the same every time the same item is picked up, whether or not its letters
+    /// are known yet. `tab` is the inventory tab it went to ("Equip", "Use", "Setup", "Etc" or
+    /// "Cash"), when its letters are known.
+    ItemGained {
+        item: String,
+        count: u32,
+        tab: Option<&'static str>,
+    },
+    /// Pickup notices may have been missed, so the mesos and items counted from them are at
+    /// least what was picked up. `reason`: `unaligned` (the notices moved in a way that lines up
+    /// with nothing, as when something covered them), `unreadable` (a new line couldn't be read),
+    /// `not_learned` (a mesos amount has a digit not learned yet), `exp_short` or `exp_over` (the
+    /// EXP lines read don't add up to what the EXP bar gained), `lost` (the notices were out of
+    /// sight for a while).
+    NoticesMissed { reason: &'static str },
     /// A recognizer could not read its region confidently.
     Unreadable { recognizer: &'static str },
 }

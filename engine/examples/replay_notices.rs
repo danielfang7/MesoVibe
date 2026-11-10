@@ -7,11 +7,12 @@
 //! any tally of what the runs really hold.
 //!
 //! ```text
-//! cargo run -p mesovibe-engine --release --example replay_notices -- [--quiet] [--carry] <run folder>...
+//! cargo run -p mesovibe-engine --release --example replay_notices -- [--quiet] [--carry | --join] <run folder>...
 //! ```
 //!
-//! Each run starts with readers that know nothing, unless `--carry` keeps what the notice reader
-//! learned from one run to the next, as it would between launches.
+//! Each run starts with readers that know nothing, unless `--carry` passes what the notice reader
+//! confirmed from one run to the next through the text the app keeps between launches, or `--join`
+//! reads the runs as one session with gaps between them, keeping what it was still learning too.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -28,6 +29,7 @@ use capture_run::{frames_of, load};
 struct Args {
     quiet: bool,
     carry: bool,
+    join: bool,
     runs: Vec<PathBuf>,
 }
 
@@ -35,17 +37,19 @@ fn parse_args() -> Result<Args, String> {
     let mut out = Args {
         quiet: false,
         carry: false,
+        join: false,
         runs: Vec::new(),
     };
     for a in std::env::args().skip(1) {
         match a.as_str() {
             "--quiet" => out.quiet = true,
             "--carry" => out.carry = true,
+            "--join" => out.join = true,
             _ => out.runs.push(PathBuf::from(a)),
         }
     }
     if out.runs.is_empty() {
-        return Err("usage: replay_notices [--quiet] [--carry] <run>...".into());
+        return Err("usage: replay_notices [--quiet] [--carry | --join] <run>...".into());
     }
     Ok(out)
 }
@@ -98,8 +102,13 @@ fn main() -> ExitCode {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let mut hud = ExpBarReader::new();
-        if args.carry {
+        if args.join {
             notices.reset();
+        } else if args.carry {
+            notices = notices
+                .knowledge()
+                .and_then(|text| NoticeReader::from_knowledge(&text))
+                .unwrap_or_default();
         } else {
             notices = NoticeReader::new();
         }

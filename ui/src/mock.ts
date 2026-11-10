@@ -171,7 +171,7 @@ export function mockHost(scenario: string): Host {
   }, 250);
 
   return {
-    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 2 }),
+    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 3 }),
     settings: async () => settings,
     startup: async () => startup,
     setStartup: async (on) => {

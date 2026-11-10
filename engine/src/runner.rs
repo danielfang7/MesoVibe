@@ -15,6 +15,7 @@ use crate::capture::{Backend, CaptureError, CaptureSignal, CaptureState, GameWin
 use crate::events::Event;
 use crate::recognizers::chat::{self, ChatReader, ChatReading, ChatUnreadable};
 use crate::recognizers::exp_bar::{self, ExpBarReader, ExpReading, Unreadable};
+use crate::recognizers::notices::{self, Notice, NoticeReader, NoticeReading, NoticeUnreadable};
 
 /// The name the EXP bar reader goes by in [`Event::Unreadable`].
 pub const EXP_BAR: &str = "exp_bar";
@@ -25,7 +26,9 @@ pub const STALE_AFTER: u32 = 8;
 /// How many of a game area's bottom rows the engine reads at first when the area is `height` game
 /// pixels tall: what its readers need, in game rows.
 pub fn rows_needed(height: u32) -> u32 {
-    exp_bar::rows_needed(height).max(chat::rows_needed(height))
+    exp_bar::rows_needed(height)
+        .max(chat::rows_needed(height))
+        .max(notices::rows_needed(height))
 }
 
 /// What one tick saw and did.
@@ -38,6 +41,8 @@ pub struct Tick {
     /// New chat lines this tick: `None` unless capturing. Chat stays out of `events`, so plugins
     /// never see it.
     pub chat: Option<Result<ChatReading, ChatUnreadable>>,
+    /// New pickup notices this tick: `None` unless capturing.
+    pub notices: Option<Result<NoticeReading, NoticeUnreadable>>,
     /// Typed events. Only ever produced while capturing.
     pub events: Vec<Event>,
     /// Why capture failed, on the tick it did.
@@ -53,6 +58,7 @@ pub struct Runner<B> {
     window: Option<GameWindow>,
     exp: ExpBarReader,
     chat: ChatReader,
+    notices: NoticeReader,
     /// The last confirmed reading, which events are measured from.
     confirmed: Option<ExpReading>,
     /// Whether the EXP bar read last tick, so a covered bar is reported once, not every tick.
@@ -65,17 +71,18 @@ pub struct Runner<B> {
 
 impl<B: Backend> Runner<B> {
     pub fn new(backend: B) -> Self {
-        Self::with_reader(backend, ExpBarReader::new())
+        Self::with_readers(backend, ExpBarReader::new(), NoticeReader::new())
     }
 
-    /// Starts with what an EXP bar reader learned before.
-    pub fn with_reader(backend: B, exp: ExpBarReader) -> Self {
+    /// Starts with what an EXP bar reader and a notice reader learned before.
+    pub fn with_readers(backend: B, exp: ExpBarReader, notices: NoticeReader) -> Self {
         Runner {
             backend,
             state: CaptureState::NoGame,
             window: None,
             exp,
             chat: ChatReader::new(),
+            notices,
             confirmed: None,
             readable: false,
             last_grab: None,
@@ -94,6 +101,10 @@ impl<B: Backend> Runner<B> {
 
     pub fn exp_reader(&self) -> &ExpBarReader {
         &self.exp
+    }
+
+    pub fn notice_reader(&self) -> &NoticeReader {
+        &self.notices
     }
 
     pub fn backend_mut(&mut self) -> &mut B {
@@ -118,6 +129,7 @@ impl<B: Backend> Runner<B> {
             // A game started again may be another character: don't measure from the old one.
             self.confirmed = None;
             self.chat.reset();
+            self.notices.restart();
             self.readable = false;
             self.stale = 0;
         }
@@ -140,6 +152,7 @@ impl<B: Backend> Runner<B> {
             window: found,
             exp: None,
             chat: None,
+            notices: None,
             events: Vec::new(),
             error: None,
             stale: false,
@@ -171,9 +184,12 @@ impl<B: Backend> Runner<B> {
                         Some(_) if !grab.fresh || self.state != CaptureState::Capturing => {}
                         Some(frame) => {
                             let reading = self.exp.observe(&frame);
+                            let notices = self.notices.observe(&frame, reading.as_ref().ok());
                             tick.events = self.events_for(&reading);
+                            tick.events.extend(notice_events(&notices));
                             tick.exp = Some(reading);
                             tick.chat = Some(self.chat.observe(&frame));
+                            tick.notices = Some(notices);
                         }
                         None => tick.error = Some(CaptureError("a malformed frame".to_string())),
                     }
@@ -185,6 +201,10 @@ impl<B: Backend> Runner<B> {
                 self.state = self.state.next(CaptureSignal::CaptureFailed);
                 self.backend.stop();
             }
+        }
+        // Not reading: pickups may come and go unseen until it reads again.
+        if self.state != CaptureState::Capturing {
+            self.notices.reset();
         }
         debug_assert!(tick.events.is_empty() || self.state.emits_events());
         tick.state = self.state;
@@ -215,6 +235,28 @@ impl<B: Backend> Runner<B> {
             Err(_) => Vec::new(),
         }
     }
+}
+
+/// The events a notice reading brings: its mesos and items, and whether lines may have been
+/// missed. None while the reader is still learning its letters.
+fn notice_events(reading: &Result<NoticeReading, NoticeUnreadable>) -> Vec<Event> {
+    let Some(reading) = reading.as_ref().ok().filter(|r| r.confirmed) else {
+        return Vec::new();
+    };
+    let gained = reading.notices.iter().filter_map(|notice| match notice {
+        Notice::Mesos(amount) => Some(Event::MesosGained { amount: *amount }),
+        Notice::Item { name, count, tab } => Some(Event::ItemGained {
+            item: name.key.clone(),
+            count: *count,
+            tab: tab.map(|tab| tab.name()),
+        }),
+        // EXP comes from the EXP bar.
+        Notice::Exp(_) | Notice::PartyBonus(_) | Notice::Other => None,
+    });
+    let missed = reading
+        .missed
+        .map(|why| Event::NoticesMissed { reason: why.name() });
+    gained.chain(missed).collect()
 }
 
 #[cfg(test)]
@@ -459,6 +501,70 @@ mod tests {
         assert_eq!(tick.state, CaptureState::Capturing);
         assert_eq!(tick.exp, Some(Err(Unreadable::Learning)));
         assert!(!tick.stale);
+    }
+
+    // Pickups reach plugins as events only once the notice reader's letters are confirmed, and a
+    // spell of not reading says pickups may be missing. Fails if a pickup is lost between the
+    // reader and the events, one shows while learning, or a pause passes silently.
+    #[test]
+    fn pickups_become_events_once_the_letters_are_confirmed() {
+        use crate::recognizers::notices::test_support::{
+            Game, Scene, WHITE, confirmed_reader, item, mesos,
+        };
+        let mut game = Game::new(Scene::Rock);
+        let mut learning = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(game.next(&[], 0)),
+            ..Fake::default()
+        });
+        learning.tick();
+        learning.backend_mut().canvas = Some(game.next(&[(&mesos("12"), WHITE)], 0));
+        let tick = learning.tick();
+        assert!(matches!(&tick.notices, Some(Ok(r)) if !r.confirmed));
+        assert!(tick.events.is_empty(), "nothing while learning");
+
+        let reader = confirmed_reader(&mut game);
+        let mut runner = Runner::with_readers(
+            Fake {
+                window: Some(GAME),
+                canvas: Some(game.next(&[], 0)),
+                ..Fake::default()
+            },
+            ExpBarReader::new(),
+            reader,
+        );
+        assert!(runner.notice_reader().confirmed());
+        assert!(runner.tick().events.is_empty(), "lines already on screen");
+        runner.backend_mut().canvas = Some(game.next(&[(&mesos("75"), WHITE)], 0));
+        assert_eq!(runner.tick().events, [Event::MesosGained { amount: 75 }]);
+        runner.backend_mut().canvas = Some(game.next(&[(&item("Red Potion", 2, "Use"), WHITE)], 0));
+        let events = runner.tick().events;
+        assert!(
+            matches!(
+                events.as_slice(),
+                [Event::ItemGained { item, count: 2, tab: Some("Use") }] if item.len() == 16
+            ),
+            "{events:?}"
+        );
+        // Minimized and back: whatever arrived meanwhile went unseen.
+        runner.backend_mut().window = Some(GameWindow {
+            minimized: true,
+            ..GAME
+        });
+        runner.tick();
+        runner.backend_mut().window = Some(GAME);
+        runner.backend_mut().canvas = Some(game.next(&[], 0));
+        assert_eq!(
+            runner.tick().events,
+            [Event::NoticesMissed { reason: "lost" }]
+        );
+        // Closed and started again: nothing could be picked up meanwhile.
+        runner.backend_mut().window = None;
+        runner.tick();
+        runner.backend_mut().window = Some(GameWindow { id: 8, ..GAME });
+        assert!(runner.tick().events.is_empty());
+        runner.backend_mut().canvas = Some(game.next(&[(&mesos("12"), WHITE)], 0));
+        assert_eq!(runner.tick().events, [Event::MesosGained { amount: 12 }]);
     }
 
     #[test]
