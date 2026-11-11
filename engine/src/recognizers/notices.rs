@@ -25,10 +25,16 @@
 //! arrive one at a time name the digits and the letters of "You received EXP". The other phrases'
 //! letters follow from the ones known. Readings are confirmed once three EXP amounts in a row
 //! match the HUD; until then they're marked unconfirmed, and nothing should be shown from them.
-//! Only EXP amounts name digits, so a digit no EXP amount has had yet stays unknown, and a mesos
-//! amount with it can't be read. What was confirmed can be kept on the device
-//! ([`NoticeReader::knowledge`]), so the next session reads from its first pickup and the digits
-//! add up across sessions.
+//! What was confirmed can be kept on the device ([`NoticeReader::knowledge`]), so the next session
+//! reads from its first pickup and the digits add up across sessions.
+//!
+//! **Mesos have nothing on screen to check them against**, so EXP amounts name the digits, and on
+//! a map whose monsters all give the same EXP that may be only a few of them. The others are named
+//! by their shapes, the way a person reads digits in a new font (loops and strokes), but only
+//! after those rules name every digit the EXP lines taught correctly. A digit named that way is
+//! dropped, with every other one named by shape, if an EXP line using it ever disagrees with the
+//! HUD. A mesos amount with a digit still unknown is reported missed, kept, and counted late as
+//! soon as its digits are known.
 //!
 //! A line's letters are cut from the first frame it shows in, while it's still at full strength:
 //! at four frames a second that's within a quarter second of its arrival. Letters are compared
@@ -50,10 +56,13 @@
 //! An item's identity is the exact shape of its name ([`ItemName::key`]): its letters needn't be
 //! known. Its text has the letters that are, and `?` for the rest.
 
+use std::collections::HashMap;
+
 use crate::frame::Frame;
 use crate::glyph::{Atlas, Glyph, MAX_GLYPH_WIDTH};
 use crate::lines::{self, StackLine};
 pub use crate::recognizers::NamePicture;
+use crate::recognizers::digit_shapes;
 use crate::recognizers::exp_bar::ExpReading;
 use crate::unstretch::{self, No1x};
 
@@ -98,6 +107,10 @@ const INK: i16 = 120;
 /// A solid line has at least this many such pixels: the shortest notice, "You received EXP
 /// (+1)", has about twice as many at 1x.
 const MIN_INK: u32 = 100;
+/// Digits learned from EXP lines the shape rules must name right before naming others.
+const DIGITS_CHECKED: usize = 3;
+/// Mesos amounts with a digit not learned yet kept to read later: a few hours of play.
+const UNREAD_KEPT: usize = 500;
 /// Frames whose fading [`NoticeReader::fade`] measures.
 const FADES_KEPT: usize = 9;
 /// A line seen again may differ from how it was in at most one column in this many, for something
@@ -166,6 +179,9 @@ pub enum Notice {
     PartyBonus(u64),
     /// "You have gained mesos (+N)".
     Mesos(u64),
+    /// Mesos picked up earlier, while a digit of the amount wasn't learned yet (reported missed
+    /// then), read now that its digits are known.
+    LateMesos(u64),
     /// "<name> xN earned. (<tab>)". The tab is `None` while its letters can't tell it yet.
     Item {
         name: ItemName,
@@ -297,15 +313,22 @@ impl Slot {
 impl StackLine for Slot {
     /// `self` is the line in the frame before. A line that's faded since lines up with anything:
     /// lines fade. A solid one is the same line only if it's no brighter than it was and has the
-    /// same shape, up to a pixel away each way. Something moving behind it, like a monster walking
-    /// past, changes part of its shape; it's still the same line if most of its columns agree and
-    /// it hasn't brightened at all. A newer line in its place has: it arrived after it.
-    fn matches(&self, now: &Slot) -> bool {
+    /// same shape, up to a pixel away each way. In the same place it measures no brighter at all,
+    /// over the same scene: a newer line with the same phrase and another amount, which looks
+    /// nearly the same, is brighter by a frame's fading. Moved up over another part of the scene,
+    /// it may measure a little brighter. Something moving behind it, like a monster walking past,
+    /// changes part of its shape; it's still the same line if most of its columns agree and it
+    /// hasn't brightened at all.
+    fn matches(&self, now: &Slot, moved: bool) -> bool {
+        let brighter = match moved {
+            true => BRIGHTER,
+            false => STEADY,
+        };
         match (self.solid(), now.solid()) {
             (_, false) => true,
             (false, true) => false,
             (true, true) => {
-                (now.strength <= self.strength.saturating_add(BRIGHTER) && same_shape(self, now))
+                (now.strength <= self.strength.saturating_add(brighter) && same_shape(self, now))
                     || (now.strength <= self.strength.saturating_add(STEADY)
                         && mostly_same_shape(self, now))
             }
@@ -888,11 +911,19 @@ fn gained(before: &ExpReading, now: &ExpReading) -> Option<u64> {
     }
 }
 
+/// A mesos amount read with a digit not learned yet, kept to count once its digits are known.
+#[derive(Debug, Clone)]
+struct Unread {
+    /// Its digits' glyphs, commas included.
+    digits: Vec<Glyph>,
+}
+
 /// A line read from the stack.
 enum Read {
     Exp(ExpLine),
     PartyBonus(ExpLine),
-    Mesos(Option<u64>),
+    /// Read, or with a digit not learned yet.
+    Mesos(Result<u64, Unread>),
     Item(Option<(ItemName, u32, Option<Tab>)>),
     Other,
     /// It may be a pickup, but it can't be read.
@@ -904,7 +935,7 @@ impl Read {
     fn sure(&self) -> bool {
         match self {
             Read::Exp(line) | Read::PartyBonus(line) => line.value.is_some(),
-            Read::Mesos(amount) => amount.is_some(),
+            Read::Mesos(amount) => amount.is_ok(),
             Read::Item(_) | Read::Other => true,
             Read::Unknown => false,
         }
@@ -923,6 +954,14 @@ pub struct NoticeReader {
     shift: i32,
     /// Slots of last frame's lines that arrived but couldn't be read for sure yet.
     pending: Vec<usize>,
+    /// Mesos amounts read this session with a digit not learned yet, oldest first.
+    unread: std::collections::VecDeque<Unread>,
+    /// Digits named by their shapes that no EXP line checked against the HUD has shown yet.
+    shaped: Vec<char>,
+    /// A digit named by its shape turned out wrong: no more are named that way.
+    shapes_failed: bool,
+    /// Kept mesos amounts read since the last frame, now that their digits are known.
+    late: Vec<u64>,
     /// How much a line faded from one frame to the next in the last frames measured, newest last:
     /// about 9 at four frames a second, 45 at one.
     fades: Vec<u8>,
@@ -954,6 +993,10 @@ impl NoticeReader {
             lost: false,
             shift: 0,
             pending: Vec::new(),
+            unread: std::collections::VecDeque::new(),
+            shaped: Vec::new(),
+            shapes_failed: false,
+            late: Vec::new(),
             fades: Vec::new(),
             hud: None,
             window: Window::default(),
@@ -977,7 +1020,20 @@ impl NoticeReader {
         }
         let mut text = format!("{KNOWLEDGE_HEADER}\n");
         for (name, glyph) in self.atlas.entries() {
-            text.push_str(&format!("{:x} {}\n", u32::from(name), glyph.encode()));
+            // A digit named by its shape says so, so the next session still drops it if an EXP
+            // line disagrees.
+            let shaped = match self.shaped.contains(&name) {
+                true => " shape",
+                false => "",
+            };
+            text.push_str(&format!(
+                "{:x} {}{shaped}\n",
+                u32::from(name),
+                glyph.encode()
+            ));
+        }
+        if self.shapes_failed {
+            text.push_str("no-shapes\n");
         }
         Some(text)
     }
@@ -993,7 +1049,16 @@ impl NoticeReader {
         }
         let mut reader = NoticeReader::new();
         for line in lines.filter(|l| !l.is_empty()) {
-            let (name, glyph) = line.split_once(' ')?;
+            let parts: Vec<&str> = line.split(' ').collect();
+            let (name, glyph, shaped) = match parts[..] {
+                ["no-shapes"] => {
+                    reader.shapes_failed = true;
+                    continue;
+                }
+                [name, glyph] => (name, glyph, false),
+                [name, glyph, "shape"] => (name, glyph, true),
+                _ => return None,
+            };
             let name = u32::from_str_radix(name, 16)
                 .ok()
                 .and_then(char::from_u32)
@@ -1002,6 +1067,9 @@ impl NoticeReader {
                 .atlas
                 .learn(&[Glyph::decode(glyph)?], &name.to_string())
                 .ok()?;
+            if shaped {
+                reader.shaped.push(name);
+            }
         }
         if reader.atlas.is_empty() {
             return None;
@@ -1044,6 +1112,8 @@ impl NoticeReader {
     pub fn restart(&mut self) {
         self.lines = None;
         self.pending.clear();
+        self.unread.clear();
+        self.late.clear();
         self.lost = false;
         self.hud = None;
         self.window = Window::default();
@@ -1125,6 +1195,8 @@ impl NoticeReader {
         if let Some(short) = self.settle(gain, !self.pending.is_empty()) {
             missed.get_or_insert(short);
         }
+        self.resolve();
+        notices.extend(self.late.drain(..).map(Notice::LateMesos));
         Ok(NoticeReading {
             notices,
             missed,
@@ -1144,15 +1216,20 @@ impl NoticeReader {
                 notices.extend(line.value.map(Notice::PartyBonus));
                 self.window.lines.push(line);
             }
-            Read::Mesos(Some(amount)) => notices.push(Notice::Mesos(amount)),
+            Read::Mesos(Ok(amount)) => notices.push(Notice::Mesos(amount)),
             Read::Item(Some((name, count, tab))) => {
                 notices.push(Notice::Item { name, count, tab });
             }
             Read::Other => notices.push(Notice::Other),
-            // A mesos line whose amount has a digit not learned yet: missed, but it carried no
-            // EXP, so the EXP lines can still teach and check.
-            Read::Mesos(None) => {
+            // A mesos line whose amount has a digit not learned yet: missed for now, and kept to
+            // count once its digits are known. It carried no EXP, so the EXP lines can still
+            // teach and check.
+            Read::Mesos(Err(unread)) => {
                 missed.get_or_insert(Missed::NotLearned);
+                self.unread.push_back(unread);
+                if self.unread.len() > UNREAD_KEPT {
+                    self.unread.pop_front();
+                }
             }
             // An item count too large to be one.
             Read::Item(None) => {
@@ -1186,6 +1263,91 @@ impl NoticeReader {
         }
         self.learn_from(cut);
         self.parse(cut)
+    }
+
+    /// How many mesos amounts with a digit not learned yet are waiting to be read.
+    pub fn waiting_mesos(&self) -> usize {
+        self.unread.len()
+    }
+
+    /// Names digits no EXP amount has shown yet by their shapes ([`digit_shapes`]), then reads the
+    /// kept mesos amounts whose digits are all known now.
+    fn resolve(&mut self) {
+        self.name_by_shape();
+        let atlas = &self.atlas;
+        let late = &mut self.late;
+        self.unread
+            .retain(|unread| match read_number(atlas, &unread.digits) {
+                Some(amount) => {
+                    late.push(amount);
+                    false
+                }
+                None => true,
+            });
+    }
+
+    /// Names the digits of waiting mesos amounts by their shapes, when the shape rules name every
+    /// digit learned so far the way it was learned, at least [`DIGITS_CHECKED`] of them. Only a
+    /// glyph as tall as those digits and in two or more waiting amounts is named, and only when no
+    /// other glyph looks like the same digit: a speck left by a monster passing isn't a digit.
+    fn name_by_shape(&mut self) {
+        if self.shapes_failed || self.unread.is_empty() {
+            return;
+        }
+        let known: Vec<(char, Glyph)> = self
+            .atlas
+            .entries()
+            .into_iter()
+            .filter(|(name, _)| name.is_ascii_digit())
+            .map(|(name, glyph)| (name, glyph.clone()))
+            .collect();
+        let rows = known.first().map(|(_, glyph)| glyph.ink_rows());
+        let fits = |glyph: &Glyph| Some(glyph.ink_rows()) == rows;
+        if known.len() < DIGITS_CHECKED
+            || known
+                .iter()
+                .any(|(name, glyph)| digit_shapes::guess(glyph) != Some(*name) || !fits(glyph))
+        {
+            return;
+        }
+        let mut found: HashMap<Glyph, usize> = HashMap::new();
+        for unread in &self.unread {
+            let mut glyphs: Vec<&Glyph> = Vec::new();
+            for glyph in &unread.digits {
+                if self.atlas.name(glyph).is_none() && fits(glyph) && !glyphs.contains(&glyph) {
+                    glyphs.push(glyph);
+                }
+            }
+            for glyph in glyphs {
+                *found.entry(glyph.clone()).or_default() += 1;
+            }
+        }
+        let mut by_digit: HashMap<char, Vec<Glyph>> = HashMap::new();
+        for (glyph, amounts) in found {
+            let digit = digit_shapes::guess(&glyph).filter(|&d| self.atlas.shape(d).is_none());
+            if let Some(digit) = digit.filter(|_| amounts >= 2) {
+                by_digit.entry(digit).or_default().push(glyph);
+            }
+        }
+        for (digit, glyphs) in by_digit {
+            if let [glyph] = &glyphs[..]
+                && self
+                    .atlas
+                    .learn(std::slice::from_ref(glyph), &digit.to_string())
+                    .is_ok()
+            {
+                self.shaped.push(digit);
+            }
+        }
+    }
+
+    /// Drops every digit named by its shape, one of them having turned out wrong, and names no
+    /// more that way.
+    fn drop_shaped(&mut self) {
+        for digit in self.shaped.drain(..) {
+            self.atlas.forget(digit);
+        }
+        self.shapes_failed = true;
     }
 
     /// Measures how much the solid lines still on screen faded since the last frame, `fresh` new
@@ -1318,7 +1480,12 @@ impl NoticeReader {
                 ),
                 false => match (off(EXP_TEXT), off(MESOS_TEXT)) {
                     (exp, mesos) if exp <= mesos => (Read::Exp(line), exp),
-                    (_, mesos) => (Read::Mesos(line.value), mesos),
+                    (_, mesos) => {
+                        let amount = line.value.ok_or_else(|| Unread {
+                            digits: line.digits.clone(),
+                        });
+                        (Read::Mesos(amount), mesos)
+                    }
                 },
             };
             return match errors {
@@ -1397,29 +1564,10 @@ impl NoticeReader {
             text.push(self.atlas.name(&piece.glyph).unwrap_or('?'));
             last_end = Some(piece.x + piece.glyph.width());
         }
-        let from = pieces.first().map_or(0, |p| p.x);
-        let to = pieces.last().map_or(0, |p| p.x + p.glyph.width());
-        // A pixel of margin each side.
-        let width = to - from + 2;
-        let mut coverage = vec![0u8; (width * LINE_ROWS) as usize];
-        for piece in pieces {
-            for row in 0..LINE_ROWS {
-                for dx in 0..piece.glyph.width() {
-                    if piece.glyph.is_ink(dx, row) {
-                        let col = piece.x - from + 1 + dx;
-                        coverage[(row * width + col) as usize] = 255;
-                    }
-                }
-            }
-        }
         ItemName {
             key: format!("{hash:016x}"),
             text,
-            picture: NamePicture {
-                width,
-                height: LINE_ROWS,
-                coverage,
-            },
+            picture: picture_of(pieces),
         }
     }
 
@@ -1465,31 +1613,63 @@ impl NoticeReader {
                 self.misses = 0;
                 self.confirmed = self.checks >= CONFIRM_AFTER;
             }
-            // Letters kept from an earlier session read an EXP amount the HUD agrees with.
+            // Letters kept from an earlier session read an EXP amount the HUD agrees with, and so
+            // did any digits named by their shapes.
             if !window.blocked {
                 self.restored = None;
+                let atlas = &self.atlas;
+                let shown: Vec<char> = window
+                    .lines
+                    .iter()
+                    .flat_map(|line| &line.digits)
+                    .filter_map(|glyph| atlas.name(glyph))
+                    .collect();
+                self.shaped.retain(|digit| !shown.contains(digit));
             }
             self.window = Window::default();
             return None;
         }
-        // One line whose digits aren't all known: the HUD says what it's worth.
-        let unknown: Vec<&ExpLine> = window.lines.iter().filter(|l| l.value.is_none()).collect();
-        if let [line] = unknown[..] {
+        // One line whose digits aren't all known: the HUD says what it's worth. A digit named by
+        // its shape that's in the way is wrong.
+        let unknown: Vec<ExpLine> = window
+            .lines
+            .iter()
+            .filter(|l| l.value.is_none())
+            .cloned()
+            .collect();
+        if let [line] = &unknown[..] {
             let rest: u64 = window.lines.iter().filter_map(|l| l.value).sum();
-            if !window.blocked
-                && window.hud > rest
-                && line.teach(&mut self.atlas, window.hud - rest)
-            {
-                self.window = Window::default();
-                return None;
+            let (blocked, gained) = (window.blocked, window.hud);
+            if !blocked && gained > rest {
+                let mut taught = line.teach(&mut self.atlas, gained - rest);
+                if !taught && !self.shaped.is_empty() {
+                    self.drop_shaped();
+                    taught = line.teach(&mut self.atlas, gained - rest);
+                }
+                if taught {
+                    self.window = Window::default();
+                    return None;
+                }
             }
         }
+        let window = &mut self.window;
         if window.age < SETTLE {
             return None;
         }
         let short = read.is_none_or(|read| read < window.hud);
         let evidence = !window.blocked && read.is_some();
+        // EXP lines read with a digit named by its shape that don't add up: that digit is wrong.
+        let atlas = &self.atlas;
+        let used_shaped = window
+            .lines
+            .iter()
+            .flat_map(|line| &line.digits)
+            .filter_map(|glyph| atlas.name(glyph))
+            .any(|digit| self.shaped.contains(&digit));
         self.window = Window::default();
+        if evidence && used_shaped {
+            self.drop_shaped();
+        }
         if self.confirmed {
             return Some(if short {
                 Missed::ExpShort
@@ -1508,6 +1688,29 @@ impl NoticeReader {
             }
         }
         None
+    }
+}
+
+/// The letters of `pieces` as the game drew them, with a pixel of margin each side.
+fn picture_of(pieces: &[&Piece]) -> NamePicture {
+    let from = pieces.first().map_or(0, |p| p.x);
+    let to = pieces.last().map_or(0, |p| p.x + p.glyph.width());
+    let width = to - from + 2;
+    let mut coverage = vec![0u8; (width * LINE_ROWS) as usize];
+    for piece in pieces {
+        for row in 0..LINE_ROWS {
+            for dx in 0..piece.glyph.width() {
+                if piece.glyph.is_ink(dx, row) {
+                    let col = piece.x - from + 1 + dx;
+                    coverage[(row * width + col) as usize] = 255;
+                }
+            }
+        }
+    }
+    NamePicture {
+        width,
+        height: LINE_ROWS,
+        coverage,
     }
 }
 
@@ -1617,6 +1820,38 @@ pub(crate) mod test_support {
                 fade: FADE,
                 edge_in_slot: None,
             }
+        }
+
+        /// The same game with digits drawn the plain way the shape rules read.
+        pub(crate) fn plain_digits(mut self) -> Game {
+            for (digit, rows) in crate::recognizers::digit_shapes::test_support::PLAIN {
+                let columns: Vec<u8> = (0..rows[0].len())
+                    .map(|x| {
+                        rows.iter()
+                            .enumerate()
+                            .filter(|(_, row)| row.as_bytes()[x] == b'#')
+                            .fold(0, |bits, (y, _)| bits | 1 << y)
+                    })
+                    .collect();
+                if let Some((_, glyph)) = self.font.glyphs.iter_mut().find(|(c, _)| *c == digit) {
+                    *glyph = columns;
+                }
+            }
+            self
+        }
+
+        /// The same game with digits `a` and `b` drawn each as the other.
+        pub(crate) fn swap_digit_shapes(mut self, a: char, b: char) -> Game {
+            let shape = |game: &Game, c: char| game.font.columns(c).to_vec();
+            let (shape_a, shape_b) = (shape(&self, a), shape(&self, b));
+            for (c, glyph) in self.font.glyphs.iter_mut() {
+                if *c == a {
+                    *glyph = shape_b.clone();
+                } else if *c == b {
+                    *glyph = shape_a.clone();
+                }
+            }
+            self
         }
 
         /// The same game after an update that redrew the font's letters, digits and brackets:
@@ -2150,6 +2385,120 @@ mod tests {
         assert_eq!(notices(&first), [Notice::Exp(43)]);
         assert_eq!(notices(&later), []);
         assert!(later.iter().all(|r| r.missed.is_none()), "{later:?}");
+    }
+
+    /// A reader that learned only the digits 0, 1, 2, 3, 4 and 6 from EXP lines, with the lines
+    /// it learned from faded away.
+    fn missing_five_seven_eight_nine(game: &mut Game) -> NoticeReader {
+        let mut reader = NoticeReader::new();
+        run(game, &mut reader, learning(&[21, 43, 60, 21, 43, 60]));
+        run(game, &mut reader, vec![(Vec::new(), 0); 20]);
+        assert!(reader.confirmed());
+        reader
+    }
+
+    // A mesos amount with a digit not learned yet is kept, and counted as soon as an EXP line
+    // teaches the digit. Fails if it's lost, or counted before its digits are known.
+    #[test]
+    fn a_mesos_amount_is_counted_once_its_digits_are_learned() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = missing_five_seven_eight_nine(&mut game);
+        let unread = run(
+            &mut game,
+            &mut reader,
+            vec![one(&mesos("75"), 0), (Vec::new(), 0)],
+        );
+        assert_eq!(notices(&unread), []);
+        assert_eq!(reader.waiting_mesos(), 1);
+        let taught = run(
+            &mut game,
+            &mut reader,
+            vec![one(&exp("57"), 57), (Vec::new(), 0), (Vec::new(), 0)],
+        );
+        // The EXP line taught the 5 and 7; it isn't reported itself, its digits unknown when read.
+        assert_eq!(notices(&taught), [Notice::LateMesos(75)]);
+        assert_eq!(reader.waiting_mesos(), 0);
+    }
+
+    // Digits no EXP line showed are named by their shapes once the shape rules name every digit
+    // the EXP lines taught, and the mesos amounts waiting on them are counted. Fails if a digit
+    // isn't named, an amount is lost, or the names aren't kept for the next session.
+    #[test]
+    fn digits_no_exp_line_showed_are_named_by_their_shapes() {
+        let mut game = Game::new(Scene::Rock).plain_digits();
+        let mut reader = missing_five_seven_eight_nine(&mut game);
+        let mut steps = Vec::new();
+        for amount in ["75", "57", "85", "58", "78"] {
+            steps.push(one(&mesos(amount), 0));
+            steps.push((Vec::new(), 0));
+        }
+        let read = run(&mut game, &mut reader, steps);
+        assert_eq!(
+            notices(&read),
+            [
+                Notice::LateMesos(75),
+                Notice::LateMesos(57),
+                Notice::LateMesos(85),
+                Notice::LateMesos(58),
+                Notice::Mesos(78)
+            ]
+        );
+        assert_eq!(reader.waiting_mesos(), 0);
+        let kept = reader.knowledge().unwrap();
+        assert_eq!(kept.lines().filter(|l| l.ends_with(" shape")).count(), 3);
+        let next = NoticeReader::from_knowledge(&kept).unwrap();
+        assert_eq!(next.knowledge(), Some(kept));
+    }
+
+    // In a font whose digits the shape rules misread, checked on the digits the EXP lines taught,
+    // no digit is named by its shape: amounts wait for EXP lines instead. Fails if one is.
+    #[test]
+    fn no_digit_is_named_by_shape_in_a_font_the_rules_misread() {
+        // Plain digits, but the 1 drawn as a 2 and the 2 as a 1: the rules misread both, which
+        // the EXP lines taught, so they're trusted for no other digit.
+        let mut game = Game::new(Scene::Rock)
+            .plain_digits()
+            .swap_digit_shapes('1', '2');
+        let mut reader = missing_five_seven_eight_nine(&mut game);
+        let mut steps = Vec::new();
+        for amount in ["75", "57", "75"] {
+            steps.push(one(&mesos(amount), 0));
+            steps.push((Vec::new(), 0));
+        }
+        let read = run(&mut game, &mut reader, steps);
+        assert_eq!(notices(&read), []);
+        assert_eq!(reader.waiting_mesos(), 3);
+    }
+
+    // A digit named by its shape that's wrong shows when an EXP line using it disagrees with the
+    // HUD: every digit named that way is dropped, and no more are. Fails if a wrong name stays.
+    #[test]
+    fn a_digit_named_wrong_by_its_shape_is_dropped_when_an_exp_line_disagrees() {
+        // A font whose 5 looks like a 7 and 7 like a 5: the rules name them the wrong way round.
+        let mut game = Game::new(Scene::Rock)
+            .plain_digits()
+            .swap_digit_shapes('5', '7');
+        let mut reader = missing_five_seven_eight_nine(&mut game);
+        let mut steps = Vec::new();
+        for amount in ["75", "57"] {
+            steps.push(one(&mesos(amount), 0));
+            steps.push((Vec::new(), 0));
+        }
+        let wrong = run(&mut game, &mut reader, steps);
+        assert_eq!(
+            notices(&wrong),
+            [Notice::LateMesos(57), Notice::LateMesos(75)],
+            "read the wrong way round"
+        );
+        let checked = run(
+            &mut game,
+            &mut reader,
+            [learning(&[57]), vec![(Vec::new(), 0); 3]].concat(),
+        );
+        assert!(checked.iter().any(|r| r.missed == Some(Missed::ExpOver)));
+        let after = run(&mut game, &mut reader, vec![one(&mesos("75"), 0)]);
+        assert_eq!(after[0].missed, Some(Missed::NotLearned));
+        assert!(reader.knowledge().unwrap().contains("no-shapes"));
     }
 
     // Guards amounts over a thousand: the HUD's gain names the comma too.

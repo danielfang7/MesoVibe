@@ -10,4 +10,4 @@ export const SCHEMA_VERSION = 3;
  *
  * As JSON, an event is an object whose `type` names the variant, with its fields beside it.
  */
-export type Event = { "type": "ExpChanged", level: number | null, exp: number, pct_hundredths: number, needed: number | null, } | { "type": "LevelUp", level: number, } | { "type": "MesosGained", amount: number, } | { "type": "ItemGained", item: string, count: number, tab: string | null, } | { "type": "MapChanged", map: string | null, } | { "type": "NoticesMissed", reason: string, } | { "type": "Unreadable", recognizer: string, };
+export type Event = { "type": "ExpChanged", level: number | null, exp: number, pct_hundredths: number, needed: number | null, } | { "type": "LevelUp", level: number, } | { "type": "MesosGained", amount: number, late: boolean, } | { "type": "ItemGained", item: string, count: number, tab: string | null, } | { "type": "MapChanged", map: string | null, } | { "type": "NoticesMissed", reason: string, } | { "type": "Unreadable", recognizer: string, };

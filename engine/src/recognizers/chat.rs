@@ -245,7 +245,8 @@ struct Line {
 impl StackLine for Line {
     /// The same line: a band of the same color, or text with nearly the same pixels, up to
     /// [`DRIFT`] pixels away each way. Columns the pointer covers in either line are left out.
-    fn matches(&self, other: &Line) -> bool {
+    /// Chat lines don't fade, so it makes no difference whether they moved.
+    fn matches(&self, other: &Line, _moved: bool) -> bool {
         match (self.kind, other.kind) {
             (Kind::Band(a), Kind::Band(b)) => {
                 return a.into_iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 24);
@@ -773,7 +774,7 @@ impl ChatReader {
                     .iter()
                     .flatten()
                     .chain(&self.recent)
-                    .any(|old| old.matches(line))
+                    .any(|old| old.matches(line, true))
         };
         // The indented rest of a long line, and whether someone said each line: the rest of a line
         // goes with the line above it, so a notice's rest stays out with it. Top line first.

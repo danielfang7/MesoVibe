@@ -5,8 +5,9 @@
 /// A line of a stack, as a reader cut it from one frame.
 pub trait StackLine {
     /// The same line, seen in another frame: it may sit a pixel or two away, or have something
-    /// drawn over part of it.
-    fn matches(&self, other: &Self) -> bool;
+    /// drawn over part of it. `moved` when lines arrived in between, so it's another line's
+    /// place it's in now.
+    fn matches(&self, other: &Self, moved: bool) -> bool;
     /// Nothing shows in this line's place.
     fn is_blank(&self) -> bool;
 }
@@ -20,7 +21,7 @@ pub fn arrived<L: StackLine>(before: &[L], now: &[L]) -> Option<usize> {
         let pairs: Vec<(bool, bool)> = before
             .iter()
             .zip(now.iter().skip(shift))
-            .map(|(b, n)| (b.matches(n), !b.is_blank() && !n.is_blank()))
+            .map(|(b, n)| (b.matches(n, shift > 0), !b.is_blank() && !n.is_blank()))
             .collect();
         let misses = pairs.iter().filter(|(m, _)| !m).count();
         let shown = pairs.iter().filter(|(_, shown)| *shown).count();
@@ -76,7 +77,7 @@ mod tests {
     struct Line(&'static str);
 
     impl StackLine for Line {
-        fn matches(&self, other: &Self) -> bool {
+        fn matches(&self, other: &Self, _moved: bool) -> bool {
             self.0 == other.0
         }
         fn is_blank(&self) -> bool {

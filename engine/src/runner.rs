@@ -114,6 +114,12 @@ impl<B: Backend> Runner<B> {
         &self.notices
     }
 
+    /// For a player naming a mesos amount the notice reader couldn't read
+    /// ([`NoticeReader::answer`]).
+    pub fn notice_reader_mut(&mut self) -> &mut NoticeReader {
+        &mut self.notices
+    }
+
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
     }
@@ -265,7 +271,14 @@ fn notice_events(reading: &Result<NoticeReading, NoticeUnreadable>) -> Vec<Event
         return Vec::new();
     };
     let gained = reading.notices.iter().filter_map(|notice| match notice {
-        Notice::Mesos(amount) => Some(Event::MesosGained { amount: *amount }),
+        Notice::Mesos(amount) => Some(Event::MesosGained {
+            amount: *amount,
+            late: false,
+        }),
+        Notice::LateMesos(amount) => Some(Event::MesosGained {
+            amount: *amount,
+            late: true,
+        }),
         Notice::Item { name, count, tab } => Some(Event::ItemGained {
             item: name.key.clone(),
             count: *count,
@@ -612,7 +625,13 @@ mod tests {
         assert!(runner.notice_reader().confirmed());
         assert!(runner.tick().events.is_empty(), "lines already on screen");
         runner.backend_mut().canvas = Some(game.next(&[(&mesos("75"), WHITE)], 0));
-        assert_eq!(runner.tick().events, [Event::MesosGained { amount: 75 }]);
+        assert_eq!(
+            runner.tick().events,
+            [Event::MesosGained {
+                amount: 75,
+                late: false
+            }]
+        );
         runner.backend_mut().canvas = Some(game.next(&[(&item("Red Potion", 2, "Use"), WHITE)], 0));
         let events = runner.tick().events;
         assert!(
@@ -640,7 +659,37 @@ mod tests {
         runner.backend_mut().window = Some(GameWindow { id: 8, ..GAME });
         assert!(runner.tick().events.is_empty());
         runner.backend_mut().canvas = Some(game.next(&[(&mesos("12"), WHITE)], 0));
-        assert_eq!(runner.tick().events, [Event::MesosGained { amount: 12 }]);
+        assert_eq!(
+            runner.tick().events,
+            [Event::MesosGained {
+                amount: 12,
+                late: false
+            }]
+        );
+    }
+
+    // Plugins tell a mesos amount read late (reported missed when it arrived) from one read at
+    // once. Fails if the two come out the same.
+    #[test]
+    fn mesos_read_late_say_so() {
+        let reading = NoticeReading {
+            notices: vec![Notice::Mesos(30), Notice::LateMesos(75)],
+            missed: None,
+            confirmed: true,
+        };
+        assert_eq!(
+            notice_events(&Ok(reading)),
+            [
+                Event::MesosGained {
+                    amount: 30,
+                    late: false
+                },
+                Event::MesosGained {
+                    amount: 75,
+                    late: true
+                }
+            ]
+        );
     }
 
     #[test]

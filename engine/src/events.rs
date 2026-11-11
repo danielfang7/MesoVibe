@@ -30,10 +30,13 @@ pub enum Event {
     },
     /// The level went up by one or more.
     LevelUp { level: u16 },
-    /// Mesos picked up: the game's "You have gained mesos (+N)".
+    /// Mesos picked up: the game's "You have gained mesos (+N)". `late` when it was picked up
+    /// earlier, while a digit of the amount wasn't learned yet (a `NoticesMissed` with
+    /// `not_learned` said so then), and is read only now.
     MesosGained {
         #[ts(type = "number")]
         amount: u64,
+        late: bool,
     },
     /// An item picked up: the game's "<name> xN earned. (<tab>)". `item` is the name's exact
     /// shape as text, the same every time the same item is picked up, whether or not its letters

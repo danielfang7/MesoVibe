@@ -1,6 +1,7 @@
 //! Recognizers: one module each, holding its region, parser, confidence and tests together.
 
 pub mod chat;
+mod digit_shapes;
 pub mod exp_bar;
 pub mod exp_table;
 pub mod map_name;

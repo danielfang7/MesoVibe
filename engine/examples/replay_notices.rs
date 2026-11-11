@@ -16,6 +16,9 @@
 //! The EXP bar reader learns from scratch in each run too, unless `--warm` first runs it over all
 //! the runs to learn its digits and starts each run from them, as the app does with the digits it
 //! keeps between launches.
+//!
+//! Mesos amounts with a digit not learned yet are kept and counted once their digits are known;
+//! the totals say how many were read late and how many are still waiting.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -65,6 +68,7 @@ fn describe(notice: &Notice) -> String {
         Notice::Exp(n) => format!("EXP +{n}"),
         Notice::PartyBonus(n) => format!("party bonus +{n}"),
         Notice::Mesos(n) => format!("mesos +{n}"),
+        Notice::LateMesos(n) => format!("mesos +{n} (late)"),
         Notice::Item { name, count, tab } => {
             let tab = tab.map_or("?".into(), |t| t.name().to_string());
             format!("\"{}\" x{count} ({tab}) [{}]", name.text, &name.key[..6])
@@ -82,6 +86,9 @@ struct Totals {
     hud_gain: u64,
     mesos: u64,
     mesos_lines: usize,
+    /// Mesos read once their digits were learned.
+    late_mesos: u64,
+    late_lines: usize,
     party_bonus: u64,
     /// Item key: (text, pickups, count).
     items: BTreeMap<String, (String, usize, u64)>,
@@ -209,6 +216,10 @@ fn main() -> ExitCode {
                                 totals.mesos += n;
                                 totals.mesos_lines += 1;
                             }
+                            Notice::LateMesos(n) => {
+                                totals.late_mesos += n;
+                                totals.late_lines += 1;
+                            }
                             Notice::Item { name, count, .. } => {
                                 let entry = totals.items.entry(name.key.clone()).or_insert((
                                     name.text.clone(),
@@ -259,6 +270,22 @@ fn main() -> ExitCode {
             totals.exp_lines, totals.party_bonus, totals.hud_gain, totals.unchecked_frames
         );
         println!("  mesos: {} in {} lines", totals.mesos, totals.mesos_lines);
+        println!(
+            "  mesos read late: {} in {} lines; {} amounts still waiting",
+            totals.late_mesos,
+            totals.late_lines,
+            notices.waiting_mesos()
+        );
+        // The digits known for sure, from the text the reader keeps.
+        let digits: String = notices
+            .knowledge()
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter_map(|(code, _)| char::from_u32(u32::from_str_radix(code, 16).ok()?))
+            .filter(char::is_ascii_digit)
+            .collect();
+        println!("  digits known: {digits}");
         for (key, (text, picks, count)) in &totals.items {
             println!(
                 "  item \"{text}\" [{}]: {picks} pickups, {count} in all",

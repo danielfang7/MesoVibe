@@ -255,6 +255,18 @@ impl Atlas {
         self.names.get(glyph).copied()
     }
 
+    /// The shape learned for `name`, if any.
+    pub fn shape(&self, name: char) -> Option<&Glyph> {
+        self.shapes.get(&name)
+    }
+
+    /// Drops what was learned for `name`, so its shape is unknown again.
+    pub fn forget(&mut self, name: char) {
+        if let Some(shape) = self.shapes.remove(&name) {
+            self.names.remove(&shape);
+        }
+    }
+
     /// The characters of `wanted` the atlas hasn't learned yet.
     pub fn missing(&self, wanted: &str) -> Vec<char> {
         wanted
