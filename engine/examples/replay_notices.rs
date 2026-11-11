@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use mesovibe_engine::recognizers::exp_bar::{ExpBarReader, ExpReading};
+use mesovibe_engine::recognizers::exp_bar::{ExpBarReader, ExpReading, Unreadable};
 use mesovibe_engine::recognizers::notices::{Missed, Notice, NoticeReader};
 
 #[path = "common/capture_run.rs"]
@@ -162,9 +162,15 @@ fn main() -> ExitCode {
                 }
             };
             let frame = image.frame();
-            let reading = hud.observe(&frame).ok();
+            let reading = hud.observe(&frame);
+            // The game fades to black when the map changes, as the engine's runner sees it.
+            let dark = matches!(reading, Err(Unreadable::ScreenDark));
+            let reading = reading.ok();
             let started = Instant::now();
-            let result = notices.observe(&frame, reading.as_ref());
+            let result = match dark {
+                true => Ok(notices.screen_dark()),
+                false => notices.observe(&frame, reading.as_ref()),
+            };
             timings.push(started.elapsed().as_micros());
             // The HUD's gain this frame, when it and the frame before were both read: the EXP
             // lines are compared with it over the same frames.

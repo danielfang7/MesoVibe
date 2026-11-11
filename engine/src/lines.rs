@@ -17,11 +17,21 @@ pub trait StackLine {
 /// drawn over it, when four or more pairs of lines with something showing on both sides line up:
 /// blank lines say nothing about where the stack moved. `None` when no shift lines up.
 pub fn arrived<L: StackLine>(before: &[L], now: &[L]) -> Option<usize> {
+    arrived_by(before, now, L::matches)
+}
+
+/// [`arrived`], with `same` telling whether a line of the last frame is the line in its place now,
+/// as [`StackLine::matches`] does, for a reader that knows more than the two lines show.
+pub fn arrived_by<L: StackLine>(
+    before: &[L],
+    now: &[L],
+    same: impl Fn(&L, &L, bool) -> bool,
+) -> Option<usize> {
     (0..=now.len()).find(|&shift| {
         let pairs: Vec<(bool, bool)> = before
             .iter()
             .zip(now.iter().skip(shift))
-            .map(|(b, n)| (b.matches(n, shift > 0), !b.is_blank() && !n.is_blank()))
+            .map(|(b, n)| (same(b, n, shift > 0), !b.is_blank() && !n.is_blank()))
             .collect();
         let misses = pairs.iter().filter(|(m, _)| !m).count();
         let shown = pairs.iter().filter(|(_, shown)| *shown).count();

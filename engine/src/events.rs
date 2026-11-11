@@ -38,7 +38,7 @@ pub enum Event {
         amount: u64,
         late: bool,
     },
-    /// An item picked up: the game's "<name> xN earned. (<tab>)". `item` is the name's exact
+    /// An item picked up: the game's `<name> xN earned. (<tab>)`. `item` is the name's exact
     /// shape as text, the same every time the same item is picked up, whether or not its letters
     /// are known yet. `tab` is the inventory tab it went to ("Equip", "Use", "Setup", "Etc" or
     /// "Cash"), when its letters are known.

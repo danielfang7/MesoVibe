@@ -17,8 +17,12 @@
 //!
 //! New lines are counted by how far the lines already on screen moved up ([`crate::lines`]), so
 //! the same pickup twice counts twice. A line only ever fades, so a line brighter than the one in
-//! its place a frame earlier is a new one. A faded line shows too much of the scene to compare its
-//! shape, so it takes part by its strength alone.
+//! its place a frame earlier is a new one. It fades slowly, so a line that was bright a frame ago
+//! is still on screen; and when every line is where it was, a frame fainter, nothing arrived, even
+//! if the scene sliding behind them as the camera moves changed their shapes. A faded line shows
+//! too much of the scene to compare its shape, so it takes part by its strength alone. When the
+//! game dims the screen to change maps, the lines still on screen over the new map were counted
+//! already ([`NoticeReader::screen_dark`]).
 //!
 //! **It learns the letters itself**, on the player's device; nothing learned leaves it, and no game
 //! pixels ship. An EXP line's amount must be the EXP the HUD gained, so the first EXP lines that
@@ -125,6 +129,10 @@ const READ: u8 = 215;
 /// How much stronger a line may measure than in the frame before and still be the same line. Its
 /// strength is measured over a different part of the scene once it has moved up.
 const BRIGHTER: u8 = 16;
+/// Frames' worth of fading a line may lose between two frames and still be the same line: frames
+/// don't come evenly, and one after a whole-picture grab comes late. In recordings at four frames
+/// a second, no line still on screen lost more than this and [`BRIGHTER`] between two frames.
+const LATE_FRAMES: u8 = 3;
 /// A gap of at least this many columns between letters is a space. Letters of a word are at most
 /// three apart (after a 1), and words at least four.
 const SPACE: u32 = 4;
@@ -182,7 +190,7 @@ pub enum Notice {
     /// Mesos picked up earlier, while a digit of the amount wasn't learned yet (reported missed
     /// then), read now that its digits are known.
     LateMesos(u64),
-    /// "<name> xN earned. (<tab>)". The tab is `None` while its letters can't tell it yet.
+    /// `<name> xN earned. (<tab>)`. The tab is `None` while its letters can't tell it yet.
     Item {
         name: ItemName,
         count: u32,
@@ -338,6 +346,28 @@ impl StackLine for Slot {
     fn is_blank(&self) -> bool {
         !self.solid()
     }
+}
+
+/// Whether `now` can be what's left of `before` a frame later, having lost at most `most` of its
+/// strength. Lines take seconds to fade away, so a line that was solid a frame ago is still on
+/// screen, and not much fainter. A slot that shows nothing may hold a line just fainter than
+/// [`FAINT`].
+fn still_there(before: &Slot, now: &Slot, most: u8) -> bool {
+    let at_most = now.strength.max(FAINT as u8);
+    !before.solid() || at_most.saturating_add(most) >= before.strength
+}
+
+/// Every line where it was a frame ago, and nothing new: each solid line still there and no
+/// brighter, and no solid line where there was none. The scene moving behind lines that stayed
+/// put (the camera following the player past striped or edged scenery) changes their shapes, so
+/// they may not line up by shape; their strength still shows they're the same lines, a frame
+/// fainter. A new line would be brighter than the line it pushed up, and that one would show in
+/// the slot above.
+fn steady(before: &[Slot], now: &[Slot], most: u8) -> bool {
+    before.iter().zip(now).all(|(b, n)| match b.solid() {
+        true => still_there(b, n, most) && n.strength <= b.strength.saturating_add(STEADY),
+        false => !n.solid(),
+    })
 }
 
 fn same_shape(a: &Slot, b: &Slot) -> bool {
@@ -739,7 +769,7 @@ fn amount<'a>(pieces: &[&'a Piece], fixed: &mut Vec<(&'a Glyph, char)>) -> Optio
     Some(pieces[2..last].to_vec())
 }
 
-/// The words of an amount line, "<phrase> (+N)", fitted to `phrase`. Everything after the
+/// The words of an amount line, `<phrase> (+N)`, fitted to `phrase`. Everything after the
 /// phrase is the amount: a 1 leaves as wide a gap after it as a space, so "(+122)" comes cut
 /// into "(+1" and "22)".
 fn fit_amount<'a>(cut: &'a Cut, phrase: &[&str]) -> Option<Fit<'a>> {
@@ -756,7 +786,7 @@ fn fit_amount<'a>(cut: &'a Cut, phrase: &[&str]) -> Option<Fit<'a>> {
     Some(Fit { fixed, number })
 }
 
-/// An item line, "<name> xN earned. (<tab>)", with the tab `tab`.
+/// An item line, `<name> xN earned. (<tab>)`, with the tab `tab`.
 fn fit_item(cut: &Cut, tab: Option<Tab>) -> Option<Fit<'_>> {
     let n = cut.words.len();
     if n < 4 {
@@ -1106,6 +1136,24 @@ impl NoticeReader {
         self.pending.clear();
     }
 
+    /// For a frame the game dimmed to change maps: the stack can't be followed, and nothing can be
+    /// picked up until the new map shows. Lines on screen when it's back were counted already, so
+    /// they aren't counted again, and nothing is reported missed but lines still waiting to be
+    /// read again.
+    pub fn screen_dark(&mut self) -> NoticeReading {
+        let mut notices = Vec::new();
+        let mut missed = None;
+        for _ in std::mem::take(&mut self.pending) {
+            self.accept(Read::Unknown, &mut notices, &mut missed);
+        }
+        self.lines = None;
+        NoticeReading {
+            notices,
+            missed,
+            confirmed: self.confirmed,
+        }
+    }
+
     /// Starts over for a game that was closed and started again, maybe with another character:
     /// nothing on screen carries over, and nothing could be picked up meanwhile. What was learned
     /// stays.
@@ -1134,8 +1182,13 @@ impl NoticeReader {
             .map(|k| slot(picture, layout, layout.top(k, shift)))
             .collect();
         let mut missed = None;
+        let most = self.most_fading();
         let fresh = match self.lines.as_deref() {
-            Some(before) => lines::arrived(before, &now).unwrap_or_else(|| {
+            Some(before) => lines::arrived_by(before, &now, |b, n, moved| {
+                b.matches(n, moved) && still_there(b, n, most)
+            })
+            .or_else(|| steady(before, &now, most).then_some(0))
+            .unwrap_or_else(|| {
                 missed = Some(Missed::Unaligned);
                 newer_than(before, &now)
             }),
@@ -1380,6 +1433,14 @@ impl NoticeReader {
             0 => u8::MAX,
             n => *fades.select_nth_unstable(n / 2).1,
         }
+    }
+
+    /// The most a line's strength may drop from one frame to the next: [`LATE_FRAMES`] frames'
+    /// fading, and [`BRIGHTER`] for measuring it over another part of the scene. Unmeasured, any.
+    fn most_fading(&self) -> u8 {
+        self.fade()
+            .saturating_mul(LATE_FRAMES)
+            .saturating_add(BRIGHTER)
     }
 
     /// Checks letters kept from an earlier session against a line shaped like an EXP line. Kept
@@ -1745,6 +1806,9 @@ pub(crate) mod test_support {
     const BODY: [u8; 3] = [252, 252, 255];
     const OUTLINE: [u8; 3] = [16, 20, 36];
 
+    /// How wide a [`Scene::Girder`] is: most of a line.
+    pub(crate) const GIRDER: u32 = 120;
+
     /// What shows behind the stack.
     #[derive(Debug, Clone, Copy)]
     pub(crate) enum Scene {
@@ -1752,6 +1816,10 @@ pub(crate) mod test_support {
         Rock,
         /// Near white, like the clouds a white letter vanishes into.
         Cloud,
+        /// Rock with a girder across it, its top row at `top` and its left end at `left`: yellow
+        /// paint over black, an edge as sharp as a letter's against its shadow. As the camera
+        /// follows the player, it slides behind the stack.
+        Girder { top: u32, left: u32 },
     }
 
     impl Scene {
@@ -1760,6 +1828,15 @@ pub(crate) mod test_support {
             match self {
                 Scene::Rock => [85 + v, 51 + v / 2, 34],
                 Scene::Cloud => [226 + v / 2, 232 + v / 3, 240],
+                Scene::Girder { top, left }
+                    if (top..top + 4).contains(&y) && (left..left + GIRDER).contains(&x) =>
+                {
+                    match y < top + 2 {
+                        true => [220, 170, 40],
+                        false => [40, 35, 30],
+                    }
+                }
+                Scene::Girder { .. } => Scene::Rock.at(x, y),
             }
         }
     }
@@ -2368,6 +2445,39 @@ mod tests {
         walking.extend(run(&mut game, &mut reader, vec![one(&mesos("57"), 0)]));
         assert_eq!(notices(&walking), [Notice::Mesos(57)]);
         assert!(walking.iter().all(|r| r.missed.is_none()), "{walking:?}");
+    }
+
+    // The camera following the player slides sharp-edged scenery, like a painted girder, behind
+    // lines that stay put, changing their shapes from frame to frame. Fails if a line is taken for
+    // a new one and counted again, or the stack is lost.
+    #[test]
+    fn scenery_sliding_behind_the_lines_counts_nothing_twice() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        let read = run(
+            &mut game,
+            &mut reader,
+            vec![one(&mesos("98"), 0), one(&item("Red Potion", 1, "Use"), 0)],
+        );
+        assert_eq!(notices(&read).len(), 2);
+        // Across the bottom line, from below its first row of letters to its last.
+        let bottom = game.height - BOTTOM_LINE_UP;
+        let mut sliding = Vec::new();
+        for step in 0..5 {
+            game.scene = Scene::Girder {
+                top: bottom + step,
+                left: game.width - RIGHT_MARGIN - GIRDER - 10 * step,
+            };
+            sliding.extend(run(&mut game, &mut reader, vec![(Vec::new(), 0)]));
+        }
+        game.scene = Scene::Rock;
+        sliding.extend(run(
+            &mut game,
+            &mut reader,
+            vec![(Vec::new(), 0), one(&mesos("57"), 0)],
+        ));
+        assert_eq!(notices(&sliding), [Notice::Mesos(57)], "{sliding:?}");
+        assert!(sliding.iter().all(|r| r.missed.is_none()), "{sliding:?}");
     }
 
     // The edge of a monster stepping into an empty slot above the lines isn't a line: nothing new

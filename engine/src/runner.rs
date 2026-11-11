@@ -114,12 +114,6 @@ impl<B: Backend> Runner<B> {
         &self.notices
     }
 
-    /// For a player naming a mesos amount the notice reader couldn't read
-    /// ([`NoticeReader::answer`]).
-    pub fn notice_reader_mut(&mut self) -> &mut NoticeReader {
-        &mut self.notices
-    }
-
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
     }
@@ -203,11 +197,14 @@ impl<B: Backend> Runner<B> {
                         Some(_) if !grab.fresh || self.state != CaptureState::Capturing => {}
                         Some(frame) => {
                             let reading = self.exp.observe(&frame);
-                            let notices = self.notices.observe(&frame, reading.as_ref().ok());
-                            tick.events = self.events_for(&reading);
-                            tick.events.extend(notice_events(&notices));
                             // The game fades to black when the map changes.
                             let dark = matches!(reading, Err(Unreadable::ScreenDark));
+                            let notices = match dark {
+                                true => Ok(self.notices.screen_dark()),
+                                false => self.notices.observe(&frame, reading.as_ref().ok()),
+                            };
+                            tick.events = self.events_for(&reading);
+                            tick.events.extend(notice_events(&notices));
                             if let Some(map) = self.map.observe(&frame, dark) {
                                 tick.events.push(Event::MapChanged {
                                     map: map.as_ref().map(|name| name.key.clone()),
@@ -603,37 +600,41 @@ mod tests {
         let mut game = Game::new(Scene::Rock);
         let mut learning = Runner::new(Fake {
             window: Some(GAME),
-            canvas: Some(game.next(&[], 0)),
+            canvas: Some(lit(game.next(&[], 0))),
             ..Fake::default()
         });
         learning.tick();
-        learning.backend_mut().canvas = Some(game.next(&[(&mesos("12"), WHITE)], 0));
+        learning.backend_mut().canvas = Some(lit(game.next(&[(&mesos("12"), WHITE)], 0)));
         let tick = learning.tick();
         assert!(matches!(&tick.notices, Some(Ok(r)) if !r.confirmed));
-        assert!(tick.events.is_empty(), "nothing while learning");
+        assert!(pickups(tick.events).is_empty(), "nothing while learning");
 
         let reader = confirmed_reader(&mut game);
         let mut runner = Runner::with_readers(
             Fake {
                 window: Some(GAME),
-                canvas: Some(game.next(&[], 0)),
+                canvas: Some(lit(game.next(&[], 0))),
                 ..Fake::default()
             },
             ExpBarReader::new(),
             reader,
         );
         assert!(runner.notice_reader().confirmed());
-        assert!(runner.tick().events.is_empty(), "lines already on screen");
-        runner.backend_mut().canvas = Some(game.next(&[(&mesos("75"), WHITE)], 0));
+        assert!(
+            pickups(runner.tick().events).is_empty(),
+            "lines already on screen"
+        );
+        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("75"), WHITE)], 0)));
         assert_eq!(
-            runner.tick().events,
+            pickups(runner.tick().events),
             [Event::MesosGained {
                 amount: 75,
                 late: false
             }]
         );
-        runner.backend_mut().canvas = Some(game.next(&[(&item("Red Potion", 2, "Use"), WHITE)], 0));
-        let events = runner.tick().events;
+        runner.backend_mut().canvas =
+            Some(lit(game.next(&[(&item("Red Potion", 2, "Use"), WHITE)], 0)));
+        let events = pickups(runner.tick().events);
         assert!(
             matches!(
                 events.as_slice(),
@@ -648,19 +649,84 @@ mod tests {
         });
         runner.tick();
         runner.backend_mut().window = Some(GAME);
-        runner.backend_mut().canvas = Some(game.next(&[], 0));
+        runner.backend_mut().canvas = Some(lit(game.next(&[], 0)));
         assert_eq!(
-            runner.tick().events,
+            pickups(runner.tick().events),
             [Event::NoticesMissed { reason: "lost" }]
         );
         // Closed and started again: nothing could be picked up meanwhile.
         runner.backend_mut().window = None;
         runner.tick();
         runner.backend_mut().window = Some(GameWindow { id: 8, ..GAME });
-        assert!(runner.tick().events.is_empty());
-        runner.backend_mut().canvas = Some(game.next(&[(&mesos("12"), WHITE)], 0));
+        assert!(pickups(runner.tick().events).is_empty());
+        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("12"), WHITE)], 0)));
         assert_eq!(
-            runner.tick().events,
+            pickups(runner.tick().events),
+            [Event::MesosGained {
+                amount: 12,
+                late: false
+            }]
+        );
+    }
+
+    /// The notices over the scene, with white where the HUD's text would be: a frame with nothing
+    /// white there is a screen the game dimmed to change maps.
+    fn lit(mut canvas: Canvas) -> Canvas {
+        canvas.fill(300, canvas.height - 10, 2, 2, [255, 255, 255]);
+        canvas
+    }
+
+    /// The events but the map's: the frames these tests draw have no minimap.
+    fn pickups(events: Vec<Event>) -> Vec<Event> {
+        events
+            .into_iter()
+            .filter(|e| !matches!(e, Event::MapChanged { .. }))
+            .collect()
+    }
+
+    // Pickups on screen when the player takes a portal stay on screen over the new map, still
+    // fading. Fails if they're counted again when the new map shows, or the dark screen between
+    // is reported as pickups missed.
+    #[test]
+    fn a_map_change_counts_no_pickup_twice() {
+        use crate::recognizers::notices::test_support::{
+            Game, Scene, WHITE, confirmed_reader, mesos,
+        };
+        let mut game = Game::new(Scene::Rock);
+        let reader = confirmed_reader(&mut game);
+        let mut runner = Runner::with_readers(
+            Fake {
+                window: Some(GAME),
+                canvas: Some(lit(game.next(&[], 0))),
+                ..Fake::default()
+            },
+            ExpBarReader::new(),
+            reader,
+        );
+        runner.tick();
+        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("75"), WHITE)], 0)));
+        assert_eq!(
+            pickups(runner.tick().events),
+            [Event::MesosGained {
+                amount: 75,
+                late: false
+            }]
+        );
+        let mut events = Vec::new();
+        for _ in 0..2 {
+            game.next(&[], 0);
+            runner.backend_mut().canvas = Some(Canvas::new(1366, 768));
+            events.extend(runner.tick().events);
+        }
+        game.scene = Scene::Cloud;
+        for _ in 0..3 {
+            runner.backend_mut().canvas = Some(lit(game.next(&[], 0)));
+            events.extend(runner.tick().events);
+        }
+        assert_eq!(pickups(events), []);
+        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("12"), WHITE)], 0)));
+        assert_eq!(
+            pickups(runner.tick().events),
             [Event::MesosGained {
                 amount: 12,
                 late: false
