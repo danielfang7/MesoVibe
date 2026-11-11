@@ -839,7 +839,7 @@ function shell(initial: Settings): void {
         { class: "block" },
         h("h2", { class: "label" }, "What MesoVibe sees"),
         panel.snapshot !== null && reading
-          ? h("img", { class: "thumbnail", attrs: { src: panel.snapshot, alt: "The bottom of the game window, as MesoVibe read it" } })
+          ? h("img", { class: "thumbnail", attrs: { src: panel.snapshot, alt: "The part of the game window MesoVibe read last" } })
           : h("p", { class: "state empty" }, "No picture yet. It appears while MesoVibe is reading the game."),
         h("p", { class: "text muted" }, "The exact rows MesoVibe reads, at the game's own size. This picture stays on this computer."),
         h("div", { class: "reading-box" }, h("span", { class: "label" }, "EXP bar"), h("span", { class: "number" }, box)),
@@ -853,7 +853,11 @@ function shell(initial: Settings): void {
             game ? `${game.width}×${game.height}${game.scale > 1 ? `, Retina ${game.scale}×` : ""}` : "?",
           ),
           h("dt", {}, "How often"),
-          h("dd", {}, "Up to 4 times a second, the bottom strip only"),
+          h(
+            "dd",
+            {},
+            "Up to 4 times a second, the bottom strip. The whole game picture after a map change and every 30 seconds, for the map's name.",
+          ),
         ),
       ),
       h(
@@ -861,6 +865,8 @@ function shell(initial: Settings): void {
         { class: "block" },
         h("h2", { class: "label" }, "Reads"),
         h("p", {}, "The EXP bar: your level, EXP and percent."),
+        h("p", {}, "The pickup notices at the bottom right: the EXP, mesos and items you pick up."),
+        h("p", {}, "The minimap's map name, as a picture."),
         h("p", {}, "The chat box: whisper, party and friend lines, as pictures."),
         h("h2", { class: "label" }, "Never reads"),
         h("p", {}, "Your keyboard or mouse · the game's memory · the game's files · network traffic"),
