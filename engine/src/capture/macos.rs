@@ -6,11 +6,12 @@
 //! - **Finding the game** reads only the system window list (the same facts the Dock and Mission
 //!   Control use) and the owning app's bundle ID. That needs no permission, and never touches the
 //!   game's memory or files (see Fair play in README.md).
-//! - **Capturing** is a ScreenCaptureKit stream of that one window, for only its bottom rows
-//!   (`sourceRect`), at most 5 frames a second (`minimumFrameInterval`), in BGRA, without the
-//!   cursor. Each frame's strip, about 0.7 MB on a Retina display, is copied out and kept
-//!   until the engine asks. Windows covering the game don't matter: the stream sees the window
-//!   itself.
+//! - **Capturing** is a ScreenCaptureKit stream of that one window, for only the bottom rows the
+//!   readers need (`sourceRect`), at most 5 frames a second (`minimumFrameInterval`), in BGRA,
+//!   without the cursor. Each frame's strip, about 0.7 MB on a Retina display, is copied out and
+//!   kept until the engine asks. When the engine asks for more or fewer rows (the whole game area
+//!   now and then, for the map's name), the running stream is changed, not restarted. Windows
+//!   covering the game don't matter: the stream sees the window itself.
 //! - **Pixels as the display shows them:** at backing scale 2 every game pixel is a 2x2 block. The
 //!   grab says so ([`Grab::scale`]), and the readers undo it exactly.
 //! - **Colors as the game draws them:** the stream asks for sRGB. By default it hands over the
@@ -25,6 +26,7 @@
 //!   that says how to turn it on.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant};
 
@@ -76,6 +78,9 @@ const MIN_FRAME_INTERVAL: (i64, i32) = (1, 5);
 const FRESH_WAIT: Duration = Duration::from_millis(100);
 /// How long a new stream waits for its first frame before calling capture broken.
 const FIRST_FRAME_WAIT: Duration = Duration::from_secs(2);
+/// How long the first grab after the stream's rows changed waits for a frame of the new size
+/// before handing over the last picture: a little over the stream's frame interval.
+const RESIZED_WAIT: Duration = Duration::from_millis(300);
 /// The smallest game area the game offers (800x600). Anything smaller is the window animating.
 const MIN_GAME: (u32, u32) = (800, 600);
 /// How long ScreenCaptureKit gets to list windows or start a stream.
@@ -134,8 +139,17 @@ impl Backend for MacBackend {
 
     fn grab(&mut self, window: &GameWindow, rows: u32) -> Result<Grab, CaptureError> {
         autoreleasepool(|_| {
-            let key = Key::of(window, rows);
-            if self.session.as_ref().is_none_or(|s| s.key != key) {
+            let key = Key::of(window);
+            let rows = key.pixel_rows(rows);
+            // Another window or size starts a new stream; other rows change the running one, and
+            // only if that fails is it started again.
+            let restart = match self.session.as_mut() {
+                Some(session) if session.key == key => {
+                    session.rows != rows && !session.set_rows(rows)
+                }
+                _ => true,
+            };
+            if restart {
                 self.session = None;
                 // Checked only when starting (it takes about 9 ms). A permission turned off
                 // later stops the stream, which the next grab reports.
@@ -147,7 +161,7 @@ impl Backend for MacBackend {
                     }
                     return Err(CaptureError(PERMISSION_FIX.to_string()));
                 }
-                self.session = Some(Session::start(key)?);
+                self.session = Some(Session::start(key, rows)?);
             }
             match self.session.as_mut().expect("started above").grab()? {
                 Some(grab) => {
@@ -391,7 +405,7 @@ fn int(info: &CFDictionary<CFString, CFType>, key: &CFString) -> Option<i64> {
 
 // MARK: capture
 
-/// What a stream was set up for. A different key needs a new stream.
+/// What a stream captures: one window's game area. Another one needs a new stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Key {
     window: u64,
@@ -399,26 +413,28 @@ struct Key {
     width: u32,
     height: u32,
     scale: u32,
-    /// Pixel rows to read back.
-    pixel_rows: u32,
 }
 
 impl Key {
-    fn of(window: &GameWindow, rows: u32) -> Key {
-        let scale = window.scale.max(1);
+    fn of(window: &GameWindow) -> Key {
         Key {
             window: window.id,
             width: window.width,
             height: window.height,
-            scale,
-            pixel_rows: scaled_rows(rows.min(window.height), scale),
+            scale: window.scale.max(1),
         }
     }
 
-    /// The points of the window's bottom edge the stream captures: whole points that hold the
-    /// pixel rows.
-    fn points(&self) -> u32 {
-        self.pixel_rows.div_ceil(self.scale)
+    /// The pixel rows that hold the bottom `rows` game rows wherever the display's pixel blocks
+    /// start, never more than the game area has.
+    fn pixel_rows(&self, rows: u32) -> u32 {
+        scaled_rows(rows.min(self.height), self.scale).min(self.height * self.scale)
+    }
+
+    /// The points of the window's bottom edge a stream of `pixel_rows` captures: whole points that
+    /// hold them.
+    fn points(&self, pixel_rows: u32) -> u32 {
+        pixel_rows.div_ceil(self.scale)
     }
 }
 
@@ -448,8 +464,10 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     changed: Condvar,
-    /// The size frames must have, in pixels.
-    expected: (u32, u32),
+    /// The width frames must have, in pixels.
+    width: u32,
+    /// The height frames must have, in pixels: the stream's rows, which change with it.
+    height: AtomicU32,
 }
 
 impl Shared {
@@ -462,7 +480,9 @@ impl Shared {
     fn receive(&self, sample: &CMSampleBuffer) {
         let status = frame_status(sample);
         let pixels = match status {
-            Some(SCFrameStatus::Complete) => copy_pixels(sample, self.expected),
+            Some(SCFrameStatus::Complete) => {
+                copy_pixels(sample, (self.width, self.height.load(Ordering::Acquire)))
+            }
             _ => None,
         };
         let mut state = self.lock();
@@ -542,7 +562,8 @@ fn frame_status(sample: &CMSampleBuffer) -> Option<SCFrameStatus> {
 }
 
 /// Copies a complete frame's BGRA rows. `None` when the frame isn't BGRA or isn't the size the
-/// stream was set up for (a window caught mid-resize).
+/// stream is set up for (a window caught mid-resize, or a frame from before the stream's rows
+/// changed).
 fn copy_pixels(sample: &CMSampleBuffer, (width, height): (u32, u32)) -> Option<Pixels> {
     // SAFETY: a complete frame carries a pixel buffer.
     let image = unsafe { sample.image_buffer() }?;
@@ -573,6 +594,45 @@ fn copy_pixels(sample: &CMSampleBuffer, (width, height): (u32, u32)) -> Option<P
             height,
             bgra,
         })
+    }
+}
+
+/// A stream's settings for the bottom `rows` pixel rows of `key`'s game area, in a window of
+/// `window` points (title bar included).
+fn configuration(key: Key, window: CGSize, rows: u32) -> Retained<SCStreamConfiguration> {
+    let points = key.points(rows);
+    // SAFETY: configuration setters on a fresh configuration.
+    unsafe {
+        let config = SCStreamConfiguration::new();
+        // The bottom rows of the window, in its own points; the output in its pixels, so
+        // nothing is resampled.
+        config.setSourceRect(CGRect {
+            origin: CGPoint {
+                x: 0.0,
+                y: window.height - f64::from(points),
+            },
+            size: CGSize {
+                width: window.width,
+                height: f64::from(points),
+            },
+        });
+        config.setWidth((key.width * key.scale) as usize);
+        config.setHeight((points * key.scale) as usize);
+        config.setScalesToFit(false);
+        config.setPixelFormat(kCVPixelFormatType_32BGRA);
+        // The game's own colors. Left alone, the stream hands over the display's color space,
+        // and on a Display P3 screen the friend chat's (255, 153, 0) arrives as (241, 158, 56),
+        // which no color reader matches.
+        config.setColorSpaceName(kCGColorSpaceSRGB);
+        config.setShowsCursor(false);
+        config.setQueueDepth(3);
+        let (value, timescale) = MIN_FRAME_INTERVAL;
+        config.setMinimumFrameInterval(CMTime::new(value, timescale));
+        if available!(macos = 14.0) {
+            config.setCaptureResolution(SCCaptureResolutionType::Best);
+            config.setIgnoreShadowsSingleWindow(true);
+        }
+        config
     }
 }
 
@@ -622,6 +682,12 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, CaptureError> {
 
 struct Session {
     key: Key,
+    /// The window's size in points, title bar included, which the stream's region is measured in.
+    window: CGSize,
+    /// The pixel rows the stream delivers.
+    rows: u32,
+    /// The rows changed since the last grab.
+    resized: bool,
     shared: Arc<Shared>,
     stream: Retained<SCStream>,
     // Kept alive while the stream uses them.
@@ -636,7 +702,7 @@ struct Session {
 }
 
 impl Session {
-    fn start(key: Key) -> Result<Session, CaptureError> {
+    fn start(key: Key, rows: u32) -> Result<Session, CaptureError> {
         let content = shareable_content()?;
         // SAFETY: reading the windows of delivered shareable content.
         let window: Retained<SCWindow> = unsafe { content.windows() }
@@ -655,45 +721,12 @@ impl Session {
         };
         // SAFETY: the window's frame, in points, title bar included.
         let frame = unsafe { window.frame() };
-        let (width, rows) = (key.width * key.scale, key.points() * key.scale);
         let shared = Arc::new(Shared {
-            expected: (width, rows),
+            width: key.width * key.scale,
+            height: AtomicU32::new(key.points(rows) * key.scale),
             ..Shared::default()
         });
-        // SAFETY: configuration setters on a fresh configuration.
-        let config = unsafe {
-            let config = SCStreamConfiguration::new();
-            // The bottom rows of the window, in its own points; the output in its pixels, so
-            // nothing is resampled.
-            let points = f64::from(key.points());
-            config.setSourceRect(CGRect {
-                origin: CGPoint {
-                    x: 0.0,
-                    y: frame.size.height - points,
-                },
-                size: CGSize {
-                    width: frame.size.width,
-                    height: points,
-                },
-            });
-            config.setWidth(width as usize);
-            config.setHeight(rows as usize);
-            config.setScalesToFit(false);
-            config.setPixelFormat(kCVPixelFormatType_32BGRA);
-            // The game's own colors. Left alone, the stream hands over the display's color
-            // space, and on a Display P3 screen the friend chat's (255, 153, 0) arrives as
-            // (241, 158, 56), which no color reader matches.
-            config.setColorSpaceName(kCGColorSpaceSRGB);
-            config.setShowsCursor(false);
-            config.setQueueDepth(3);
-            let (value, timescale) = MIN_FRAME_INTERVAL;
-            config.setMinimumFrameInterval(CMTime::new(value, timescale));
-            if available!(macos = 14.0) {
-                config.setCaptureResolution(SCCaptureResolutionType::Best);
-                config.setIgnoreShadowsSingleWindow(true);
-            }
-            config
-        };
+        let config = configuration(key, frame.size, rows);
         let output = Output::new(shared.clone());
         // SAFETY: a stream of the filter with the configuration, reporting to `output`.
         let stream = unsafe {
@@ -740,6 +773,9 @@ impl Session {
         }
         Ok(Session {
             key,
+            window: frame.size,
+            rows,
+            resized: false,
             shared,
             stream,
             _output: output,
@@ -750,17 +786,46 @@ impl Session {
         })
     }
 
+    /// Changes the running stream to deliver `rows` pixel rows, without restarting it. False when
+    /// macOS didn't take the change.
+    fn set_rows(&mut self, rows: u32) -> bool {
+        let config = configuration(self.key, self.window, rows);
+        // Frames of the old size still on their way are dropped from here on.
+        self.shared
+            .height
+            .store(self.key.points(rows) * self.key.scale, Ordering::Release);
+        let (tx, rx) = mpsc::channel();
+        let done = RcBlock::new(move |error: *mut NSError| {
+            let _ = tx.send(error.is_null());
+        });
+        // SAFETY: the handler matches the completion handler's signature.
+        unsafe {
+            self.stream
+                .updateConfiguration_completionHandler(&config, Some(&done))
+        };
+        let changed = rx.recv_timeout(CALL_WAIT) == Ok(true);
+        if changed {
+            self.rows = rows;
+            self.resized = true;
+        }
+        changed
+    }
+
     /// The bottom rows of the newest frame, waiting a little for one when none is new. `None`
     /// when the stream has shown nothing yet.
     fn grab(&mut self) -> Result<Option<Grab>, CaptureError> {
-        let wait = match self.grabbed {
-            true => FRESH_WAIT,
-            false => FIRST_FRAME_WAIT,
+        let wait = match (self.grabbed, std::mem::take(&mut self.resized)) {
+            (false, _) => FIRST_FRAME_WAIT,
+            (true, true) => RESIZED_WAIT,
+            (true, false) => FRESH_WAIT,
         };
         self.grabbed = true;
         let deadline = Instant::now() + wait;
+        let rows = self.rows;
+        // After the rows changed, the newest frame may still be one of the old size.
+        let holds = |state: &State| state.latest.as_ref().is_some_and(|p| p.height >= rows);
         let mut state = self.shared.lock();
-        while state.alive == self.seen && state.stopped.is_none() {
+        while (state.alive == self.seen || !holds(&state)) && state.stopped.is_none() {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
@@ -777,11 +842,11 @@ impl Session {
                 "macOS stopped capturing the game window: {why}"
             )));
         }
-        let fresh = state.alive != self.seen;
+        let fresh = state.alive != self.seen && holds(&state);
         self.seen = state.alive;
         let grab = match &state.latest {
-            Some(pixels) => self.strip(pixels, fresh),
-            None => None,
+            Some(pixels) if pixels.height >= rows => self.strip(pixels, fresh),
+            _ => None,
         };
         drop(state);
         match grab {
@@ -796,11 +861,11 @@ impl Session {
         }
     }
 
-    /// A frame's bottom `pixel_rows` rows as a grab of the game area.
+    /// A frame's bottom `rows` pixel rows as a grab of the game area.
     fn strip(&self, pixels: &Pixels, fresh: bool) -> Option<Grab> {
         let key = self.key;
         let (width, height) = (key.width * key.scale, key.height * key.scale);
-        let rows = key.pixel_rows.min(pixels.height);
+        let rows = self.rows.min(pixels.height);
         if pixels.width != width || rows == 0 {
             return None;
         }
@@ -844,20 +909,25 @@ mod tests {
             minimized: false,
             placement: None,
         };
-        let key = Key::of(&window, 32);
-        assert_eq!(key.pixel_rows, 65, "32 game rows wherever the blocks start");
-        assert_eq!(key.points(), 33);
-        let key = Key::of(&GameWindow { scale: 1, ..window }, 32);
-        assert_eq!((key.pixel_rows, key.points()), (32, 32));
-        // Never more rows than the game area has.
-        let key = Key::of(
-            &GameWindow {
-                height: 20,
-                ..window
-            },
-            32,
+        let key = Key::of(&window);
+        assert_eq!(
+            key.pixel_rows(32),
+            65,
+            "32 game rows wherever the blocks start"
         );
-        assert_eq!(key.pixel_rows, scaled_rows(20, 2));
+        assert_eq!(key.points(65), 33);
+        let key = Key::of(&GameWindow { scale: 1, ..window });
+        assert_eq!((key.pixel_rows(32), key.points(32)), (32, 32));
+        // Never more rows than the game area has, so the stream never reaches into the title
+        // bar: the whole game area is exactly its points.
+        let key = Key::of(&window);
+        assert_eq!(key.pixel_rows(768), 1536);
+        assert_eq!(key.points(1536), 768);
+        let key = Key::of(&GameWindow {
+            height: 20,
+            ..window
+        });
+        assert_eq!(key.pixel_rows(32), 40);
     }
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
