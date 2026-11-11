@@ -609,7 +609,7 @@ fn distance(read: &[Option<char>], text: &str) -> usize {
 /// show them, and the glyphs of its number.
 struct Fit<'a> {
     fixed: Vec<(&'a Glyph, char)>,
-    number: &'a [Piece],
+    number: Vec<&'a Piece>,
 }
 
 /// Pairs each glyph of `words` with the letter of `texts` in its place, when the word lengths fit.
@@ -629,22 +629,31 @@ fn spell<'a>(words: &'a [Vec<Piece>], texts: &[&str], fixed: &mut Vec<(&'a Glyph
 
 /// The amount at the end of a line, "(+N)": its digits, with the brackets and plus added to
 /// `fixed`.
-fn amount<'a>(word: &'a [Piece], fixed: &mut Vec<(&'a Glyph, char)>) -> Option<&'a [Piece]> {
-    let last = word.len().checked_sub(1).filter(|&last| last >= 3)?;
-    fixed.push((&word[0].glyph, '('));
-    fixed.push((&word[1].glyph, '+'));
-    fixed.push((&word[last].glyph, ')'));
-    Some(&word[2..last])
+fn amount<'a>(pieces: &[&'a Piece], fixed: &mut Vec<(&'a Glyph, char)>) -> Option<Vec<&'a Piece>> {
+    let last = pieces
+        .len()
+        .checked_sub(1)
+        .filter(|last| (3..=MAX_AMOUNT + 2).contains(last))?;
+    fixed.push((&pieces[0].glyph, '('));
+    fixed.push((&pieces[1].glyph, '+'));
+    fixed.push((&pieces[last].glyph, ')'));
+    Some(pieces[2..last].to_vec())
 }
 
-/// The words of an amount line, "<phrase> (+N)", fitted to `phrase`.
+/// The words of an amount line, "<phrase> (+N)", fitted to `phrase`. Everything after the
+/// phrase is the amount: a 1 leaves as wide a gap after it as a space, so "(+122)" comes cut
+/// into "(+1" and "22)".
 fn fit_amount<'a>(cut: &'a Cut, phrase: &[&str]) -> Option<Fit<'a>> {
-    let (last, words) = cut.words.split_last()?;
+    if cut.words.len() <= phrase.len() {
+        return None;
+    }
+    let (words, rest) = cut.words.split_at(phrase.len());
     let mut fixed = Vec::new();
     if !spell(words, phrase, &mut fixed) {
         return None;
     }
-    let number = amount(last, &mut fixed)?;
+    let pieces: Vec<&Piece> = rest.iter().flatten().collect();
+    let number = amount(&pieces, &mut fixed)?;
     Some(Fit { fixed, number })
 }
 
@@ -678,7 +687,7 @@ fn fit_item(cut: &Cut, tab: Option<Tab>) -> Option<Fit<'_>> {
     }
     Some(Fit {
         fixed,
-        number: &count[1..],
+        number: count[1..].iter().collect(),
     })
 }
 
@@ -1369,11 +1378,17 @@ pub(crate) mod test_support {
 
     impl Game {
         pub(crate) fn new(scene: Scene) -> Game {
+            let mut font = Font::new(CHARS, 11);
+            // As in the game, a 1 is narrow and leaves as wide a gap after it as a space: "(+12)"
+            // comes cut into "(+1" and "2)".
+            if let Some((_, one)) = font.glyphs.iter_mut().find(|(c, _)| *c == '1') {
+                *one = vec![0b000_0011, 0b111_1111, 0, 0, 0];
+            }
             Game {
                 width: 1366,
                 height: 768,
                 scene,
-                font: Font::new(CHARS, 11),
+                font,
                 lines: Vec::new(),
                 exp: 100_000,
                 covered: false,
