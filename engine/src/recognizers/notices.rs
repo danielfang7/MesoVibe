@@ -32,8 +32,15 @@
 //!
 //! A line's letters are cut from the first frame it shows in, while it's still at full strength:
 //! at four frames a second that's within a quarter second of its arrival. Letters are compared
-//! exactly, but phrases are matched from the line's end allowing a letter or two to differ, so
-//! two touching letters or a speck of the scene costs a letter of a name, not the line.
+//! exactly, but phrases are matched from the line's end allowing a few letters to differ, so two
+//! touching letters or a speck of the scene costs a letter of a name, not the line.
+//!
+//! **Monsters walk behind the stack** on many maps, and their outlines spoil the letters they pass
+//! behind. A line that can't be read when it arrives is tried again in the next frames while it's
+//! still strong enough, as the monster moves on; only when frames come often enough for that (the
+//! reader measures how fast lines fade between frames). A line seen again is the same line if
+//! most of its columns still agree and it hasn't brightened, and where the stack sits is decided
+//! by a vote along its lines, so a monster spoils a stretch, not the count.
 //!
 //! **Missed lines are reported, never guessed.** A stack that lines up with nothing, a new line
 //! that can't be read (covered, or a digit not learned yet), or EXP lines that add up to less or
@@ -67,6 +74,10 @@ pub const NOTICE_COLUMNS: u32 = 400;
 const TEXT_COLUMNS: u32 = NOTICE_COLUMNS - 1;
 /// A line's last column, counted in from the picture's right edge.
 const RIGHT_MARGIN: u32 = 8;
+/// Columns of a line that vote together on where the stack sits ([`find_shift`]): a few letters.
+const VOTE_COLUMNS: u32 = 24;
+/// Votes a place needs, and twice the current place's, for the stack to move there.
+const MIN_VOTES: usize = 4;
 /// How far, in game pixels up or down, the stack may sit from where the picture's height puts it.
 /// Wine on a Mac places the game up to a point off.
 const MAX_SHIFT: u32 = 1;
@@ -84,6 +95,14 @@ const MIN_PIXELS: usize = 16;
 const SOLID: u8 = 160;
 /// A solid line's shape: its pixels at least this much brighter than their shadow.
 const INK: i16 = 120;
+/// Frames whose fading [`NoticeReader::fade`] measures.
+const FADES_KEPT: usize = 9;
+/// A line seen again may differ from how it was in at most one column in this many, for something
+/// moving behind it ([`mostly_same_shape`]).
+const DAMAGED_PARTS: u32 = 3;
+/// How much stronger a line spoiled by something moving behind it may measure than in the frame
+/// before and still be the same line: measuring noise, well under a frame's fading.
+const STEADY: u8 = 4;
 /// A line is read only while this strong. Fainter, too much of the scene shows through to tell
 /// every pixel of its letters. Captured four times a second, a line is first seen at about 230.
 const READ: u8 = 215;
@@ -275,13 +294,17 @@ impl Slot {
 impl StackLine for Slot {
     /// `self` is the line in the frame before. A line that's faded since lines up with anything:
     /// lines fade. A solid one is the same line only if it's no brighter than it was and has the
-    /// same shape, up to a pixel away each way.
+    /// same shape, up to a pixel away each way. Something moving behind it, like a monster walking
+    /// past, changes part of its shape; it's still the same line if most of its columns agree and
+    /// it hasn't brightened at all. A newer line in its place has: it arrived after it.
     fn matches(&self, now: &Slot) -> bool {
         match (self.solid(), now.solid()) {
             (_, false) => true,
             (false, true) => false,
             (true, true) => {
-                now.strength <= self.strength.saturating_add(BRIGHTER) && same_shape(self, now)
+                (now.strength <= self.strength.saturating_add(BRIGHTER) && same_shape(self, now))
+                    || (now.strength <= self.strength.saturating_add(STEADY)
+                        && mostly_same_shape(self, now))
             }
         }
     }
@@ -292,18 +315,49 @@ impl StackLine for Slot {
 }
 
 fn same_shape(a: &Slot, b: &Slot) -> bool {
+    let offsets = || (-1..=1).flat_map(|down| (-1..=1).map(move |right| (right, down)));
     let allowed = (a.count.max(b.count) / 10).max(6);
-    if a.count.abs_diff(b.count) > allowed {
-        return false;
-    }
     let same_at = |(right, down): (i32, i32)| {
         let by = down * TEXT_COLUMNS as i32 + right;
         lines::differ(&a.ink, &b.ink, TEXT_COLUMNS * LINE_ROWS, by, None) <= allowed
     };
-    same_at((0, 0))
-        || (-1..=1)
-            .flat_map(|down| (-1..=1).map(move |right| (right, down)))
-            .any(same_at)
+    a.count.abs_diff(b.count) <= allowed && (same_at((0, 0)) || offsets().any(same_at))
+}
+
+/// The same shape but for a stretch spoiled by something moving behind it: at most one column in
+/// [`DAMAGED_PARTS`] differs. Lines with the same phrase and another amount pass too, so it's for
+/// a line that hasn't brightened ([`Slot::matches`]).
+fn mostly_same_shape(a: &Slot, b: &Slot) -> bool {
+    let offsets = (-1..=1).flat_map(|down| (-1..=1).map(move |right| (right, down)));
+    offsets.into_iter().any(|by| {
+        let (differ, inked) = columns_differ(a, b, by);
+        inked > 0 && differ * DAMAGED_PARTS <= inked
+    })
+}
+
+/// In how many columns `a` and `b` moved `(right, down)` differ, and in how many either has ink.
+fn columns_differ(a: &Slot, b: &Slot, (right, down): (i32, i32)) -> (u32, u32) {
+    let ink = |slot: &Slot, row: i32, col: i32| -> bool {
+        if !(0..LINE_ROWS as i32).contains(&row) || !(0..TEXT_COLUMNS as i32).contains(&col) {
+            return false;
+        }
+        let bit = (row as u32 * TEXT_COLUMNS + col as u32) as usize;
+        slot.ink
+            .get(bit / 64)
+            .is_some_and(|word| word >> (bit % 64) & 1 == 1)
+    };
+    let (mut differ, mut inked) = (0, 0);
+    for col in 0..TEXT_COLUMNS as i32 {
+        let (mut any, mut other) = (false, false);
+        for row in 0..LINE_ROWS as i32 {
+            let (x, y) = (ink(a, row, col), ink(b, row - down, col - right));
+            any |= x || y;
+            other |= x != y;
+        }
+        inked += u32::from(any);
+        differ += u32::from(other);
+    }
+    (differ, inked)
 }
 
 /// The slot whose top row is `top`. A line ends at the right, [`RIGHT_MARGIN`] columns in, and
@@ -385,46 +439,52 @@ fn shifts(prefer: i32) -> impl Iterator<Item = i32> {
 /// Where the stack sits. In the right place, a solid line has no stroke ends in the row above it,
 /// nor in its bottom row, where the game clips the shadow off; a row off either way, one of those
 /// is a row of its strokes (the tops of its capitals, or its baseline). Each line is scored in its
-/// own columns at its own strength, so the scene beside it counts for little. Without solid lines
-/// on screen, `prefer`.
+/// own columns at its own strength, a stretch of [`VOTE_COLUMNS`] at a time, and each stretch votes
+/// for the place where it has the fewest stroke ends there: a monster walking behind the stack, or
+/// something drawn just above a line (the party's HP list ends there), spoils a few stretches, not
+/// most of them. Wine's offset doesn't change while the game runs, so it moves only on a clear
+/// majority. Without solid lines on screen, `prefer`.
 fn find_shift(frame: &Frame, layout: Layout, prefer: i32) -> i32 {
-    let solid: Vec<(usize, i16, u32, u32)> = (0..SLOTS)
-        .filter_map(|k| {
-            let top = layout.top(k, prefer);
-            let line = slot(frame, layout, top);
-            if !line.solid() {
-                return None;
-            }
-            let strong = i16::from(line.strength) * 3 / 4;
-            let columns: Vec<u32> = (layout.left..layout.right)
-                .filter(|&x| (top..top + LINE_ROWS).any(|y| diff(frame, x, y) >= strong))
+    let mut votes = [0usize; 2 * MAX_SHIFT as usize + 1];
+    for k in 0..SLOTS {
+        let top = layout.top(k, prefer);
+        let line = slot(frame, layout, top);
+        if !line.solid() {
+            continue;
+        }
+        let strong = i16::from(line.strength) * 3 / 4;
+        let columns: Vec<u32> = (layout.left..layout.right)
+            .filter(|&x| (top..top + LINE_ROWS).any(|y| diff(frame, x, y) >= strong))
+            .collect();
+        let (Some(&from), Some(&last)) = (columns.first(), columns.last()) else {
+            continue;
+        };
+        let stray = |shift: i32, from: u32, to: u32| -> usize {
+            let top = layout.top(k, shift);
+            [top - 1, top + LINE_ROWS - 1]
+                .into_iter()
+                .map(|y| (from..to).filter(|&x| diff(frame, x, y) >= strong).count())
+                .sum()
+        };
+        for start in (from..=last).step_by(VOTE_COLUMNS as usize) {
+            let to = (start + VOTE_COLUMNS).min(last + 1);
+            let scores: Vec<(usize, i32)> = shifts(prefer)
+                .map(|shift| (stray(shift, start, to), shift))
                 .collect();
-            Some((k, strong, *columns.first()?, *columns.last()? + 1))
-        })
-        .collect();
-    if solid.is_empty() {
-        return prefer;
+            let best = scores.iter().map(|s| s.0).min().unwrap_or(0);
+            // A stretch votes only when one place is plainly cleanest.
+            if let [(_, shift)] = scores.iter().filter(|s| s.0 == best).collect::<Vec<_>>()[..]
+                && scores.iter().all(|s| s.1 == *shift || s.0 >= best + 2)
+            {
+                votes[(shift + MAX_SHIFT as i32) as usize] += 1;
+            }
+        }
     }
-    let stray = |shift: i32| -> usize {
-        solid
-            .iter()
-            .map(|&(k, strong, from, to)| {
-                let top = layout.top(k, shift);
-                [top - 1, top + LINE_ROWS - 1]
-                    .into_iter()
-                    .map(|y| (from..to).filter(|&x| diff(frame, x, y) >= strong).count())
-                    .sum::<usize>()
-            })
-            .sum()
-    };
-    // Only clear evidence moves it: Wine's offset doesn't change while the game runs, and
-    // something drawn just above a line (the party's HP list ends there) can look like strokes.
-    let here = stray(prefer);
+    let vote = |shift: i32| votes[(shift + MAX_SHIFT as i32) as usize];
     shifts(prefer)
-        .map(|shift| (stray(shift), shift))
-        .min_by_key(|&(stray, _)| stray)
-        .filter(|&(best, _)| here >= 4 && best * 3 <= here)
-        .map_or(prefer, |(_, shift)| shift)
+        .max_by_key(|&shift| (vote(shift), shift == prefer))
+        .filter(|&shift| vote(shift) >= MIN_VOTES && vote(shift) >= 2 * vote(prefer))
+        .unwrap_or(prefer)
 }
 
 /// One letter of a line: where its cell starts, and its shape.
@@ -566,8 +626,12 @@ const MESOS_TEXT: &str = "Youhavegainedmesos";
 const PARTY_TEXT: &str = "BonusEXPforPARTY";
 const PARTY_TEXT_JOINED: &str = "BonusEXPforPAR\u{E000}";
 /// Letters a phrase may have unknown, wrong, missing or extra and still be read as that phrase:
-/// two touching letters cost two.
-const PHRASE_ERRORS: usize = 2;
+/// two touching letters cost two, and a monster walking behind a word can cost three. The
+/// phrases are far apart, and the amount after them must still read exactly.
+const PHRASE_ERRORS: usize = 3;
+/// Letters "earned." may have unknown, wrong, missing or extra in an item line, whose count
+/// before it and "x" before that must still read exactly.
+const EARNED_ERRORS: usize = 2;
 /// Most digits and commas an amount has: "1,234,567".
 const MAX_AMOUNT: usize = 9;
 
@@ -824,7 +888,7 @@ enum Read {
 }
 
 /// Follows the notice stack from frame to frame and reads each new line once.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NoticeReader {
     atlas: Atlas,
     /// The stack last frame, bottom first; `None` after a frame that couldn't be read.
@@ -833,6 +897,11 @@ pub struct NoticeReader {
     lost: bool,
     /// Where the stack was last found, rows down from where the picture's height puts it.
     shift: i32,
+    /// Slots of last frame's lines that arrived but couldn't be read yet.
+    pending: Vec<usize>,
+    /// How much a line faded from one frame to the next in the last frames measured, newest last:
+    /// about 9 at four frames a second, 45 at one.
+    fades: Vec<u8>,
     /// The last confirmed HUD reading.
     hud: Option<ExpReading>,
     window: Window,
@@ -847,9 +916,28 @@ pub struct NoticeReader {
     restored: Option<usize>,
 }
 
+impl Default for NoticeReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NoticeReader {
     pub fn new() -> Self {
-        Self::default()
+        NoticeReader {
+            atlas: Atlas::default(),
+            lines: None,
+            lost: false,
+            shift: 0,
+            pending: Vec::new(),
+            fades: Vec::new(),
+            hud: None,
+            window: Window::default(),
+            checks: 0,
+            misses: 0,
+            confirmed: false,
+            restored: None,
+        }
     }
 
     pub fn confirmed(&self) -> bool {
@@ -923,6 +1011,7 @@ impl NoticeReader {
     pub fn reset(&mut self) {
         self.lost |= self.lines.is_some();
         self.lines = None;
+        self.pending.clear();
     }
 
     /// Starts over for a game that was closed and started again, maybe with another character:
@@ -930,6 +1019,7 @@ impl NoticeReader {
     /// stays.
     pub fn restart(&mut self) {
         self.lines = None;
+        self.pending.clear();
         self.lost = false;
         self.hud = None;
         self.window = Window::default();
@@ -962,15 +1052,43 @@ impl NoticeReader {
                 0
             }
         };
+        if missed.is_none() {
+            self.measure_fade(&now, fresh);
+        }
+        // Lines that couldn't be read when they arrived, where the stack moved them, to be tried
+        // again: something moving behind a line (a monster walking past) spoils some frames of it
+        // and not others. Lost when the stack can't be followed.
+        let waiting = std::mem::take(&mut self.pending);
+        let retry: Vec<usize> = match missed {
+            None => waiting
+                .iter()
+                .map(|&k| k + fresh)
+                .filter(|&k| k < SLOTS)
+                .collect(),
+            Some(_) => Vec::new(),
+        };
+        if retry.len() < waiting.len() {
+            missed.get_or_insert(Missed::Unreadable);
+            self.window.blocked = true;
+        }
+        // Oldest first: the highest line.
+        let mut lines: Vec<(usize, bool)> = retry
+            .into_iter()
+            .map(|k| (k, false))
+            .chain((0..fresh).map(|k| (k, true)))
+            .collect();
+        lines.sort_by_key(|&(k, _)| std::cmp::Reverse(k));
         let mut notices = Vec::new();
-        // Oldest first: the highest new line.
-        for k in (0..fresh).rev() {
+        for (k, arrived) in lines {
             let line = &now[k];
-            let read = match line.strength >= READ {
-                true => cut(picture, layout, layout.top(k, shift), line.strength)
-                    .map_or(Read::Unknown, |cut| self.read(&cut)),
-                false => Read::Unknown,
-            };
+            // Too faint to tell every pixel of its letters: missed.
+            if line.strength < READ {
+                missed.get_or_insert(Missed::Unreadable);
+                self.window.blocked = true;
+                continue;
+            }
+            let read = cut(picture, layout, layout.top(k, shift), line.strength)
+                .map_or(Read::Unknown, |cut| self.read(&cut, arrived));
             match read {
                 Read::Exp(line) => {
                     notices.extend(line.value.map(Notice::Exp));
@@ -994,6 +1112,11 @@ impl NoticeReader {
                 Read::Item(None) => {
                     missed.get_or_insert(Missed::Unreadable);
                 }
+                // Tried again in the next frame if it will still be strong enough then: only when
+                // frames come often.
+                Read::Unknown if line.strength.saturating_sub(self.fade()) >= READ => {
+                    self.pending.push(k)
+                }
                 Read::Unknown => {
                     missed.get_or_insert(Missed::Unreadable);
                     self.window.blocked = true;
@@ -1007,7 +1130,7 @@ impl NoticeReader {
             self.window.blocked = true;
         }
         let gain = self.follow_hud(hud);
-        if let Some(short) = self.settle(gain) {
+        if let Some(short) = self.settle(gain, !self.pending.is_empty()) {
             missed.get_or_insert(short);
         }
         Ok(NoticeReading {
@@ -1017,9 +1140,12 @@ impl NoticeReader {
         })
     }
 
-    /// What a solid line says.
-    fn read(&mut self, cut: &Cut) -> Read {
-        self.check_restored(cut);
+    /// What a solid line says. `arrived` is false when the line is being tried again: kept
+    /// letters are checked against each line only once.
+    fn read(&mut self, cut: &Cut, arrived: bool) -> Read {
+        if arrived {
+            self.check_restored(cut);
+        }
         if self.atlas.is_empty() {
             // Before any letter is known, a line shaped like an EXP line waits for the HUD to
             // name its letters and digits.
@@ -1033,6 +1159,38 @@ impl NoticeReader {
         }
         self.learn_from(cut);
         self.parse(cut)
+    }
+
+    /// Measures how much the solid lines still on screen faded since the last frame, `fresh` new
+    /// lines having pushed them up: the middle of their drops.
+    fn measure_fade(&mut self, now: &[Slot], fresh: usize) {
+        let Some(before) = self.lines.as_deref() else {
+            return;
+        };
+        let mut drops: Vec<u8> = before
+            .iter()
+            .zip(now.iter().skip(fresh))
+            .filter(|(b, n)| b.solid() && n.solid() && n.strength <= b.strength)
+            .map(|(b, n)| b.strength - n.strength)
+            .collect();
+        if !drops.is_empty() {
+            let middle = drops.len() / 2;
+            self.fades.push(*drops.select_nth_unstable(middle).1);
+            if self.fades.len() > FADES_KEPT {
+                self.fades.remove(0);
+            }
+        }
+    }
+
+    /// How much a line fades from one frame to the next: the middle of the last frames measured,
+    /// as the time between frames varies. Unmeasured, as much as a line has, so nothing waits to
+    /// be read again.
+    fn fade(&self) -> u8 {
+        let mut fades = self.fades.clone();
+        match fades.len() {
+            0 => u8::MAX,
+            n => *fades.select_nth_unstable(n / 2).1,
+        }
     }
 
     /// Checks letters kept from an earlier session against a line shaped like an EXP line. Kept
@@ -1151,17 +1309,25 @@ impl NoticeReader {
                     .count()
                     <= 1
         });
-        let earned = [7, 6, 8]
+        // "earned." as a run of letters before the bracket, as long as it reads, or shorter or
+        // longer for letters that touch or a speck: the first that the count and "x" before it
+        // fit.
+        let (x, count_start, count_end) = [7, 6, 8, 5, 9]
             .into_iter()
-            .find(|&len| open >= len && distance(&names[open - len..open], "earned.") <= 1)?;
-        let count_end = open - earned;
-        let count_start = (0..count_end)
-            .rev()
-            .take_while(|&i| names[i].is_some_and(|c| c.is_ascii_digit()))
-            .last()?;
-        let x = count_start
-            .checked_sub(1)
-            .filter(|&x| x > 0 && names[x] == Some('x'))?;
+            .filter(|&len| {
+                open >= len && distance(&names[open - len..open], "earned.") <= EARNED_ERRORS
+            })
+            .find_map(|len| {
+                let count_end = open - len;
+                let count_start = (0..count_end)
+                    .rev()
+                    .take_while(|&i| names[i].is_some_and(|c| c.is_ascii_digit()))
+                    .last()?;
+                let x = count_start
+                    .checked_sub(1)
+                    .filter(|&x| x > 0 && names[x] == Some('x'))?;
+                Some((x, count_start, count_end))
+            })?;
         let count = read_number(
             &self.atlas,
             pieces[count_start..count_end].iter().map(|p| &p.glyph),
@@ -1227,8 +1393,9 @@ impl NoticeReader {
     }
 
     /// Checks the EXP lines read against the HUD's gain, learns digits from a single EXP line,
-    /// and confirms the reader. The reason lines were missed, if the two don't add up.
-    fn settle(&mut self, gain: Gain) -> Option<Missed> {
+    /// and confirms the reader. The reason lines were missed, if the two don't add up. While a
+    /// line is `waiting` to be read again, which may be an EXP line, nothing is concluded.
+    fn settle(&mut self, gain: Gain, waiting: bool) -> Option<Missed> {
         match gain {
             Gain::Gained(g) => self.window.hud += g,
             Gain::Restart => {
@@ -1248,6 +1415,9 @@ impl NoticeReader {
             return None;
         }
         window.age += 1;
+        if waiting {
+            return None;
+        }
         let read: Option<u64> = window.lines.iter().map(|l| l.value).sum();
         if read == Some(window.hud) && !window.lines.is_empty() {
             if !window.blocked && !self.confirmed {
@@ -1328,6 +1498,9 @@ pub(crate) mod test_support {
     pub(crate) const YELLOW: [u8; 3] = [255, 255, 0];
     /// How much strength a line loses each frame: about what four frames a second see.
     const FADE: u8 = 12;
+    /// A monster's body and outline, as a white ghost walking behind the stack.
+    const BODY: [u8; 3] = [252, 252, 255];
+    const OUTLINE: [u8; 3] = [16, 20, 36];
 
     /// What shows behind the stack.
     #[derive(Debug, Clone, Copy)]
@@ -1374,6 +1547,11 @@ pub(crate) mod test_support {
         pub(crate) exp: u64,
         /// An opaque box over the bottom line, as something drawn over it.
         pub(crate) covered: bool,
+        /// A monster behind the stack: the top-left corner of a white ghost with a dark outline
+        /// and eyes, in the scene, so the lines are drawn over it.
+        pub(crate) monster: Option<(u32, u32)>,
+        /// Strength a line loses each frame: [`FADE`] at four frames a second.
+        pub(crate) fade: u8,
     }
 
     impl Game {
@@ -1392,6 +1570,8 @@ pub(crate) mod test_support {
                 lines: Vec::new(),
                 exp: 100_000,
                 covered: false,
+                monster: None,
+                fade: FADE,
             }
         }
 
@@ -1412,7 +1592,7 @@ pub(crate) mod test_support {
         /// bottom, and the HUD gains `gained`.
         pub(crate) fn next(&mut self, arrive: &[(&str, [u8; 3])], gained: u64) -> Canvas {
             for line in &mut self.lines {
-                line.strength = line.strength.saturating_sub(FADE);
+                line.strength = line.strength.saturating_sub(self.fade);
             }
             self.lines.retain(|l| l.strength > 60);
             for (text, color) in arrive {
@@ -1448,6 +1628,18 @@ pub(crate) mod test_support {
                     canvas.set(x, y, self.scene.at(x, y));
                 }
             }
+            if let Some((mx, my)) = self.monster {
+                canvas.fill(mx, my, 56, 30, OUTLINE);
+                canvas.fill(mx + 1, my + 1, 54, 28, BODY);
+                canvas.fill(mx + 14, my + 8, 5, 8, OUTLINE);
+                canvas.fill(mx + 34, my + 8, 5, 8, OUTLINE);
+                // Its ragged cloak: dark specks all over.
+                for dy in (3..27).step_by(4) {
+                    for dx in (3..52).step_by(6) {
+                        canvas.fill(mx + dx + dy % 3, my + dy, 2, 1, OUTLINE);
+                    }
+                }
+            }
             for (k, line) in self.lines.iter().enumerate() {
                 let top = h - BOTTOM_LINE_UP - LINE_PITCH * k as u32;
                 let columns: Vec<&[u8]> = line.text.chars().map(|c| self.font.columns(c)).collect();
@@ -1468,12 +1660,12 @@ pub(crate) mod test_support {
                 // The shadow, one pixel down and to the right, under the letters.
                 for &(x, y) in &core {
                     if !core.contains(&(x + 1, y + 1)) {
-                        let under = self.scene.at(x + 1, y + 1);
+                        let under = canvas.get(x + 1, y + 1);
                         canvas.set(x + 1, y + 1, blend([0, 0, 0], under, line.strength));
                     }
                 }
                 for &(x, y) in &core {
-                    let under = self.scene.at(x, y);
+                    let under = canvas.get(x, y);
                     canvas.set(x, y, blend(line.color, under, line.strength));
                 }
             }
@@ -1809,6 +2001,72 @@ mod tests {
             notices(&run(&mut game, &mut reader, vec![one(&mesos("70"), 0)])),
             [Notice::Mesos(70)]
         );
+    }
+
+    /// Where a monster stands over the bottom line's amount: the right end of the stack.
+    fn over_the_amount(game: &Game) -> (u32, u32) {
+        (game.width - 60, game.height - BOTTOM_LINE_UP - 8)
+    }
+
+    // A monster walking behind a line as it arrives spoils its letters for a frame or two. Fails
+    // if the line is counted wrong, or not read once the monster has moved on while it's still
+    // bright, at four frames a second.
+    #[test]
+    fn a_line_spoiled_by_a_monster_behind_it_is_read_once_it_moves_on() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        game.monster = Some(over_the_amount(&game));
+        let spoiled = run(&mut game, &mut reader, vec![one(&mesos("75"), 0)]);
+        game.monster = None;
+        let after = run(&mut game, &mut reader, vec![(Vec::new(), 0)]);
+        assert!(spoiled[0].notices.is_empty(), "spoiled: {:?}", spoiled[0]);
+        assert_eq!(spoiled[0].missed, None, "waits for the next frame");
+        assert_eq!(after[0].notices, [Notice::Mesos(75)]);
+        assert_eq!(after[0].missed, None);
+    }
+
+    // At one frame a second a line has faded too far to read by the next frame: waiting would only
+    // hold back the EXP checks. Fails if a line that can't be read isn't reported missed at once.
+    #[test]
+    fn at_one_frame_a_second_a_spoiled_line_is_missed_at_once() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        // A few lines fading at one frame a second, for the reader to measure the pace.
+        game.fade = 45;
+        let pace = vec![one(&mesos("12"), 0), (Vec::new(), 0), (Vec::new(), 0)];
+        run(
+            &mut game,
+            &mut reader,
+            [pace.clone(), pace.clone(), pace].concat(),
+        );
+        game.monster = Some(over_the_amount(&game));
+        let spoiled = run(&mut game, &mut reader, vec![one(&mesos("75"), 0)]);
+        assert!(spoiled[0].notices.is_empty());
+        assert_eq!(spoiled[0].missed, Some(Missed::Unreadable));
+    }
+
+    // A monster walking behind lines already read changes their shapes frame by frame. Fails if
+    // they're taken for new lines and counted again, or the stack is lost.
+    #[test]
+    fn a_monster_walking_behind_the_stack_counts_nothing_twice() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        let read = run(
+            &mut game,
+            &mut reader,
+            vec![one(&mesos("98"), 0), one(&item("Red Potion", 1, "Use"), 0)],
+        );
+        assert_eq!(notices(&read).len(), 2);
+        let (x, y) = over_the_amount(&game);
+        let mut walking = Vec::new();
+        for step in 0..6 {
+            game.monster = Some((x - 12 * step, y - 6));
+            walking.extend(run(&mut game, &mut reader, vec![(Vec::new(), 0)]));
+        }
+        game.monster = None;
+        walking.extend(run(&mut game, &mut reader, vec![one(&mesos("57"), 0)]));
+        assert_eq!(notices(&walking), [Notice::Mesos(57)]);
+        assert!(walking.iter().all(|r| r.missed.is_none()), "{walking:?}");
     }
 
     // Guards amounts over a thousand: the HUD's gain names the comma too.

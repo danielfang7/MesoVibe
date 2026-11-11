@@ -7,12 +7,15 @@
 //! any tally of what the runs really hold.
 //!
 //! ```text
-//! cargo run -p mesovibe-engine --release --example replay_notices -- [--quiet] [--carry | --join] <run folder>...
+//! cargo run -p mesovibe-engine --release --example replay_notices -- [--quiet] [--warm] [--carry | --join] <run folder>...
 //! ```
 //!
 //! Each run starts with readers that know nothing, unless `--carry` passes what the notice reader
 //! confirmed from one run to the next through the text the app keeps between launches, or `--join`
 //! reads the runs as one session with gaps between them, keeping what it was still learning too.
+//! The EXP bar reader learns from scratch in each run too, unless `--warm` first runs it over all
+//! the runs to learn its digits and starts each run from them, as the app does with the digits it
+//! keeps between launches.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -28,6 +31,7 @@ use capture_run::{frames_of, load};
 
 struct Args {
     quiet: bool,
+    warm: bool,
     carry: bool,
     join: bool,
     runs: Vec<PathBuf>,
@@ -36,6 +40,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut out = Args {
         quiet: false,
+        warm: false,
         carry: false,
         join: false,
         runs: Vec::new(),
@@ -43,13 +48,14 @@ fn parse_args() -> Result<Args, String> {
     for a in std::env::args().skip(1) {
         match a.as_str() {
             "--quiet" => out.quiet = true,
+            "--warm" => out.warm = true,
             "--carry" => out.carry = true,
             "--join" => out.join = true,
             _ => out.runs.push(PathBuf::from(a)),
         }
     }
     if out.runs.is_empty() {
-        return Err("usage: replay_notices [--quiet] [--carry | --join] <run>...".into());
+        return Err("usage: replay_notices [--quiet] [--warm] [--carry | --join] <run>...".into());
     }
     Ok(out)
 }
@@ -94,6 +100,21 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The EXP bar digits learned over every run, for --warm.
+    let warm = args.warm.then(|| {
+        let mut hud = ExpBarReader::new();
+        for run in &args.runs {
+            for path in frames_of(run) {
+                if let Ok(image) = load(run, &path) {
+                    let _ = hud.observe(&image.frame());
+                }
+            }
+        }
+        hud.knowledge()
+    });
+    if let Some(None) = warm {
+        eprintln!("--warm: the EXP bar reader didn't confirm its digits on these runs.");
+    }
     let mut notices = NoticeReader::new();
     let mut timings: Vec<u128> = Vec::new();
     for run in &args.runs {
@@ -101,7 +122,11 @@ fn main() -> ExitCode {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let mut hud = ExpBarReader::new();
+        let mut hud = warm
+            .as_ref()
+            .and_then(|kept| kept.as_deref())
+            .and_then(ExpBarReader::from_knowledge)
+            .unwrap_or_default();
         if args.join {
             notices.reset();
         } else if args.carry {
