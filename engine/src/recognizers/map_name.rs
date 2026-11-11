@@ -7,7 +7,8 @@
 //! known by the exact shape of its name, the way an item is, so the same map gives the same key
 //! every time on the same computer, at every window size.
 //!
-//! The band is found by its look, not at fixed pixels: Wine places the game a pixel or two off.
+//! The band is found by its look, not at fixed pixels: the game puts the minimap at the very edge at
+//! 1280x720 and 20 pixels in at 1366x768, and Wine places the game a pixel or two off.
 //! When it isn't there (the minimap closed, collapsed to its title bar, or another window over it)
 //! or something dark is drawn over the name, the name is unreadable: never a guess.
 //!
@@ -23,11 +24,22 @@ use crate::unstretch::{self, No1x};
 /// The corner of the 1x picture the reader looks in. The widest minimap's band fits.
 const CORNER_COLUMNS: u32 = 512;
 const CORNER_ROWS: u32 = 96;
-/// A point inside the name band, left of the map's icon, wherever Wine places the game.
-const PROBE: (u32, u32) = (24, 40);
-/// Rows that must be the band's color in the probe's column and its neighbors for the band to be
-/// there: the height of its two lines of text.
+/// A row inside the name band, between its two lines of text.
+const PROBE_ROW: u32 = 40;
+/// Rows that must be the band's color in the strip left of the icon for the band to be there: the
+/// height of its two lines of text.
 const BAND_ROWS: std::ops::RangeInclusive<u32> = 26..=56;
+/// The band's strip left of the icon starts left of this column, wherever the game puts the
+/// minimap.
+const MAX_BAND_LEFT: u32 = 80;
+/// The text starts within this many columns of that strip, past the icon.
+const MAX_ICON: u32 = 64;
+/// The icon's frame is this dark in every channel.
+const ICON_FRAME: u8 = 64;
+/// The "MINI MAP" title bar above the band is this light in every channel.
+const TITLE_BAR: u8 = 220;
+/// Rows between the title bar and the band: a Mac draws a line of another shade between them.
+const TITLE_GAP: u32 = 2;
 /// How far, in any channel, a pixel may be from the band's color and still be the band.
 const SAME: u8 = 8;
 /// How far, in some channel, a pixel must be from the band's color to be part of the name.
@@ -35,8 +47,6 @@ const INK: u8 = 32;
 /// A pixel this dark in every channel is neither the name nor its shadow: something is drawn over
 /// the band.
 const DARK: u8 = 48;
-/// The text starts left of this, past the icon.
-const MAX_TEXT_LEFT: u32 = 120;
 
 /// Frames between reads of the map's name while nothing says it changed: 30 s at four frames a
 /// second.
@@ -81,49 +91,79 @@ fn near(a: [u8; 3], b: [u8; 3], by: u8) -> bool {
     a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= by)
 }
 
-fn read_1x(picture: &Frame) -> Result<MapName, MapUnreadable> {
-    let width = picture.width().min(CORNER_COLUMNS);
-    let height = picture.height().min(CORNER_ROWS);
-    if width <= MAX_TEXT_LEFT || height <= *BAND_ROWS.end() {
-        return Err(MapUnreadable::NotFound);
-    }
-    let (px, py) = PROBE;
-    let band = picture.rgb(px, py);
-    let is_band = |x: u32, y: u32| near(picture.rgb(x, y), band, SAME);
-    // A flat band light enough to hold white letters with a shadow.
-    let flat = (px - 1..=px + 1).all(|x| BAND_ROWS.clone().all(|y| is_band(x, y)));
-    let shade = band.iter().max().copied().unwrap_or(0);
-    let headroom = band.iter().min().copied().unwrap_or(0);
-    if !flat || shade < DARK || headroom > 200 {
-        return Err(MapUnreadable::NotFound);
-    }
-    // Past the icon: the first column of band, in the text's rows, after one that isn't.
+/// Where the name is: the band's color, and the band's rectangle right of the icon.
+struct Band {
+    color: [u8; 3],
+    left: u32,
+    right: u32,
+    top: u32,
+    bottom: u32,
+}
+
+/// The name band whose strip left of the icon is at column `x`, when the minimap is there: a flat
+/// strip light enough for white letters, the icon in its dark frame, and the band again with the
+/// white title bar right above it.
+fn band_at(picture: &Frame, x: u32, width: u32, height: u32) -> Option<Band> {
+    let color = picture.rgb(x, PROBE_ROW);
+    let is_band = |x: u32, y: u32| near(picture.rgb(x, y), color, SAME);
     let clear = |x: u32| BAND_ROWS.clone().all(|y| is_band(x, y));
-    let mut left = px;
-    while left < MAX_TEXT_LEFT && clear(left) {
-        left += 1;
+    let shade = color.iter().max().copied().unwrap_or(0);
+    let headroom = color.iter().min().copied().unwrap_or(0);
+    if shade < DARK || headroom > 200 || !(x - 1..=x + 1).all(clear) {
+        return None;
     }
-    while left < MAX_TEXT_LEFT && !clear(left) {
-        left += 1;
-    }
-    if left >= MAX_TEXT_LEFT {
-        return Err(MapUnreadable::NotFound);
-    }
-    // The band's rows, in that column: the title bar is above, the map's picture below.
-    let top = (0..py)
+    let limit = (x + MAX_ICON).min(width);
+    let icon = (x..limit).find(|&c| !clear(c))?;
+    let left = (icon..limit).find(|&c| clear(c))?;
+    let framed = (icon..left).any(|c| {
+        BAND_ROWS
+            .clone()
+            .any(|y| picture.rgb(c, y).iter().all(|&v| v < ICON_FRAME))
+    });
+    // The band's rows, where the text starts: the title bar is above, the map's picture below.
+    let top = (0..PROBE_ROW)
         .rev()
         .take_while(|&y| is_band(left, y))
         .last()
-        .unwrap_or(py);
-    let bottom = (py..height)
+        .unwrap_or(PROBE_ROW);
+    let bottom = (PROBE_ROW..height)
         .take_while(|&y| is_band(left, y))
         .last()
-        .map_or(py, |y| y + 1);
+        .map_or(PROBE_ROW, |y| y + 1);
+    let titled = (top.saturating_sub(TITLE_GAP + 1)..top)
+        .any(|y| picture.rgb(left, y).iter().all(|&v| v >= TITLE_BAR));
+    if !framed || !titled {
+        return None;
+    }
     // The band's right edge, along its first rows, above the text.
     let right = (left..width)
         .take_while(|&x| is_band(x, top + 1))
         .last()
         .map_or(left, |x| x + 1);
+    Some(Band {
+        color,
+        left,
+        right,
+        top,
+        bottom,
+    })
+}
+
+fn read_1x(picture: &Frame) -> Result<MapName, MapUnreadable> {
+    let width = picture.width().min(CORNER_COLUMNS);
+    let height = picture.height().min(CORNER_ROWS);
+    if width <= MAX_BAND_LEFT + MAX_ICON || height <= *BAND_ROWS.end() {
+        return Err(MapUnreadable::NotFound);
+    }
+    let Band {
+        color: band,
+        left,
+        right,
+        top,
+        bottom,
+    } = (1..MAX_BAND_LEFT)
+        .find_map(|x| band_at(picture, x, width, height))
+        .ok_or(MapUnreadable::NotFound)?;
 
     let mut ink = Vec::new();
     for y in top..bottom {
@@ -325,8 +365,9 @@ pub(crate) mod test_support {
         pub(crate) name: String,
         /// How wide the minimap is: a long name is cut off at its right edge.
         pub(crate) width: u32,
-        /// Where Wine placed the game, in pixels off.
-        pub(crate) offset: (u32, u32),
+        /// Its top-left corner: 20 pixels in at 1366x768, at the edge at 1280x720, and a pixel or
+        /// two off where Wine placed the game.
+        pub(crate) at: (u32, u32),
         pub(crate) font: Font,
     }
 
@@ -336,27 +377,26 @@ pub(crate) mod test_support {
                 region: region.to_string(),
                 name: name.to_string(),
                 width: 220,
-                offset: (0, 0),
+                at: (20, 1),
                 font: Font::new(CHARS, 5),
             }
         }
 
         /// Draws it over `canvas`.
         pub(crate) fn draw(&self, canvas: &mut Canvas) {
-            let (ox, oy) = self.offset;
-            let (left, w) = (20 + ox, self.width);
-            canvas.fill(left, 1 + oy, w, 72, [0x55, 0x77, 0x99]);
+            let ((left, top), w) = (self.at, self.width);
+            canvas.fill(left, top, w, 72, [0x55, 0x77, 0x99]);
             // The title bar, white with dark letters.
-            canvas.fill(left + 4, 5 + oy, w - 8, 14, [255, 255, 255]);
-            canvas.fill(left + 8, 10 + oy, 40, 5, [20, 20, 20]);
+            canvas.fill(left + 4, top + 4, w - 8, 14, [255, 255, 255]);
+            canvas.fill(left + 8, top + 9, 40, 5, [20, 20, 20]);
             // The band, with the map's icon in a dark box.
-            canvas.fill(left + 1, 19 + oy, w - 2, 52, BAND);
-            canvas.fill(left + 7, 23 + oy, 36, 36, [16, 16, 32]);
-            canvas.fill(left + 12, 28 + oy, 26, 26, [230, 190, 40]);
+            canvas.fill(left + 1, top + 18, w - 2, 52, BAND);
+            canvas.fill(left + 7, top + 22, 36, 36, [16, 16, 32]);
+            canvas.fill(left + 12, top + 27, 26, 26, [230, 190, 40]);
             // The map's picture under the band.
-            canvas.fill(left + 1, 71 + oy, w - 2, 2, [255, 255, 255]);
-            for (text, top) in [(&self.region, 30), (&self.name, 44)] {
-                self.text(canvas, text, 71 + ox, top + oy, left + w - 1);
+            canvas.fill(left + 1, top + 70, w - 2, 2, [255, 255, 255]);
+            for (text, line) in [(&self.region, 29), (&self.name, 43)] {
+                self.text(canvas, text, left + 51, top + line, left + w - 1);
             }
         }
 
@@ -409,17 +449,21 @@ mod tests {
         read(&canvas.frame()).map(|name| name.key)
     }
 
-    // Guards a map's identity: the same name gives the same key wherever Wine placed the game,
-    // another name another key. Fails if the key depends on more than the name's shape.
+    // Guards a map's identity: the same name gives the same key wherever the game puts the
+    // minimap, another name another key. Fails if the key depends on more than the name's shape,
+    // or the minimap is only looked for in one place.
     #[test]
     fn a_map_is_known_by_its_name_s_shape() {
         let forest = Minimap::new("Victoria Road", "Forest I");
         let first = key(&game(Some(&forest))).unwrap();
-        let shifted = Minimap {
-            offset: (1, 2),
-            ..Minimap::new("Victoria Road", "Forest I")
-        };
-        assert_eq!(key(&game(Some(&shifted))), Ok(first.clone()));
+        // Wine's pixel or two, and the very edge of the game area, as at 1280x720.
+        for at in [(21, 3), (1, 0)] {
+            let moved = Minimap {
+                at,
+                ..Minimap::new("Victoria Road", "Forest I")
+            };
+            assert_eq!(key(&game(Some(&moved))), Ok(first.clone()), "at {at:?}");
+        }
         let other = Minimap::new("Victoria Road", "Forest II");
         assert_ne!(key(&game(Some(&other))).unwrap(), first);
         let elsewhere = Minimap::new("Ossyria", "Forest I");
