@@ -95,6 +95,9 @@ const MIN_PIXELS: usize = 16;
 const SOLID: u8 = 160;
 /// A solid line's shape: its pixels at least this much brighter than their shadow.
 const INK: i16 = 120;
+/// A solid line has at least this many such pixels: the shortest notice, "You received EXP
+/// (+1)", has about twice as many at 1x.
+const MIN_INK: u32 = 100;
 /// Frames whose fading [`NoticeReader::fade`] measures.
 const FADES_KEPT: usize = 9;
 /// A line seen again may differ from how it was in at most one column in this many, for something
@@ -422,6 +425,15 @@ fn slot(frame: &Frame, layout: Layout, top: u32) -> Slot {
                 count += 1;
             }
         }
+    }
+    // Too few strokes for a line of text: something else at the stack's right edge, like a
+    // monster walking past. It takes part as a faded line does, by lining up with anything.
+    if count < MIN_INK {
+        return Slot {
+            strength: strength.min(SOLID - 1),
+            ink: Vec::new(),
+            count: 0,
+        };
     }
     Slot {
         strength,
@@ -887,6 +899,18 @@ enum Read {
     Unknown,
 }
 
+impl Read {
+    /// Read for sure: nothing a better frame of it could add.
+    fn sure(&self) -> bool {
+        match self {
+            Read::Exp(line) | Read::PartyBonus(line) => line.value.is_some(),
+            Read::Mesos(amount) => amount.is_some(),
+            Read::Item(_) | Read::Other => true,
+            Read::Unknown => false,
+        }
+    }
+}
+
 /// Follows the notice stack from frame to frame and reads each new line once.
 #[derive(Debug, Clone)]
 pub struct NoticeReader {
@@ -897,7 +921,7 @@ pub struct NoticeReader {
     lost: bool,
     /// Where the stack was last found, rows down from where the picture's height puts it.
     shift: i32,
-    /// Slots of last frame's lines that arrived but couldn't be read yet.
+    /// Slots of last frame's lines that arrived but couldn't be read for sure yet.
     pending: Vec<usize>,
     /// How much a line faded from one frame to the next in the last frames measured, newest last:
     /// about 9 at four frames a second, 45 at one.
@@ -1055,73 +1079,41 @@ impl NoticeReader {
         if missed.is_none() {
             self.measure_fade(&now, fresh);
         }
-        // Lines that couldn't be read when they arrived, where the stack moved them, to be tried
-        // again: something moving behind a line (a monster walking past) spoils some frames of it
-        // and not others. Lost when the stack can't be followed.
-        let waiting = std::mem::take(&mut self.pending);
-        let retry: Vec<usize> = match missed {
-            None => waiting
-                .iter()
-                .map(|&k| k + fresh)
-                .filter(|&k| k < SLOTS)
-                .collect(),
-            Some(_) => Vec::new(),
-        };
-        if retry.len() < waiting.len() {
-            missed.get_or_insert(Missed::Unreadable);
-            self.window.blocked = true;
-        }
-        // Oldest first: the highest line.
-        let mut lines: Vec<(usize, bool)> = retry
-            .into_iter()
-            .map(|k| (k, false))
-            .chain((0..fresh).map(|k| (k, true)))
-            .collect();
-        lines.sort_by_key(|&(k, _)| std::cmp::Reverse(k));
+        // Lines that couldn't be read for sure when they arrived, where the stack moved them, to
+        // be read again: something moving behind a line (a monster walking past) spoils some
+        // frames of it and not others. Missed when the stack can't be followed, or a line
+        // scrolled off.
         let mut notices = Vec::new();
+        let waiting = std::mem::take(&mut self.pending);
+        let mut lines: Vec<(usize, bool)> = Vec::new();
+        for k in waiting.into_iter().map(|k| k + fresh) {
+            match missed.is_none() && k < SLOTS {
+                true => lines.push((k, false)),
+                false => self.accept(Read::Unknown, &mut notices, &mut missed),
+            }
+        }
+        lines.extend((0..fresh).map(|k| (k, true)));
+        // Oldest first: the highest line.
+        lines.sort_by_key(|&(k, _)| std::cmp::Reverse(k));
         for (k, arrived) in lines {
             let line = &now[k];
             // Too faint to tell every pixel of its letters: missed.
             if line.strength < READ {
-                missed.get_or_insert(Missed::Unreadable);
-                self.window.blocked = true;
+                self.accept(Read::Unknown, &mut notices, &mut missed);
                 continue;
             }
-            let read = cut(picture, layout, layout.top(k, shift), line.strength)
-                .map_or(Read::Unknown, |cut| self.read(&cut, arrived));
-            match read {
-                Read::Exp(line) => {
-                    notices.extend(line.value.map(Notice::Exp));
-                    self.window.lines.push(line);
-                }
-                Read::PartyBonus(line) => {
-                    notices.extend(line.value.map(Notice::PartyBonus));
-                    self.window.lines.push(line);
-                }
-                Read::Mesos(Some(amount)) => notices.push(Notice::Mesos(amount)),
-                Read::Item(Some((name, count, tab))) => {
-                    notices.push(Notice::Item { name, count, tab });
-                }
-                Read::Other => notices.push(Notice::Other),
-                // A mesos line whose amount has a digit not learned yet: missed, but it carried
-                // no EXP, so the EXP lines can still teach and check.
-                Read::Mesos(None) => {
-                    missed.get_or_insert(Missed::NotLearned);
-                }
-                // An item count too large to be one.
-                Read::Item(None) => {
-                    missed.get_or_insert(Missed::Unreadable);
-                }
-                // Tried again in the next frame if it will still be strong enough then: only when
-                // frames come often.
-                Read::Unknown if line.strength.saturating_sub(self.fade()) >= READ => {
-                    self.pending.push(k)
-                }
-                Read::Unknown => {
-                    missed.get_or_insert(Missed::Unreadable);
-                    self.window.blocked = true;
-                }
+            let (read, damaged) = cut(picture, layout, layout.top(k, shift), line.strength)
+                .map_or((Read::Unknown, true), |cut| self.read(&cut, arrived));
+            // Read again in the next frame if it will still be strong enough then (only when
+            // frames come often), when something passing behind it may have spoiled it: it
+            // couldn't be read, or its amount has a glyph that isn't a known digit with letters of
+            // its phrase spoiled too. A digit not learned yet comes in a phrase read whole. Only
+            // the read that stands teaches an amount from the HUD or says a digit isn't learned.
+            if !read.sure() && damaged && line.strength.saturating_sub(self.fade()) >= READ {
+                self.pending.push(k);
+                continue;
             }
+            self.accept(read, &mut notices, &mut missed);
         }
         self.lines = Some(now);
         self.lost = false;
@@ -1140,22 +1132,57 @@ impl NoticeReader {
         })
     }
 
-    /// What a solid line says. `arrived` is false when the line is being tried again: kept
-    /// letters are checked against each line only once.
-    fn read(&mut self, cut: &Cut, arrived: bool) -> Read {
+    /// Takes what was read of a new line: its notice, its EXP for the HUD to check, or why it
+    /// may have been missed.
+    fn accept(&mut self, read: Read, notices: &mut Vec<Notice>, missed: &mut Option<Missed>) {
+        match read {
+            Read::Exp(line) => {
+                notices.extend(line.value.map(Notice::Exp));
+                self.window.lines.push(line);
+            }
+            Read::PartyBonus(line) => {
+                notices.extend(line.value.map(Notice::PartyBonus));
+                self.window.lines.push(line);
+            }
+            Read::Mesos(Some(amount)) => notices.push(Notice::Mesos(amount)),
+            Read::Item(Some((name, count, tab))) => {
+                notices.push(Notice::Item { name, count, tab });
+            }
+            Read::Other => notices.push(Notice::Other),
+            // A mesos line whose amount has a digit not learned yet: missed, but it carried no
+            // EXP, so the EXP lines can still teach and check.
+            Read::Mesos(None) => {
+                missed.get_or_insert(Missed::NotLearned);
+            }
+            // An item count too large to be one.
+            Read::Item(None) => {
+                missed.get_or_insert(Missed::Unreadable);
+            }
+            Read::Unknown => {
+                missed.get_or_insert(Missed::Unreadable);
+                self.window.blocked = true;
+            }
+        }
+    }
+
+    /// What a solid line says, and whether its phrase was read with letters wrong or unknown, as
+    /// when something behind it spoiled it. `arrived` is false when the line is being read
+    /// again: kept letters are checked against each line only once.
+    fn read(&mut self, cut: &Cut, arrived: bool) -> (Read, bool) {
         if arrived {
             self.check_restored(cut);
         }
         if self.atlas.is_empty() {
             // Before any letter is known, a line shaped like an EXP line waits for the HUD to
             // name its letters and digits.
-            return match fit_amount(cut, EXP_PHRASE) {
+            let read = match fit_amount(cut, EXP_PHRASE) {
                 Some(fit) if !cut.yellow && agreement(&self.atlas, &fit.fixed).is_some() => {
                     Read::Exp(ExpLine::of(&fit, &self.atlas))
                 }
                 _ if cut.yellow => Read::Unknown,
                 _ => Read::Other,
             };
+            return (read, false);
         }
         self.learn_from(cut);
         self.parse(cut)
@@ -1253,8 +1280,9 @@ impl NoticeReader {
     }
 
     /// Reads a line from its end with the letters known: every pickup ends with a bracket. A
-    /// letter drawn over, or two touching, costs a letter here and there, not the line.
-    fn parse(&self, cut: &Cut) -> Read {
+    /// letter drawn over, or two touching, costs a letter here and there, not the line: also
+    /// whether it cost any in an amount's phrase.
+    fn parse(&self, cut: &Cut) -> (Read, bool) {
         let pieces: Vec<&Piece> = cut.words.iter().flatten().collect();
         let names: Vec<Option<char>> = pieces.iter().map(|p| self.atlas.name(&p.glyph)).collect();
         let n = names.len();
@@ -1262,8 +1290,8 @@ impl NoticeReader {
             Some(Some(')')) => {}
             // A white line ending in a letter it knows, like "This item is unavailable for
             // pick-up.": not a pickup. One ending in a letter it doesn't know may be one.
-            Some(Some(_)) if !cut.yellow => return Read::Other,
-            _ => return Read::Unknown,
+            Some(Some(_)) if !cut.yellow => return (Read::Other, false),
+            _ => return (Read::Unknown, true),
         }
         // An amount: a phrase, then "(+", digits and ")".
         let open = (n.saturating_sub(MAX_AMOUNT + 3)..n.saturating_sub(2))
@@ -1282,15 +1310,27 @@ impl NoticeReader {
                     pieces[open + 2..n - 1].iter().map(|p| &p.glyph),
                 ),
             };
-            let near = |text: &str| distance(phrase, text) <= PHRASE_ERRORS;
-            return match cut.yellow {
-                true if near(PARTY_TEXT) || near(PARTY_TEXT_JOINED) => Read::PartyBonus(line),
-                false if near(EXP_TEXT) => Read::Exp(line),
-                false if near(MESOS_TEXT) => Read::Mesos(line.value),
-                _ => Read::Unknown,
+            let off = |text: &str| distance(phrase, text);
+            let (read, errors) = match cut.yellow {
+                true => (
+                    Read::PartyBonus(line),
+                    off(PARTY_TEXT).min(off(PARTY_TEXT_JOINED)),
+                ),
+                false => match (off(EXP_TEXT), off(MESOS_TEXT)) {
+                    (exp, mesos) if exp <= mesos => (Read::Exp(line), exp),
+                    (_, mesos) => (Read::Mesos(line.value), mesos),
+                },
+            };
+            return match errors {
+                0 => (read, false),
+                errors if errors <= PHRASE_ERRORS => (read, true),
+                _ => (Read::Unknown, true),
             };
         }
-        self.parse_item(&pieces, &names).unwrap_or(Read::Unknown)
+        match self.parse_item(&pieces, &names) {
+            Some(read) => (read, false),
+            None => (Read::Unknown, true),
+        }
     }
 
     /// An item line: its name, "x", the count, "earned.", and the tab in brackets.
@@ -1552,6 +1592,9 @@ pub(crate) mod test_support {
         pub(crate) monster: Option<(u32, u32)>,
         /// Strength a line loses each frame: [`FADE`] at four frames a second.
         pub(crate) fade: u8,
+        /// The edge of a monster just inside the stack's right edge, in slot `k`: a little white
+        /// and dark at the end of an empty line.
+        pub(crate) edge_in_slot: Option<usize>,
     }
 
     impl Game {
@@ -1572,6 +1615,7 @@ pub(crate) mod test_support {
                 covered: false,
                 monster: None,
                 fade: FADE,
+                edge_in_slot: None,
             }
         }
 
@@ -1639,6 +1683,13 @@ pub(crate) mod test_support {
                         canvas.fill(mx + dx + dy % 3, my + dy, 2, 1, OUTLINE);
                     }
                 }
+            }
+            if let Some(k) = self.edge_in_slot {
+                let top = h - BOTTOM_LINE_UP - LINE_PITCH * k as u32;
+                canvas.fill(w - RIGHT_MARGIN - 12, top, 13, LINE_ROWS, OUTLINE);
+                canvas.fill(w - RIGHT_MARGIN - 11, top + 1, 11, LINE_ROWS - 3, BODY);
+                canvas.fill(w - RIGHT_MARGIN - 8, top + 3, 2, 2, OUTLINE);
+                canvas.fill(w - RIGHT_MARGIN - 4, top + 3, 2, 2, OUTLINE);
             }
             for (k, line) in self.lines.iter().enumerate() {
                 let top = h - BOTTOM_LINE_UP - LINE_PITCH * k as u32;
@@ -2025,6 +2076,21 @@ mod tests {
         assert_eq!(after[0].missed, None);
     }
 
+    // A monster behind an EXP line's amount as it arrives spoils its digits. Fails if the kill is
+    // lost or counted twice once the monster moves on.
+    #[test]
+    fn an_amount_spoiled_by_a_monster_is_read_again() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        game.monster = Some((game.width - 74, game.height - BOTTOM_LINE_UP - 8));
+        let spoiled = run(&mut game, &mut reader, vec![one(&exp("43"), 43)]);
+        game.monster = None;
+        let after = run(&mut game, &mut reader, vec![(Vec::new(), 0); 4]);
+        let all: Vec<NoticeReading> = spoiled.into_iter().chain(after).collect();
+        assert_eq!(notices(&all), [Notice::Exp(43)]);
+        assert!(all.iter().all(|r| r.missed.is_none()), "{all:?}");
+    }
+
     // At one frame a second a line has faded too far to read by the next frame: waiting would only
     // hold back the EXP checks. Fails if a line that can't be read isn't reported missed at once.
     #[test]
@@ -2067,6 +2133,23 @@ mod tests {
         walking.extend(run(&mut game, &mut reader, vec![one(&mesos("57"), 0)]));
         assert_eq!(notices(&walking), [Notice::Mesos(57)]);
         assert!(walking.iter().all(|r| r.missed.is_none()), "{walking:?}");
+    }
+
+    // The edge of a monster stepping into an empty slot above the lines isn't a line: nothing new
+    // arrived, so nothing is counted again. Fails if the lines below are taken for new ones and
+    // counted twice.
+    #[test]
+    fn a_monster_s_edge_above_the_lines_counts_nothing_again() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        // The lines learned from fade away first, so the slots above are empty.
+        run(&mut game, &mut reader, vec![(Vec::new(), 0); 20]);
+        let first = run(&mut game, &mut reader, vec![one(&exp("43"), 43)]);
+        game.edge_in_slot = Some(3);
+        let later = run(&mut game, &mut reader, vec![(Vec::new(), 0); 4]);
+        assert_eq!(notices(&first), [Notice::Exp(43)]);
+        assert_eq!(notices(&later), []);
+        assert!(later.iter().all(|r| r.missed.is_none()), "{later:?}");
     }
 
     // Guards amounts over a thousand: the HUD's gain names the comma too.
