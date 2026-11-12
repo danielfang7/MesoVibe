@@ -10,6 +10,15 @@
 //! below it. The engine measures them on each frame and reads the picture between them
 //! ([`letterbox`]), and reports the game area as that picture.
 //!
+//! Full Screen also scales the size the player chose up to the display, so a game area above 768
+//! lines may be a 720- or 600-line picture scaled up rather than the usual 768-line one. The
+//! engine assumes 768 until the EXP bar can't be read, then looks for the HUD at the game's other
+//! sizes of that shape and reads at the one where it shows ([`exp_bar::other_source`]).
+//!
+//! When the picture changes (its size, bars or scale), the HUD and the pickups may be drawn
+//! differently, so the readers check what they learned before against it, and learn again if it
+//! no longer fits.
+//!
 //! A grab that brought no new frame is stale: the window stopped drawing (a Mac reports a
 //! minimized window's last picture). It isn't read. After
 //! [`STALE_AFTER`] of them in a row the engine pauses, and it keeps checking for a new frame each
@@ -26,6 +35,7 @@ use crate::recognizers::chat::{self, ChatReader, ChatReading, ChatUnreadable};
 use crate::recognizers::exp_bar::{self, ExpBarReader, ExpReading, Unreadable};
 use crate::recognizers::map_name::{MapFollower, MapName};
 use crate::recognizers::notices::{self, Notice, NoticeReader, NoticeReading, NoticeUnreadable};
+use crate::unstretch::NATIVE_HEIGHT;
 
 /// The name the EXP bar reader goes by in [`Event::Unreadable`].
 pub const EXP_BAR: &str = "exp_bar";
@@ -34,11 +44,12 @@ pub const EXP_BAR: &str = "exp_bar";
 pub const STALE_AFTER: u32 = 8;
 
 /// How many of a game area's bottom rows the engine reads at first when the area is `height` game
-/// pixels tall: what its readers need, in game rows.
-pub fn rows_needed(height: u32) -> u32 {
-    exp_bar::rows_needed(height)
-        .max(chat::rows_needed(height))
-        .max(notices::rows_needed(height))
+/// pixels tall and scaled up from a picture `source` lines tall: what its readers need, in game
+/// rows.
+pub fn rows_needed(height: u32, source: u32) -> u32 {
+    exp_bar::rows_needed(height, source)
+        .max(chat::rows_needed(height, source))
+        .max(notices::rows_needed(height, source))
 }
 
 /// What one tick saw and did.
@@ -62,6 +73,9 @@ pub struct Tick {
     pub error: Option<CaptureError>,
     /// The grab brought no new frame, so nothing was read.
     pub stale: bool,
+    /// How many lines tall the picture is that the game scales up to fill the game area, when
+    /// it's taller than that: 768, or a smaller size the player chose in Full Screen.
+    pub source: u32,
 }
 
 /// The engine: one capture backend and the readers.
@@ -93,6 +107,12 @@ pub struct Runner<B> {
     /// The black bar above and below the game's picture in Full Screen, in game pixels, as last
     /// measured: 0 when the picture fills the window.
     bar: u32,
+    /// How many lines tall the picture is that the game scales up to fill the game area: 768
+    /// until the HUD shows another of the game's sizes.
+    source: u32,
+    /// The game's picture as last read: the game area's size, the Full Screen bar, and the height
+    /// it's scaled up from. When it changes, the readers check what they learned against it.
+    picture: Option<(u32, u32, u32, u32)>,
 }
 
 impl<B: Backend> Runner<B> {
@@ -120,6 +140,8 @@ impl<B: Backend> Runner<B> {
             started: Instant::now(),
             was_capturing: false,
             bar: 0,
+            source: NATIVE_HEIGHT,
+            picture: None,
         }
     }
 
@@ -185,11 +207,13 @@ impl<B: Backend> Runner<B> {
             self.readable = false;
             self.stale = 0;
         }
-        // Another size (in or out of Full Screen, say) has bars of its own, if any.
+        // Another size (in or out of Full Screen, say) has bars of its own, if any, and its own
+        // picture.
         if self.window.is_none_or(|before| {
             found.is_none_or(|now| (now.width, now.height) != (before.width, before.height))
         }) {
             self.bar = 0;
+            self.source = NATIVE_HEIGHT;
         }
         let frames_stopped = self.stale >= STALE_AFTER;
         if let Some(window) = found {
@@ -215,6 +239,7 @@ impl<B: Backend> Runner<B> {
             events: Vec::new(),
             error: None,
             stale: false,
+            source: self.source,
         };
         // Paused because frames stopped, not because the window says it's hidden: look again.
         let probing = self.state == CaptureState::Paused
@@ -229,8 +254,9 @@ impl<B: Backend> Runner<B> {
             let area = window.height.saturating_sub(self.bar.saturating_mul(2));
             let rows = match whole {
                 true => window.height,
-                false => (self.bar + rows_needed(area).max(self.chat.rows_needed(area)))
-                    .min(window.height),
+                false => (self.bar
+                    + rows_needed(area, self.source).max(self.chat.rows_needed(area, self.source)))
+                .min(window.height),
             };
             let grab = self.backend.grab(&window, rows);
             match grab {
@@ -258,8 +284,23 @@ impl<B: Backend> Runner<B> {
                             // for the chat box: this frame only measures, and the next one reads.
                             if self.bar <= sized_for {
                                 // A bar taller than the rows read can't be cut: read the frame as it is.
-                                let frame = letterbox::inside(&frame, self.bar).unwrap_or(frame);
+                                let frame = letterbox::inside(&frame, self.bar)
+                                    .unwrap_or(frame)
+                                    .with_source(self.source);
+                                // Another size or scale (windowed to Full Screen, or another size
+                                // in Full Screen) can draw the HUD and the pickups differently.
+                                let picture = (window.width, window.height, self.bar, self.source);
+                                if self.picture.is_some_and(|before| before != picture) {
+                                    self.exp.recheck();
+                                    self.notices.recheck();
+                                }
+                                self.picture = Some(picture);
                                 let reading = self.exp.observe(&frame);
+                                // Another of the game's sizes scaled up: read at it from the next
+                                // frame, which is grabbed with the rows it needs.
+                                if let Some(lines) = exp_bar::other_source(&frame, &reading) {
+                                    self.source = lines;
+                                }
                                 // The game fades to black when the map changes.
                                 let dark = matches!(reading, Err(Unreadable::ScreenDark));
                                 let notices = match dark {
@@ -297,6 +338,7 @@ impl<B: Backend> Runner<B> {
         }
         debug_assert!(tick.events.is_empty() || self.state.emits_events());
         tick.state = self.state;
+        tick.source = self.source;
         tick.window = found.map(|window| letterbox::in_window(window, self.bar));
         let capturing = self.state == CaptureState::Capturing;
         // Back from a pause: the player may have taken a portal meanwhile.
@@ -447,11 +489,14 @@ mod tests {
         assert_eq!(tick.state, CaptureState::Capturing);
         assert_eq!(tick.exp, Some(Err(Unreadable::Learning)));
         // Only the rows the reader needs are asked for, and the engine keeps what it saw.
-        assert_eq!(runner.backend_mut().grabs, [(7, rows_needed(768))]);
+        assert_eq!(
+            runner.backend_mut().grabs,
+            [(7, rows_needed(768, NATIVE_HEIGHT))]
+        );
         let seen = runner
             .last_grab()
             .map(|g| (g.height - g.first_row, g.width));
-        assert_eq!(seen, Some((rows_needed(768), 1366)));
+        assert_eq!(seen, Some((rows_needed(768, NATIVE_HEIGHT), 1366)));
         assert_eq!(
             tick.chat,
             Some(Err(ChatUnreadable::NotFound)),
@@ -496,11 +541,11 @@ mod tests {
             runner.tick();
         }
         let grabs = &runner.backend_mut().grabs;
-        assert_eq!(grabs[0], (7, rows_needed(768)));
+        assert_eq!(grabs[0], (7, rows_needed(768, NATIVE_HEIGHT)));
         // Any whole frames read for the map's name aside, the next strip reaches higher.
         let strips: Vec<u32> = grabs.iter().map(|g| g.1).filter(|&r| r < 768).collect();
         assert!(
-            strips.len() >= 2 && strips[1] > rows_needed(768),
+            strips.len() >= 2 && strips[1] > rows_needed(768, NATIVE_HEIGHT),
             "the next strip asks for more rows: {grabs:?}"
         );
     }
@@ -942,8 +987,15 @@ mod tests {
     /// screen's width, 1512x850, between black bars 66 pixels tall. The HUD has the light bottom
     /// line the game's has.
     fn full_screen(hud: &Hud, exp: u64) -> Canvas {
-        let mut picture = hud_at(hud, exp);
-        picture.fill(283, 767, 800, 1, [200, 200, 200]);
+        full_screen_from(hud, exp, (1366, 768))
+    }
+
+    /// [`full_screen`] with the game at another size of the same shape: 1280x720 fills the same
+    /// 1512x850 picture.
+    fn full_screen_from(hud: &Hud, exp: u64, (width, lines): (u32, u32)) -> Canvas {
+        let field = exp_bar::exp_text(exp, pct_of(exp, NEEDED_41));
+        let mut picture = hud.draw(width, lines, &field, "41");
+        picture.fill((width - 800) / 2, lines - 1, 800, 1, [200, 200, 200]);
         let rgb: Vec<[u8; 3]> = picture
             .bgra
             .as_chunks::<4>()
@@ -951,7 +1003,7 @@ mod tests {
             .iter()
             .map(|p| [p[2], p[1], p[0]])
             .collect();
-        let scaled = crate::unstretch::stretch(&rgb, 1366, 1512, 850, 0);
+        let scaled = crate::unstretch::stretch(&rgb, width, 1512, 850, 0);
         let mut bgra: Vec<u8> = [0, 0, 0, 255].repeat(1512 * 982);
         bgra[66 * 1512 * 4..(66 + 850) * 1512 * 4].copy_from_slice(&scaled);
         Canvas {
@@ -1008,7 +1060,10 @@ mod tests {
             })
         );
         let rows = runner.backend_mut().grabs.last().map(|g| g.1);
-        assert!(rows >= Some(66 + rows_needed(850)), "{rows:?}");
+        assert!(
+            rows >= Some(66 + rows_needed(850, NATIVE_HEIGHT)),
+            "{rows:?}"
+        );
 
         // A map change fades it all to black, where no bar can be measured. The bars stay as they
         // were: MesoVibe's windows don't jump to the black around the picture, and it reads again
@@ -1046,6 +1101,58 @@ mod tests {
         runner.backend_mut().canvas = Some(hud_at(&hud, last + 21));
         let tick = runner.tick();
         assert_eq!(tick.window.map(|w| w.height), Some(768));
+        assert!(
+            matches!(tick.exp, Some(Ok(r)) if r.exp == last + 21),
+            "{:?}",
+            tick.exp
+        );
+    }
+
+    // Full Screen scales the size the player chose: at 1280x720 the HUD fills the same 1512x850
+    // picture as at 1366x768, only larger. Fails if the engine never reads past the usual
+    // 768-line size (the EXP bar stays unreadable, as players saw), grabs too few rows for the
+    // larger scale, or keeps the smaller size after the window changes.
+    #[test]
+    fn reads_full_screen_scaled_up_from_a_smaller_size() {
+        let hud = Hud::new();
+        let full = GameWindow {
+            width: 1512,
+            height: 982,
+            ..GAME
+        };
+        let mut runner = Runner::new(Fake {
+            window: Some(full),
+            ..Fake::default()
+        });
+        let mut sources = Vec::new();
+        let mut changes = Vec::new();
+        for &exp in [GRIND[0], GRIND[0]].iter().chain(&GRIND) {
+            runner.backend_mut().canvas = Some(full_screen_from(&hud, exp, (1280, 720)));
+            let tick = runner.tick();
+            assert_ne!(tick.exp, Some(Err(Unreadable::ScreenDark)));
+            sources.push(tick.source);
+            changes.extend(tick.events);
+        }
+        assert_eq!(sources[0], 768, "768 lines until the HUD shows otherwise");
+        assert_eq!(sources.last(), Some(&720));
+        let last = *GRIND.last().unwrap();
+        assert_eq!(
+            changes.last(),
+            Some(&Event::ExpChanged {
+                level: Some(41),
+                exp: last,
+                pct_hundredths: pct_of(last, NEEDED_41),
+                needed: Some(NEEDED_41),
+            })
+        );
+        let rows = runner.backend_mut().grabs.last().map(|g| g.1);
+        assert!(rows >= Some(66 + rows_needed(850, 720)), "{rows:?}");
+
+        // Back to windowed: the usual size again, read at once.
+        runner.backend_mut().window = Some(GAME);
+        runner.backend_mut().canvas = Some(hud_at(&hud, last + 21));
+        let tick = runner.tick();
+        assert_eq!(tick.source, 768);
         assert!(
             matches!(tick.exp, Some(Ok(r)) if r.exp == last + 21),
             "{:?}",

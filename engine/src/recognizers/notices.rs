@@ -1171,6 +1171,18 @@ impl NoticeReader {
         }
     }
 
+    /// For when the game's picture changed size or scale: the player switched between windowed
+    /// and Full Screen, or picked another size, and the letters may come out differently.
+    /// Confirmed letters are checked again the way kept ones are at the start of a session: after
+    /// a few lines shaped like EXP lines that they can't read, they're dropped and learned again.
+    /// Letters still being learned start over.
+    pub fn recheck(&mut self) {
+        match self.confirmed {
+            true => self.restored = self.restored.or(Some(0)),
+            false => self.forget_letters(),
+        }
+    }
+
     /// Starts over for a game that was closed and started again, maybe with another character:
     /// nothing on screen carries over, and nothing could be picked up meanwhile. What was learned
     /// stays.
@@ -1915,9 +1927,9 @@ fn newer_than(before: &[Slot], now: &[Slot]) -> usize {
 }
 
 /// How many of a game area's bottom rows the reader looks at when the area is `height` game
-/// pixels tall, in game rows.
-pub fn rows_needed(height: u32) -> u32 {
-    unstretch::rows_for(height, NOTICE_ROWS)
+/// pixels tall and scaled up from a picture `source` lines tall ([`Frame::source`]), in game rows.
+pub fn rows_needed(height: u32, source: u32) -> u32 {
+    unstretch::rows_for(height, source, NOTICE_ROWS)
 }
 
 #[cfg(test)]
@@ -2810,6 +2822,40 @@ mod tests {
                 "after {wrong_lines} wrong lines: {read:?}"
             );
         }
+    }
+
+    // Switching size can draw the pickup letters differently. Fails if letters confirmed at the
+    // old size keep the reader from learning the new ones, or if a recheck where they still fit
+    // stops it counting mesos.
+    #[test]
+    fn letters_learned_at_one_size_are_learned_again_after_a_switch() {
+        let twice: Vec<u64> = EVERY_DIGIT.iter().chain(&EVERY_DIGIT).copied().collect();
+        let mut reader = NoticeReader::new();
+        let mut game = Game::new(Scene::Rock);
+        run(&mut game, &mut reader, learning(&twice));
+        assert!(reader.confirmed());
+        let mut kept = reader.clone();
+        let seventy = || {
+            vec![Notice::Mesos {
+                amount: 70,
+                shaped: false,
+            }]
+        };
+
+        reader.recheck();
+        let mut switched = Game::new(Scene::Rock).redrawn();
+        run(&mut switched, &mut reader, learning(&twice));
+        assert!(reader.confirmed(), "learned again at the new size");
+        let read = run(&mut switched, &mut reader, vec![one(&mesos("70"), 0)]);
+        assert_eq!(notices(&read), seventy());
+
+        kept.recheck();
+        let read = run(&mut game, &mut kept, vec![one(&mesos("70"), 0)]);
+        assert_eq!(
+            notices(&read),
+            seventy(),
+            "letters that still fit keep reading"
+        );
     }
 
     /// A reader that learned only the digits 0, 1, 2, 3, 4 and 6 from EXP lines, with the lines
