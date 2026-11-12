@@ -2,7 +2,7 @@
 
 # MesoVibe [![CI](https://github.com/danielfang7/MesoVibe/actions/workflows/ci.yml/badge.svg)](https://github.com/danielfang7/MesoVibe/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/danielfang7/MesoVibe)](https://github.com/danielfang7/MesoVibe/releases/latest)
 
-MesoVibe is a free, open-source companion for MapleStory Classic World. It reads the game window the way a stream viewer sees it and shows your EXP per hour, time to level, session history and chat, in a panel beside the game or a small overlay on it.
+MesoVibe is a free, open-source companion for MapleStory Classic World. It reads the game window the way a stream viewer sees it and shows your EXP per hour, time to level, the mesos you pick up, your sessions map by map and your chat, in a panel beside the game or a small overlay on it.
 
 ## Download
 
@@ -21,7 +21,7 @@ MesoVibe is not affiliated with or endorsed by Nexon. MapleStory is a trademark 
 
 ## Project layout
 
-- [engine](engine/) - screen capture and the recognizers that read the game's EXP bar and chat
+- [engine](engine/) - screen capture and the recognizers that read the game's EXP bar, chat, pickup notices and map name
 - [app](app/) - the Tauri desktop app: windows, tray, settings, session storage and updates
 - [ui](ui/) - the panel, the mini-HUD and the chat overlay
 - [sdk](sdk/) - the plugin API, `@mesovibe/sdk`
