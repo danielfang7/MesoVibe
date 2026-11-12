@@ -63,12 +63,19 @@ fn parse_args() -> Result<Args, String> {
     Ok(out)
 }
 
+/// Marks an amount read with a digit named by its shape.
+fn shape_mark(shaped: bool) -> &'static str {
+    if shaped { " (shape)" } else { "" }
+}
+
 fn describe(notice: &Notice) -> String {
     match notice {
         Notice::Exp(n) => format!("EXP +{n}"),
         Notice::PartyBonus(n) => format!("party bonus +{n}"),
-        Notice::Mesos(n) => format!("mesos +{n}"),
-        Notice::LateMesos(n) => format!("mesos +{n} (late)"),
+        Notice::Mesos { amount, shaped } => format!("mesos +{amount}{}", shape_mark(*shaped)),
+        Notice::LateMesos { amount, shaped } => {
+            format!("mesos +{amount} (late){}", shape_mark(*shaped))
+        }
         Notice::Item { name, count, tab } => {
             let tab = tab.map_or("?".into(), |t| t.name().to_string());
             format!("\"{}\" x{count} ({tab}) [{}]", name.text, &name.key[..6])
@@ -218,11 +225,11 @@ fn main() -> ExitCode {
                             Notice::Exp(n) if hud_gain.is_some() => totals.exp_lines += n,
                             Notice::PartyBonus(n) if hud_gain.is_some() => totals.party_bonus += n,
                             Notice::Exp(_) | Notice::PartyBonus(_) => {}
-                            Notice::Mesos(n) => {
+                            Notice::Mesos { amount: n, .. } => {
                                 totals.mesos += n;
                                 totals.mesos_lines += 1;
                             }
-                            Notice::LateMesos(n) => {
+                            Notice::LateMesos { amount: n, .. } => {
                                 totals.late_mesos += n;
                                 totals.late_lines += 1;
                             }

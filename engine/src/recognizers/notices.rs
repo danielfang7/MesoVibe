@@ -62,6 +62,9 @@
 
 use std::collections::HashMap;
 
+use serde::Serialize;
+use ts_rs::TS;
+
 use crate::frame::Frame;
 use crate::glyph::{Atlas, Glyph, MAX_GLYPH_WIDTH};
 use crate::lines::{self, StackLine};
@@ -154,8 +157,9 @@ const KNOWLEDGE_HEADER: &str = "mesovibe notices 1";
 /// drops them and learns again. Only a game update that redrew the font should get there.
 const RESTORE_PATIENCE: usize = 3;
 
-/// The inventory tab a picked-up item went to, as the notice names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The inventory tab a picked-up item went to, as the notice names it. In events it's the tab's
+/// name as the game writes it ("Equip", "Use", "Setup", "Etc" or "Cash").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, TS)]
 pub enum Tab {
     Equip,
     Use,
@@ -185,11 +189,11 @@ pub enum Notice {
     Exp(u64),
     /// "Bonus EXP for PARTY (+N)", in a party.
     PartyBonus(u64),
-    /// "You have gained mesos (+N)".
-    Mesos(u64),
+    /// "You have gained mesos (+N)". `shaped` when one of its digits was named by its shape.
+    Mesos { amount: u64, shaped: bool },
     /// Mesos picked up earlier, while a digit of the amount wasn't learned yet (reported missed
     /// then), read now that its digits are known.
-    LateMesos(u64),
+    LateMesos { amount: u64, shaped: bool },
     /// `<name> xN earned. (<tab>)`. The tab is `None` while its letters can't tell it yet.
     Item {
         name: ItemName,
@@ -210,8 +214,9 @@ pub struct ItemName {
     pub picture: NamePicture,
 }
 
-/// Why lines may have been missed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Why lines may have been missed. In events it's the reason's snake_case name ("not_learned").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
 pub enum Missed {
     /// The stack couldn't be lined up with the last frame's.
     Unaligned,
@@ -225,20 +230,12 @@ pub enum Missed {
     ExpOver,
     /// The stack was out of sight for a while, so lines may have come and gone unseen.
     Lost,
-}
-
-impl Missed {
-    /// A stable name for the reason, for events.
-    pub fn name(self) -> &'static str {
-        match self {
-            Missed::Unaligned => "unaligned",
-            Missed::Unreadable => "unreadable",
-            Missed::NotLearned => "not_learned",
-            Missed::ExpShort => "exp_short",
-            Missed::ExpOver => "exp_over",
-            Missed::Lost => "lost",
-        }
-    }
+    /// Mesos amounts waiting for a digit were given up (more than the reader keeps, or the game
+    /// restarted), so they'll never be counted.
+    Dropped,
+    /// A digit named by its shape turned out wrong, so amounts counted with such digits may be
+    /// wrong. Those digits are no longer used.
+    ShapesWrong,
 }
 
 /// What one frame of the notice stack brought.
@@ -867,6 +864,13 @@ fn parse_number(text: &str) -> Option<u64> {
 }
 
 /// The number the glyphs show, when every one is a known digit or comma.
+/// Whether any of an amount's digits was named by its shape (`shaped`) rather than learned.
+fn uses_shaped(atlas: &Atlas, shaped: &[char], digits: &[Glyph]) -> bool {
+    digits
+        .iter()
+        .any(|glyph| atlas.name(glyph).is_some_and(|c| shaped.contains(&c)))
+}
+
 fn read_number<'a>(atlas: &Atlas, glyphs: impl IntoIterator<Item = &'a Glyph>) -> Option<u64> {
     let text: Option<String> = glyphs.into_iter().map(|g| atlas.name(g)).collect();
     parse_number(&text?)
@@ -952,8 +956,8 @@ struct Unread {
 enum Read {
     Exp(ExpLine),
     PartyBonus(ExpLine),
-    /// Read, or with a digit not learned yet.
-    Mesos(Result<u64, Unread>),
+    /// Read (with whether a digit was named by its shape), or with a digit not learned yet.
+    Mesos(Result<(u64, bool), Unread>),
     Item(Option<(ItemName, u32, Option<Tab>)>),
     Other,
     /// It may be a pickup, but it can't be read.
@@ -990,8 +994,13 @@ pub struct NoticeReader {
     shaped: Vec<char>,
     /// A digit named by its shape turned out wrong: no more are named that way.
     shapes_failed: bool,
-    /// Kept mesos amounts read since the last frame, now that their digits are known.
-    late: Vec<u64>,
+    /// Digits named by their shapes were dropped since the last reading said so.
+    shapes_wrong: bool,
+    /// Waiting mesos amounts were given up since the last reading said so.
+    dropped: bool,
+    /// Kept mesos amounts read since the last frame, now that their digits are known, with
+    /// whether a digit was named by its shape.
+    late: Vec<(u64, bool)>,
     /// How much a line faded from one frame to the next in the last frames measured, newest last:
     /// about 9 at four frames a second, 45 at one.
     fades: Vec<u8>,
@@ -1026,6 +1035,8 @@ impl NoticeReader {
             unread: std::collections::VecDeque::new(),
             shaped: Vec::new(),
             shapes_failed: false,
+            shapes_wrong: false,
+            dropped: false,
             late: Vec::new(),
             fades: Vec::new(),
             hud: None,
@@ -1160,6 +1171,7 @@ impl NoticeReader {
     pub fn restart(&mut self) {
         self.lines = None;
         self.pending.clear();
+        self.dropped |= !self.unread.is_empty();
         self.unread.clear();
         self.late.clear();
         self.lost = false;
@@ -1249,7 +1261,20 @@ impl NoticeReader {
             missed.get_or_insert(short);
         }
         self.resolve();
-        notices.extend(self.late.drain(..).map(Notice::LateMesos));
+        notices.extend(
+            self.late
+                .drain(..)
+                .map(|(amount, shaped)| Notice::LateMesos { amount, shaped }),
+        );
+        // A reading carries one reason, so these wait for a reading without one: the next frame,
+        // usually. They mustn't be lost, since the plugin acts on them.
+        if missed.is_none() {
+            if std::mem::take(&mut self.shapes_wrong) {
+                missed = Some(Missed::ShapesWrong);
+            } else if std::mem::take(&mut self.dropped) {
+                missed = Some(Missed::Dropped);
+            }
+        }
         Ok(NoticeReading {
             notices,
             missed,
@@ -1269,7 +1294,7 @@ impl NoticeReader {
                 notices.extend(line.value.map(Notice::PartyBonus));
                 self.window.lines.push(line);
             }
-            Read::Mesos(Ok(amount)) => notices.push(Notice::Mesos(amount)),
+            Read::Mesos(Ok((amount, shaped))) => notices.push(Notice::Mesos { amount, shaped }),
             Read::Item(Some((name, count, tab))) => {
                 notices.push(Notice::Item { name, count, tab });
             }
@@ -1282,6 +1307,7 @@ impl NoticeReader {
                 self.unread.push_back(unread);
                 if self.unread.len() > UNREAD_KEPT {
                     self.unread.pop_front();
+                    self.dropped = true;
                 }
             }
             // An item count too large to be one.
@@ -1328,11 +1354,12 @@ impl NoticeReader {
     fn resolve(&mut self) {
         self.name_by_shape();
         let atlas = &self.atlas;
+        let shaped = &self.shaped;
         let late = &mut self.late;
         self.unread
             .retain(|unread| match read_number(atlas, &unread.digits) {
                 Some(amount) => {
-                    late.push(amount);
+                    late.push((amount, uses_shaped(atlas, shaped, &unread.digits)));
                     false
                 }
                 None => true,
@@ -1401,6 +1428,7 @@ impl NoticeReader {
             self.atlas.forget(digit);
         }
         self.shapes_failed = true;
+        self.shapes_wrong = true;
     }
 
     /// Measures how much the solid lines still on screen faded since the last frame, `fresh` new
@@ -1542,9 +1570,13 @@ impl NoticeReader {
                 false => match (off(EXP_TEXT), off(MESOS_TEXT)) {
                     (exp, mesos) if exp <= mesos => (Read::Exp(line), exp),
                     (_, mesos) => {
-                        let amount = line.value.ok_or_else(|| Unread {
-                            digits: line.digits.clone(),
-                        });
+                        let shaped = uses_shaped(&self.atlas, &self.shaped, &line.digits);
+                        let amount =
+                            line.value
+                                .map(|value| (value, shaped))
+                                .ok_or_else(|| Unread {
+                                    digits: line.digits.clone(),
+                                });
                         (Read::Mesos(amount), mesos)
                     }
                 },
@@ -2146,7 +2178,13 @@ mod tests {
         );
         assert!(readings.iter().all(|r| r.confirmed && r.missed.is_none()));
         let read = notices(&readings);
-        assert_eq!(read[0], Notice::Mesos(75));
+        assert_eq!(
+            read[0],
+            Notice::Mesos {
+                amount: 75,
+                shaped: false
+            }
+        );
         let Notice::Item { name, count, tab } = &read[1] else {
             panic!("an item: {read:?}");
         };
@@ -2175,7 +2213,16 @@ mod tests {
                 (Vec::new(), 0),
             ],
         );
-        assert_eq!(notices(&readings), vec![Notice::Mesos(12); 4]);
+        assert_eq!(
+            notices(&readings),
+            vec![
+                Notice::Mesos {
+                    amount: 12,
+                    shaped: false
+                };
+                4
+            ]
+        );
         assert!(readings.iter().all(|r| r.missed.is_none()));
     }
 
@@ -2190,7 +2237,34 @@ mod tests {
             &mut reader,
             vec![one(&mesos("98"), 0), (Vec::new(), 0)],
         );
-        assert_eq!(notices(&readings), [Notice::Mesos(98)]);
+        assert_eq!(
+            notices(&readings),
+            [Notice::Mesos {
+                amount: 98,
+                shaped: false
+            }]
+        );
+    }
+
+    // An item keeps its key over a light scene as over a dark one. Fails if what's behind the
+    // line leaks into the key, which would split one item's history by where it was picked up.
+    #[test]
+    fn an_item_s_key_doesnt_depend_on_the_scene_behind_it() {
+        let mut game = Game::new(Scene::Cloud);
+        let mut reader = confirmed_reader(&mut game);
+        let readings = run(
+            &mut game,
+            &mut reader,
+            vec![one(&item("Snail Shell", 1, "Etc"), 0), (Vec::new(), 0)],
+        );
+        let keys: Vec<String> = notices(&readings)
+            .into_iter()
+            .filter_map(|n| match n {
+                Notice::Item { name, .. } => Some(name.key),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(keys, ["cd72fc68645aefa9"]);
     }
 
     // Guards item identity: the same name gives the same key, another name another key, and the
@@ -2219,6 +2293,13 @@ mod tests {
             .collect();
         assert_eq!(items.len(), 3);
         assert_eq!(items[0].0, items[2].0, "the same name, the same key");
+        // Players' saved history is keyed by these. A change to how lines are cut that changes
+        // them splits every player's items in two: it needs a way to carry old keys over first.
+        assert_eq!(
+            (items[0].0.as_str(), items[1].0.as_str()),
+            ("cd72fc68645aefa9", "79faed6f9dcf6843"),
+            "item keys changed"
+        );
         assert_ne!(items[0].0, items[1].0);
         // S, h and l are in no phrase the reader has seen.
         assert_eq!(items[0].1, "?nai? ??e??");
@@ -2285,7 +2366,14 @@ mod tests {
             ],
         );
         assert_eq!(readings[0].missed, Some(Missed::NotLearned));
-        assert_eq!(notices(&readings), [Notice::Mesos(99)], "the 9 was learned");
+        assert_eq!(
+            notices(&readings),
+            [Notice::Mesos {
+                amount: 99,
+                shaped: false
+            }],
+            "the 9 was learned"
+        );
     }
 
     // Guards keeping letters between launches: the next session reads its first pickup, and
@@ -2310,7 +2398,13 @@ mod tests {
             &mut next,
             vec![(Vec::new(), 0), one(&mesos("85"), 0)],
         );
-        assert_eq!(notices(&readings), [Notice::Mesos(85)]);
+        assert_eq!(
+            notices(&readings),
+            [Notice::Mesos {
+                amount: 85,
+                shaped: false
+            }]
+        );
         assert!(readings.iter().all(|r| r.confirmed && r.missed.is_none()));
         // The mesos line taught its phrase's letters, and what was kept is still there.
         let grown = next.knowledge().unwrap();
@@ -2362,7 +2456,10 @@ mod tests {
         assert_ne!(relearned, kept);
         assert_eq!(
             notices(&run(&mut game, &mut reader, vec![one(&mesos("70"), 0)])),
-            [Notice::Mesos(70)]
+            [Notice::Mesos {
+                amount: 70,
+                shaped: false
+            }]
         );
     }
 
@@ -2384,7 +2481,13 @@ mod tests {
         let after = run(&mut game, &mut reader, vec![(Vec::new(), 0)]);
         assert!(spoiled[0].notices.is_empty(), "spoiled: {:?}", spoiled[0]);
         assert_eq!(spoiled[0].missed, None, "waits for the next frame");
-        assert_eq!(after[0].notices, [Notice::Mesos(75)]);
+        assert_eq!(
+            after[0].notices,
+            [Notice::Mesos {
+                amount: 75,
+                shaped: false
+            }]
+        );
         assert_eq!(after[0].missed, None);
     }
 
@@ -2443,7 +2546,13 @@ mod tests {
         }
         game.monster = None;
         walking.extend(run(&mut game, &mut reader, vec![one(&mesos("57"), 0)]));
-        assert_eq!(notices(&walking), [Notice::Mesos(57)]);
+        assert_eq!(
+            notices(&walking),
+            [Notice::Mesos {
+                amount: 57,
+                shaped: false
+            }]
+        );
         assert!(walking.iter().all(|r| r.missed.is_none()), "{walking:?}");
     }
 
@@ -2476,7 +2585,14 @@ mod tests {
             &mut reader,
             vec![(Vec::new(), 0), one(&mesos("57"), 0)],
         ));
-        assert_eq!(notices(&sliding), [Notice::Mesos(57)], "{sliding:?}");
+        assert_eq!(
+            notices(&sliding),
+            [Notice::Mesos {
+                amount: 57,
+                shaped: false
+            }],
+            "{sliding:?}"
+        );
         assert!(sliding.iter().all(|r| r.missed.is_none()), "{sliding:?}");
     }
 
@@ -2526,8 +2642,42 @@ mod tests {
             vec![one(&exp("57"), 57), (Vec::new(), 0), (Vec::new(), 0)],
         );
         // The EXP line taught the 5 and 7; it isn't reported itself, its digits unknown when read.
-        assert_eq!(notices(&taught), [Notice::LateMesos(75)]);
+        assert_eq!(
+            notices(&taught),
+            [Notice::LateMesos {
+                amount: 75,
+                shaped: false
+            }]
+        );
         assert_eq!(reader.waiting_mesos(), 0);
+    }
+
+    // Amounts waiting for a digit that are given up must be reported, or the plugin counts the
+    // session as complete. Fails if a game restart with an amount waiting, or one more amount
+    // than the reader keeps, passes without a `Dropped` reading.
+    #[test]
+    fn amounts_given_up_are_reported_dropped() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = missing_five_seven_eight_nine(&mut game);
+        run(
+            &mut game,
+            &mut reader,
+            vec![one(&mesos("75"), 0), (Vec::new(), 0)],
+        );
+        assert_eq!(reader.waiting_mesos(), 1);
+        reader.restart();
+        let after = run(&mut game, &mut reader, vec![(Vec::new(), 0); 2]);
+        assert_eq!(after[0].missed, Some(Missed::Dropped));
+        assert_eq!(after[1].missed, None, "said once");
+
+        let mut reader = NoticeReader::new();
+        let (mut notices, mut missed) = (Vec::new(), None);
+        for _ in 0..=UNREAD_KEPT {
+            let waiting = Read::Mesos(Err(Unread { digits: Vec::new() }));
+            reader.accept(waiting, &mut notices, &mut missed);
+        }
+        assert_eq!(reader.waiting_mesos(), UNREAD_KEPT);
+        assert!(reader.dropped, "the oldest amount was given up");
     }
 
     // Digits no EXP line showed are named by their shapes once the shape rules name every digit
@@ -2546,11 +2696,26 @@ mod tests {
         assert_eq!(
             notices(&read),
             [
-                Notice::LateMesos(75),
-                Notice::LateMesos(57),
-                Notice::LateMesos(85),
-                Notice::LateMesos(58),
-                Notice::Mesos(78)
+                Notice::LateMesos {
+                    amount: 75,
+                    shaped: true
+                },
+                Notice::LateMesos {
+                    amount: 57,
+                    shaped: true
+                },
+                Notice::LateMesos {
+                    amount: 85,
+                    shaped: true
+                },
+                Notice::LateMesos {
+                    amount: 58,
+                    shaped: true
+                },
+                Notice::Mesos {
+                    amount: 78,
+                    shaped: true
+                }
             ]
         );
         assert_eq!(reader.waiting_mesos(), 0);
@@ -2597,7 +2762,16 @@ mod tests {
         let wrong = run(&mut game, &mut reader, steps);
         assert_eq!(
             notices(&wrong),
-            [Notice::LateMesos(57), Notice::LateMesos(75)],
+            [
+                Notice::LateMesos {
+                    amount: 57,
+                    shaped: true
+                },
+                Notice::LateMesos {
+                    amount: 75,
+                    shaped: true
+                }
+            ],
             "read the wrong way round"
         );
         let checked = run(
@@ -2606,6 +2780,14 @@ mod tests {
             [learning(&[57]), vec![(Vec::new(), 0); 3]].concat(),
         );
         assert!(checked.iter().any(|r| r.missed == Some(Missed::ExpOver)));
+        // Amounts counted with those digits may be wrong: the plugin hears it.
+        assert_eq!(
+            checked
+                .iter()
+                .filter(|r| r.missed == Some(Missed::ShapesWrong))
+                .count(),
+            1
+        );
         let after = run(&mut game, &mut reader, vec![one(&mesos("75"), 0)]);
         assert_eq!(after[0].missed, Some(Missed::NotLearned));
         assert!(reader.knowledge().unwrap().contains("no-shapes"));
@@ -2648,7 +2830,13 @@ mod tests {
         let bgra = unstretch::stretch(&rgb, canvas.width, width, height, from);
         let frame = Frame::new(width, height, width as usize * 4, &bgra).unwrap();
         let reading = reader.observe(&frame, Some(&game.hud())).unwrap();
-        assert_eq!(reading.notices, [Notice::Mesos(39)]);
+        assert_eq!(
+            reading.notices,
+            [Notice::Mesos {
+                amount: 39,
+                shaped: false
+            }]
+        );
         assert!(reading.missed.is_none());
     }
 

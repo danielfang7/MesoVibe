@@ -13,7 +13,7 @@
 
 import type { Event } from "./generated/events.js";
 
-export type { Event } from "./generated/events.js";
+export type { Event, NoticeState } from "./generated/events.js";
 export { SCHEMA_VERSION } from "./generated/events.js";
 export { formatCompact, formatDigits, formatDuration, formatMinutes, formatPercent } from "./format.js";
 

@@ -284,6 +284,20 @@ impl MapFollower {
         self.want.is_some()
     }
 
+    /// The map last reported: `None` before one settled, `Some(None)` for a map whose name
+    /// couldn't be read, else its key.
+    pub fn current(&self) -> Option<Option<&str>> {
+        self.map.as_ref().map(|map| map.as_deref())
+    }
+
+    /// Reads the map again soon: capture was paused, and the player may have changed maps
+    /// meanwhile.
+    pub fn recheck(&mut self) {
+        if self.want.is_none() && self.map.is_some() {
+            self.start(Want::Check);
+        }
+    }
+
     /// Follows one frame the engine read: `dark` says the screen was dark in it (a map change
     /// fades to black and back). Returns a map that just settled: its name, or `None` when the
     /// new map's name can't be read.
@@ -511,6 +525,9 @@ mod tests {
         let forest = Minimap::new("Victoria Road", "Forest I");
         let canvas = game(Some(&forest));
         let at_1x = key(&canvas).unwrap();
+        // Players' saved history is keyed by this. A change to how the name is cut that changes
+        // it splits every player's maps in two: it needs a way to carry old keys over first.
+        assert_eq!(at_1x, "da8f33b9c8ba6d03", "map keys changed");
         let rgb: Vec<[u8; 3]> = canvas
             .bgra
             .as_chunks::<4>()

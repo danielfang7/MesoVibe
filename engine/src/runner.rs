@@ -12,8 +12,11 @@
 //! tick, which resumes capture. The HUD's pixels alone can't tell, because they often don't change
 //! for minutes.
 
+use std::time::Instant;
+
 use crate::capture::{Backend, CaptureError, CaptureSignal, CaptureState, GameWindow, Grab};
 use crate::events::Event;
+use crate::notice_health::{NoticeHealth, NoticeState};
 use crate::recognizers::chat::{self, ChatReader, ChatReading, ChatUnreadable};
 use crate::recognizers::exp_bar::{self, ExpBarReader, ExpReading, Unreadable};
 use crate::recognizers::map_name::{MapFollower, MapName};
@@ -69,10 +72,19 @@ pub struct Runner<B> {
     confirmed: Option<ExpReading>,
     /// Whether the EXP bar read last tick, so a covered bar is reported once, not every tick.
     readable: bool,
-    /// What the engine last saw, for the "What MesoVibe sees" panel.
+    /// What the engine last saw, for the "What MesoVibe sees" panel and the recorder.
     last_grab: Option<Grab>,
+    /// Whether that was a whole frame, read for the map's name rather than the usual strip.
+    last_whole: bool,
     /// Grabs in a row that brought no new frame.
     stale: u32,
+    /// How the pickup notices are being read, decided each tick.
+    health: NoticeHealth,
+    notice_state: NoticeState,
+    /// When the runner started: the clock `health` measures time on.
+    started: Instant,
+    /// Capturing on the last tick, so a resumed capture checks the map again.
+    was_capturing: bool,
 }
 
 impl<B: Backend> Runner<B> {
@@ -93,13 +105,25 @@ impl<B: Backend> Runner<B> {
             confirmed: None,
             readable: false,
             last_grab: None,
+            last_whole: false,
             stale: 0,
+            health: NoticeHealth::new(),
+            notice_state: NoticeState::Off,
+            started: Instant::now(),
+            was_capturing: false,
         }
     }
 
-    /// The rows the engine read on the last tick that captured, exactly as it saw them.
+    /// The rows the engine read on the last tick that captured, exactly as it saw them: the
+    /// bottom strip, or now and then the whole game area for the map's name.
     pub fn last_grab(&self) -> Option<&Grab> {
         self.last_grab.as_ref()
+    }
+
+    /// The last grab when it was the bottom strip. The "What MesoVibe sees" picture shows only
+    /// this: the whole game area, read for the map's name, holds chat and other players' names.
+    pub fn last_strip(&self) -> Option<&Grab> {
+        self.last_grab.as_ref().filter(|_| !self.last_whole)
     }
 
     pub fn state(&self) -> CaptureState {
@@ -112,6 +136,17 @@ impl<B: Backend> Runner<B> {
 
     pub fn notice_reader(&self) -> &NoticeReader {
         &self.notices
+    }
+
+    /// How the pickup notices are being read, as of the last tick.
+    pub fn notice_state(&self) -> NoticeState {
+        self.notice_state
+    }
+
+    /// The map the player is on: `None` before one settled, `Some(None)` for a map whose name
+    /// can't be read, else its key.
+    pub fn current_map(&self) -> Option<Option<&str>> {
+        self.map.current()
     }
 
     pub fn backend_mut(&mut self) -> &mut B {
@@ -174,7 +209,8 @@ impl<B: Backend> Runner<B> {
         if let Some(window) = found.filter(|_| capturing || probing) {
             // The chat reader may want more rows than at first, for a chat box the player made
             // taller, and the map's name is at the top.
-            let rows = match self.map.wants_whole_frame() {
+            let whole = self.map.wants_whole_frame();
+            let rows = match whole {
                 true => window.height,
                 false => rows_needed(window.height).max(self.chat.rows_needed(window.height)),
             };
@@ -207,7 +243,7 @@ impl<B: Backend> Runner<B> {
                             tick.events.extend(notice_events(&notices));
                             if let Some(map) = self.map.observe(&frame, dark) {
                                 tick.events.push(Event::MapChanged {
-                                    map: map.as_ref().map(|name| name.key.clone()),
+                                    map_key: map.as_ref().map(|name| name.key.clone()),
                                 });
                                 tick.map = Some(map);
                             }
@@ -218,6 +254,7 @@ impl<B: Backend> Runner<B> {
                         None => tick.error = Some(CaptureError("a malformed frame".to_string())),
                     }
                     self.last_grab = Some(grab);
+                    self.last_whole = whole;
                 }
                 Err(error) => tick.error = Some(error),
             }
@@ -232,6 +269,24 @@ impl<B: Backend> Runner<B> {
         }
         debug_assert!(tick.events.is_empty() || self.state.emits_events());
         tick.state = self.state;
+        let capturing = self.state == CaptureState::Capturing;
+        // Back from a pause: the player may have taken a portal meanwhile.
+        if capturing && !self.was_capturing {
+            self.map.recheck();
+        }
+        self.was_capturing = capturing;
+        let gained = tick
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::ExpChanged { .. }));
+        let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.notice_state = self.health.observe(
+            now,
+            capturing,
+            tick.notices.as_ref(),
+            self.notices.confirmed(),
+            gained,
+        );
         tick
     }
 
@@ -268,25 +323,26 @@ fn notice_events(reading: &Result<NoticeReading, NoticeUnreadable>) -> Vec<Event
         return Vec::new();
     };
     let gained = reading.notices.iter().filter_map(|notice| match notice {
-        Notice::Mesos(amount) => Some(Event::MesosGained {
+        Notice::Mesos { amount, shaped } => Some(Event::MesosGained {
             amount: *amount,
             late: false,
+            shaped: *shaped,
         }),
-        Notice::LateMesos(amount) => Some(Event::MesosGained {
+        Notice::LateMesos { amount, shaped } => Some(Event::MesosGained {
             amount: *amount,
             late: true,
+            shaped: *shaped,
         }),
         Notice::Item { name, count, tab } => Some(Event::ItemGained {
-            item: name.key.clone(),
+            item_key: name.key.clone(),
             count: *count,
-            tab: tab.map(|tab| tab.name()),
+            tab: *tab,
         }),
+        Notice::PartyBonus(amount) => Some(Event::PartyBonus { amount: *amount }),
         // EXP comes from the EXP bar.
-        Notice::Exp(_) | Notice::PartyBonus(_) | Notice::Other => None,
+        Notice::Exp(_) | Notice::Other => None,
     });
-    let missed = reading
-        .missed
-        .map(|why| Event::NoticesMissed { reason: why.name() });
+    let missed = reading.missed.map(|reason| Event::NoticesMissed { reason });
     gained.chain(missed).collect()
 }
 
@@ -294,6 +350,7 @@ fn notice_events(reading: &Result<NoticeReading, NoticeUnreadable>) -> Vec<Event
 mod tests {
     use super::*;
     use crate::recognizers::exp_bar::test_support::{Canvas, DARK, GRIND, Hud, NEEDED_41, pct_of};
+    use crate::recognizers::notices::{Missed, Tab};
 
     /// A backend driven by the test: the window it reports and the picture in it.
     #[derive(Default)]
@@ -518,7 +575,7 @@ mod tests {
             (0..ticks)
                 .flat_map(|_| runner.tick().events)
                 .filter_map(|e| match e {
-                    Event::MapChanged { map } => Some(map),
+                    Event::MapChanged { map_key } => Some(map_key),
                     _ => None,
                 })
                 .collect()
@@ -540,6 +597,68 @@ mod tests {
             .filter(|g| g.1 == 768)
             .count();
         assert_eq!(whole, 4);
+    }
+
+    // A player can take a portal while capture is paused (the game minimized). Fails if the map
+    // isn't read again as soon as capture resumes, which would file the new map's play under the
+    // old one for up to 30 s.
+    #[test]
+    fn the_map_is_read_again_when_capture_resumes() {
+        use crate::recognizers::map_name::test_support::Minimap;
+        let mut canvas = hud_at(&Hud::new(), GRIND[0]);
+        Minimap::new("Victoria Road", "Forest I").draw(&mut canvas);
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(canvas),
+            ..Fake::default()
+        });
+        for _ in 0..6 {
+            runner.tick();
+        }
+        assert!(matches!(runner.current_map(), Some(Some(_))));
+        runner.backend_mut().window = Some(GameWindow {
+            minimized: true,
+            ..GAME
+        });
+        runner.tick();
+        assert_ne!(runner.tick().state, CaptureState::Capturing);
+        runner.backend_mut().window = Some(GAME);
+        let before = runner.backend_mut().grabs.len();
+        for _ in 0..3 {
+            runner.tick();
+        }
+        let whole = runner.backend_mut().grabs[before..]
+            .iter()
+            .filter(|g| g.1 == 768)
+            .count();
+        assert!(whole > 0, "the map was read again");
+    }
+
+    // The "What MesoVibe sees" picture shows only the bottom strip. Fails if a whole frame read
+    // for the map's name, which holds chat and other players' names, is offered for it.
+    #[test]
+    fn only_strips_are_offered_for_the_picture() {
+        use crate::recognizers::map_name::test_support::Minimap;
+        let mut canvas = hud_at(&Hud::new(), GRIND[0]);
+        Minimap::new("Victoria Road", "Forest I").draw(&mut canvas);
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(canvas),
+            ..Fake::default()
+        });
+        let mut whole = 0;
+        for _ in 0..6 {
+            runner.tick();
+            let height = |g: &Grab| g.height - g.first_row;
+            let last = runner.last_grab().map(height);
+            if last == Some(768) {
+                whole += 1;
+                assert_eq!(runner.last_strip().map(height), None);
+            } else {
+                assert_eq!(runner.last_strip().map(height), last);
+            }
+        }
+        assert!(whole > 0, "a whole frame was read");
     }
 
     // A Mac hands over a minimized window's last picture as if it were new. Fails if stale frames
@@ -629,7 +748,8 @@ mod tests {
             pickups(runner.tick().events),
             [Event::MesosGained {
                 amount: 75,
-                late: false
+                late: false,
+                shaped: false
             }]
         );
         runner.backend_mut().canvas =
@@ -638,7 +758,7 @@ mod tests {
         assert!(
             matches!(
                 events.as_slice(),
-                [Event::ItemGained { item, count: 2, tab: Some("Use") }] if item.len() == 16
+                [Event::ItemGained { item_key, count: 2, tab: Some(Tab::Use) }] if item_key.len() == 16
             ),
             "{events:?}"
         );
@@ -652,7 +772,9 @@ mod tests {
         runner.backend_mut().canvas = Some(lit(game.next(&[], 0)));
         assert_eq!(
             pickups(runner.tick().events),
-            [Event::NoticesMissed { reason: "lost" }]
+            [Event::NoticesMissed {
+                reason: Missed::Lost
+            }]
         );
         // Closed and started again: nothing could be picked up meanwhile.
         runner.backend_mut().window = None;
@@ -664,7 +786,8 @@ mod tests {
             pickups(runner.tick().events),
             [Event::MesosGained {
                 amount: 12,
-                late: false
+                late: false,
+                shaped: false
             }]
         );
     }
@@ -709,7 +832,8 @@ mod tests {
             pickups(runner.tick().events),
             [Event::MesosGained {
                 amount: 75,
-                late: false
+                late: false,
+                shaped: false
             }]
         );
         let mut events = Vec::new();
@@ -729,18 +853,34 @@ mod tests {
             pickups(runner.tick().events),
             [Event::MesosGained {
                 amount: 12,
-                late: false
+                late: false,
+                shaped: false
             }]
         );
     }
 
     // Plugins tell a mesos amount read late (reported missed when it arrived) from one read at
-    // once. Fails if the two come out the same.
+    // once, and one read with a digit named by its shape; a party bonus line becomes its own
+    // event. Fails if any of them comes out the same as a plain amount, or the bonus is dropped.
     #[test]
-    fn mesos_read_late_say_so() {
+    fn mesos_read_late_or_by_shape_say_so() {
         let reading = NoticeReading {
-            notices: vec![Notice::Mesos(30), Notice::LateMesos(75)],
-            missed: None,
+            notices: vec![
+                Notice::Mesos {
+                    amount: 30,
+                    shaped: false,
+                },
+                Notice::LateMesos {
+                    amount: 75,
+                    shaped: false,
+                },
+                Notice::Mesos {
+                    amount: 58,
+                    shaped: true,
+                },
+                Notice::PartyBonus(4),
+            ],
+            missed: Some(Missed::ShapesWrong),
             confirmed: true,
         };
         assert_eq!(
@@ -748,11 +888,22 @@ mod tests {
             [
                 Event::MesosGained {
                     amount: 30,
-                    late: false
+                    late: false,
+                    shaped: false
                 },
                 Event::MesosGained {
                     amount: 75,
-                    late: true
+                    late: true,
+                    shaped: false
+                },
+                Event::MesosGained {
+                    amount: 58,
+                    late: false,
+                    shaped: true
+                },
+                Event::PartyBonus { amount: 4 },
+                Event::NoticesMissed {
+                    reason: Missed::ShapesWrong
                 }
             ]
         );

@@ -20,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mesovibe_engine::capture::{Backend, CaptureState, Grab};
 use mesovibe_engine::events::Event;
+use mesovibe_engine::notice_health::NoticeState;
 use mesovibe_engine::recognizers::chat::ChatUnreadable;
 use mesovibe_engine::recognizers::exp_bar::{Calibration, ExpBarReader, Unreadable};
 use mesovibe_engine::recognizers::notices::NoticeReader;
@@ -109,7 +110,20 @@ pub struct Status {
     pub calibration: &'static str,
     /// This tick brought no new frame.
     pub stale: bool,
+    /// The pickup notices: `off`, `learning`, `reading`, `covered`, `blocked` or `not_found`.
+    pub notices: NoticeState,
+    /// Mesos amounts waiting for a digit to be learned before they're counted.
+    pub waiting_mesos: usize,
+    /// The map the player is on: `None` before one settled; its key, or no key when its name
+    /// can't be read.
+    pub map: Option<MapStatus>,
     pub at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapStatus {
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -184,11 +198,15 @@ fn run(app: &AppHandle, inbox: &Receiver<Command>, mut reading: bool) {
             );
             let due = last_snapshot.is_none_or(|t| t.elapsed() >= SNAPSHOT_EVERY);
             if watching && grabbed && due {
-                let grab = runner.as_ref().and_then(|runner| runner.last_grab());
-                if let Some(png) = grab.and_then(snapshot) {
-                    let _ = app.emit("engine://snapshot", png);
+                // Only the bottom strip, never a whole frame read for the map's name; a tick
+                // that read one leaves the picture to the next.
+                let strip = runner.as_ref().and_then(|runner| runner.last_strip());
+                if let Some(strip) = strip {
+                    if let Some(png) = snapshot(strip) {
+                        let _ = app.emit("engine://snapshot", png);
+                    }
+                    last_snapshot = Some(Instant::now());
                 }
-                last_snapshot = Some(Instant::now());
             }
             tick_wait(state)
         } else {
@@ -360,6 +378,9 @@ fn off_status() -> Status {
         chat: None,
         calibration: "learning",
         stale: false,
+        notices: NoticeState::Off,
+        waiting_mesos: 0,
+        map: None,
         at_ms: now_ms(),
     }
 }
@@ -407,6 +428,11 @@ fn status<B: Backend>(tick: &Tick, runner: &Runner<B>, blocked: Option<String>) 
             Calibration::Confirmed => "confirmed",
         },
         stale: tick.stale,
+        notices: runner.notice_state(),
+        waiting_mesos: runner.notice_reader().waiting_mesos(),
+        map: runner.current_map().map(|key| MapStatus {
+            key: key.map(str::to_string),
+        }),
         at_ms: now_ms(),
     }
 }
