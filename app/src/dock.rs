@@ -255,14 +255,12 @@ pub fn chat_overlay(game: &Placement, place: &ChatPlace) -> Option<Rect> {
 }
 
 /// Desktop units per game pixel, each way, for a game area `width` by `height` game pixels shown
-/// at `area`. Above 768 lines the game stretches its 768-line picture to fill the area, so a game
-/// pixel is one of that picture's. `None` for an empty area.
-fn game_pixel(width: u32, height: u32, area: &Rect) -> Option<(f64, f64)> {
-    let (width, height) = if height > unstretch::NATIVE_HEIGHT {
-        (
-            unstretch::picture_width(width, height),
-            unstretch::NATIVE_HEIGHT,
-        )
+/// at `area`. Above `source` lines the game stretches a picture that tall to fill the area (768
+/// lines, or less for some Full Screen sizes), so a game pixel is one of that picture's. `None` for
+/// an empty area.
+fn game_pixel(width: u32, height: u32, source: u32, area: &Rect) -> Option<(f64, f64)> {
+    let (width, height) = if height > source {
+        (unstretch::picture_width(width, height, source), source)
     } else {
         (width, height)
     };
@@ -275,11 +273,12 @@ fn game_pixel(width: u32, height: u32, area: &Rect) -> Option<(f64, f64)> {
 }
 
 /// Where the chat overlay goes in a box at the game's side, for the game window `window` at
-/// `game`: inside the game area's left or right edge, below its top, at the game's own size.
-/// `None` when the game area is too small to hold it.
-pub fn chat_side(window: &GameWindow, game: &Placement, left: bool) -> Option<Rect> {
+/// `game`, scaled up from a picture `source` lines tall: inside the game area's left or right
+/// edge, below its top, at the game's own size. `None` when the game area is too small to hold
+/// it.
+pub fn chat_side(window: &GameWindow, game: &Placement, source: u32, left: bool) -> Option<Rect> {
     let area = Rect::from(game.area);
-    let (across, down) = game_pixel(window.width, window.height, &area)?;
+    let (across, down) = game_pixel(window.width, window.height, source, &area)?;
     let (width, height) = (
         f64::from(SIDE_WIDTH) * across,
         f64::from(SIDE_LINES * chat::LINE_HEIGHT + 2 * SIDE_PADDING) * down,
@@ -316,12 +315,14 @@ pub struct Docker {
 }
 
 impl Docker {
-    /// Places MesoVibe's windows for the game window this tick (`None`: no game found), with the
-    /// game's chat box where the chat reader saw it this tick, if it did.
+    /// Places MesoVibe's windows for the game window this tick (`None`: no game found), scaled up
+    /// from a picture `source` lines tall, with the game's chat box where the chat reader saw it
+    /// this tick, if it did.
     pub fn follow(
         &mut self,
         app: &AppHandle,
         window: Option<&GameWindow>,
+        source: u32,
         chat_box: Option<ChatPlace>,
     ) {
         if chat_box.is_some() {
@@ -362,7 +363,9 @@ impl Docker {
             ChatPosition::AboveChat => self
                 .chat_box
                 .and_then(|place| chat_overlay(&placement, &place)),
-            side => window.and_then(|w| chat_side(w, &placement, side == ChatPosition::Left)),
+            side => {
+                window.and_then(|w| chat_side(w, &placement, source, side == ChatPosition::Left))
+            }
         }
         .filter(|_| settings.chat_overlay && in_front);
         match overlay {
@@ -699,6 +702,9 @@ fn invisible_margins(_window: &WebviewWindow) -> Margins {
 mod tests {
     use super::*;
 
+    /// The height of the picture the game scales up above it, unless Full Screen says otherwise.
+    const NATIVE: u32 = unstretch::NATIVE_HEIGHT;
+
     /// A 1512×982-point Mac display with a 33-point menu bar, like a 14-inch MacBook Pro's.
     const MAC: Display = Display {
         work_area: Rect {
@@ -843,7 +849,7 @@ mod tests {
         let height = f64::from(SIDE_LINES * chat::LINE_HEIGHT + 2 * SIDE_PADDING);
         // A 1366×768 game at 1x on a Mac: a game pixel is a point.
         let mac = game(76, 40, 1366, 768);
-        let right = chat_side(&window(1366, 768), &mac, false).expect("room on the right");
+        let right = chat_side(&window(1366, 768), &mac, NATIVE, false).expect("room on the right");
         assert!(close(
             right,
             Rect {
@@ -853,7 +859,7 @@ mod tests {
                 height
             }
         ));
-        let left = chat_side(&window(1366, 768), &mac, true).expect("room on the left");
+        let left = chat_side(&window(1366, 768), &mac, NATIVE, true).expect("room on the left");
         assert!(close(
             left,
             Rect {
@@ -876,7 +882,19 @@ mod tests {
         };
         let (across, down) = (1920.0 / 1366.0, 1080.0 / 768.0);
         assert!(close(
-            chat_side(&window(1920, 1080), &full, false).expect("room on the right"),
+            chat_side(&window(1920, 1080), &full, NATIVE, false).expect("room on the right"),
+            Rect {
+                x: 1920.0 - (4.0 + 300.0) * across,
+                y: 324.0,
+                width: 300.0 * across,
+                height: height * down
+            }
+        ));
+        // Full Screen at 1280×720 on the same display: a 720-line picture scaled up, so the text
+        // and the box are larger again.
+        let (across, down) = (1920.0 / 1280.0, 1080.0 / 720.0);
+        assert!(close(
+            chat_side(&window(1920, 1080), &full, 720, false).expect("room on the right"),
             Rect {
                 x: 1920.0 - (4.0 + 300.0) * across,
                 y: 324.0,
@@ -886,7 +904,7 @@ mod tests {
         ));
         // A game area narrower than the box has no room for it.
         assert_eq!(
-            chat_side(&window(300, 600), &game(76, 40, 300, 600), false),
+            chat_side(&window(300, 600), &game(76, 40, 300, 600), NATIVE, false),
             None
         );
     }

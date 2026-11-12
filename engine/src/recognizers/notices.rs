@@ -1883,9 +1883,9 @@ fn newer_than(before: &[Slot], now: &[Slot]) -> usize {
 }
 
 /// How many of a game area's bottom rows the reader looks at when the area is `height` game
-/// pixels tall, in game rows.
-pub fn rows_needed(height: u32) -> u32 {
-    unstretch::rows_for(height, NOTICE_ROWS)
+/// pixels tall and scaled up from a picture `source` lines tall ([`Frame::source`]), in game rows.
+pub fn rows_needed(height: u32, source: u32) -> u32 {
+    unstretch::rows_for(height, source, NOTICE_ROWS)
 }
 
 #[cfg(test)]

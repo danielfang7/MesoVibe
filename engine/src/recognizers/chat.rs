@@ -715,9 +715,10 @@ impl ChatReader {
     }
 
     /// How many of a game area's bottom rows the reader looks at when the area is `height` game
-    /// pixels tall, in game rows.
-    pub fn rows_needed(&self, height: u32) -> u32 {
-        unstretch::rows_for(height, self.rows())
+    /// pixels tall and scaled up from a picture `source` lines tall ([`Frame::source`]), in game
+    /// rows.
+    pub fn rows_needed(&self, height: u32, source: u32) -> u32 {
+        unstretch::rows_for(height, source, self.rows())
     }
 
     /// The new chat lines in this frame, which holds at least [`ChatReader::rows_needed`] rows.
@@ -868,9 +869,9 @@ impl ChatReader {
 }
 
 /// How many of a game area's bottom rows a new reader looks at when the area is `height` game
-/// pixels tall, in game rows.
-pub fn rows_needed(height: u32) -> u32 {
-    unstretch::rows_for(height, CHAT_ROWS)
+/// pixels tall and scaled up from a picture `source` lines tall ([`Frame::source`]), in game rows.
+pub fn rows_needed(height: u32, source: u32) -> u32 {
+    unstretch::rows_for(height, source, CHAT_ROWS)
 }
 
 #[cfg(test)]
@@ -1473,8 +1474,8 @@ mod tests {
         let mut look = |chat: &ChatBox| {
             let canvas = chat.draw();
             let frame = canvas.frame();
-            let reading = reader.observe(&frame.bottom_rows(reader.rows_needed(768)));
-            (reading.unwrap().place, reader.rows_needed(768))
+            let reading = reader.observe(&frame.bottom_rows(reader.rows_needed(768, 768)));
+            (reading.unwrap().place, reader.rows_needed(768, 768))
         };
         let mut chat = ChatBox::new(&[("lieon : ok", ORANGE)]);
         chat.size = 14;
@@ -1508,7 +1509,7 @@ mod tests {
         let mut reader = ChatReader::new();
         let frame = canvas.frame();
         let reading = reader
-            .observe(&frame.bottom_rows(reader.rows_needed(768)))
+            .observe(&frame.bottom_rows(reader.rows_needed(768, 768)))
             .unwrap();
         assert_eq!(
             reading.place.map(|p| p.top),
@@ -1517,7 +1518,7 @@ mod tests {
         );
         assert_eq!(channels(&reading), [Channel::Friend]);
         assert_eq!(
-            reader.rows_needed(768),
+            reader.rows_needed(768, 768),
             CHAT_ROWS,
             "no more rows for the snow"
         );
@@ -1583,7 +1584,7 @@ mod tests {
         let mut reader = ChatReader::new();
         let first = reader.observe(&frame).unwrap();
         assert_eq!(first.place, None, "the box's top is above the rows read");
-        assert!(reader.rows_needed(1080) > rows_needed(1080));
+        assert!(reader.rows_needed(1080, 768) > rows_needed(1080, 768));
         let top_up = FIRST_LINE_UP + LINE_HEIGHT * 13 + ARROW_ABOVE_LINES;
         assert_eq!(
             reader.observe(&frame).unwrap().place.map(|p| p.top),

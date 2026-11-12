@@ -8,7 +8,8 @@
 //! stream began asking for sRGB. Those are converted to sRGB as they load.
 //!
 //! A run recorded in Full Screen on a display of another shape holds the black bar under the
-//! game's picture, as the engine's grabs do. [`picture`] cuts the bars off the way the engine does.
+//! game's picture, as the engine's grabs do. [`Scene`] cuts the bars off the way the engine does,
+//! and finds the size Full Screen scaled up the way it does.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -17,6 +18,8 @@ use std::sync::OnceLock;
 
 use mesovibe_engine::frame::Frame;
 use mesovibe_engine::letterbox;
+use mesovibe_engine::recognizers::exp_bar::{self, ExpReading, Unreadable};
+use mesovibe_engine::unstretch::NATIVE_HEIGHT;
 
 /// A capture frame's game area as BGRA, cropped using the run's meta.json, in captured pixels.
 /// A run saved with --crop-bottom holds only the game area's bottom rows, from `first_row` down,
@@ -250,14 +253,55 @@ pub fn load(run: &Path, png_path: &Path) -> Result<Image, String> {
     })
 }
 
-/// The game's picture in a frame, as the engine reads it: without the black bars Full Screen
-/// leaves above and below it on a display of another shape. `bar` carries the last bar measured
-/// from frame to frame, as the engine does, so a frame too dark to measure keeps it.
-pub fn picture<'a>(frame: Frame<'a>, bar: &mut u32) -> Frame<'a> {
-    if let Some(measured) = letterbox::bottom_bar(&frame) {
-        *bar = measured;
+/// What the engine carries from frame to frame about the game's picture: the black bar Full
+/// Screen leaves above and below it on a display of another shape, and the height of the picture
+/// the game scales up (768 lines, or a smaller size chosen in Full Screen).
+pub struct Scene {
+    bar: u32,
+    source: u32,
+}
+
+impl Default for Scene {
+    fn default() -> Self {
+        Scene {
+            bar: 0,
+            source: NATIVE_HEIGHT,
+        }
     }
-    letterbox::inside(&frame, *bar).unwrap_or(frame)
+}
+
+impl Scene {
+    /// The game's picture in a frame, as the engine reads it: without the bars, declared at the
+    /// height it's scaled up from. A frame too dark to measure keeps the last bar.
+    pub fn picture<'a>(&mut self, frame: Frame<'a>) -> Frame<'a> {
+        if let Some(measured) = letterbox::bottom_bar(&frame) {
+            self.bar = measured;
+        }
+        letterbox::inside(&frame, self.bar)
+            .unwrap_or(frame)
+            .with_source(self.source)
+    }
+
+    /// After the EXP bar reader read `frame` (from [`Scene::picture`]): as the engine does, reads
+    /// from the next frame at another of the game's sizes if the HUD shows only there.
+    // Each replay builds this file on its own and uses only one of `follow` and `look`.
+    #[allow(dead_code)]
+    pub fn follow(&mut self, frame: &Frame, reading: &Result<ExpReading, Unreadable>) {
+        if let Some(lines) = exp_bar::other_source(frame, reading) {
+            self.source = lines;
+        }
+    }
+
+    /// For a replay with no EXP bar reader: looks for the HUD at the game's other sizes whenever
+    /// it doesn't show at the current one, and returns `frame` declared at the size it shows at.
+    // Each replay builds this file on its own and uses only one of `follow` and `look`.
+    #[allow(dead_code)]
+    pub fn look<'a>(&mut self, frame: Frame<'a>) -> Frame<'a> {
+        if let Some(lines) = exp_bar::hud_source(&frame) {
+            self.source = lines;
+        }
+        frame.with_source(self.source)
+    }
 }
 
 pub fn frames_of(run: &Path) -> Vec<PathBuf> {

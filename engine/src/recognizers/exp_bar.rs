@@ -44,7 +44,8 @@ const HUD_WIDTH: u32 = 800;
 /// How far, in game pixels each way, the HUD may sit from where the game area's size puts it.
 /// Wine on a Mac places the game up to a point off.
 const MAX_SHIFT: u32 = 1;
-/// The tallest game area drawn at 1x. Above it the game stretches a 768-line image.
+/// The tallest game area drawn at 1x. Above it the game stretches a 768-line image, or in Full
+/// Screen the smaller size the player chose ([`Frame::source`]).
 pub const MAX_NATIVE_HEIGHT: u32 = unstretch::NATIVE_HEIGHT;
 
 /// A region given by its offset from the HUD's left edge and how far above the frame's bottom
@@ -169,7 +170,8 @@ const HUD_ROWS: u32 = LABEL.up + MAX_SHIFT;
 
 /// Calls `read` with the frame at the game's own pixel size and the HUD's layout in it, where the
 /// game area's size puts it. A frame that declares a backing scale is undone first; then it's
-/// the frame itself up to 768 lines, or else the HUD's rows of the picture the game stretched.
+/// the frame itself up to [`Frame::source`] lines, or else the HUD's rows of the picture the game
+/// stretched.
 /// Fails when the HUD can't be placed: narrower than the bar, a picture that can't be recovered,
 /// or a frame missing rows the reader needs.
 fn at_1x<T>(frame: &Frame, read: impl FnOnce(&Frame, Layout) -> T) -> Result<T, Unreadable> {
@@ -177,15 +179,16 @@ fn at_1x<T>(frame: &Frame, read: impl FnOnce(&Frame, Layout) -> T) -> Result<T, 
     if scale > 1 {
         // Only the rows a backend reads back: the game's picture is doubled there, but not
         // necessarily everywhere (a Mac title bar's shadow falls on the top rows).
-        let rows = unstretch::scaled_rows(rows_needed(frame.height() / scale), scale);
+        let rows =
+            unstretch::scaled_rows(rows_needed(frame.height() / scale, frame.source()), scale);
         let picture = unstretch::unscale(&frame.bottom_rows(rows))
             .ok_or(Unreadable::UnsupportedScale { scale })?;
         return at_1x(&picture.frame(), read);
     }
-    if frame.height() <= MAX_NATIVE_HEIGHT {
+    if frame.height() <= frame.source() {
         let layout = Layout::of(frame).ok_or_else(|| unsupported(frame))?;
         // Without all of its rows, the HUD can't be looked for everywhere it may be.
-        if frame.first_row() + rows_needed(frame.height()) > frame.height() {
+        if frame.first_row() + rows_needed(frame.height(), frame.source()) > frame.height() {
             return Err(Unreadable::HudNotFound);
         }
         return Ok(read(frame, layout));
@@ -198,11 +201,58 @@ fn at_1x<T>(frame: &Frame, read: impl FnOnce(&Frame, Layout) -> T) -> Result<T, 
 }
 
 /// How many of a game area's bottom rows the reader looks at when the area is `height` game
-/// pixels tall: all a capture backend needs to read back, in game rows. The HUD's rows
-/// at 1x, or the rows the stretch recovery reads above 768 lines. A backend capturing at a
-/// backing scale reads [`unstretch::scaled_rows`] of these.
-pub fn rows_needed(height: u32) -> u32 {
-    unstretch::rows_for(height, HUD_ROWS)
+/// pixels tall and scaled up from a picture `source` lines tall ([`Frame::source`]): all a
+/// capture backend needs to read back, in game rows. The HUD's rows at 1x, or the rows the
+/// stretch recovery reads above `source` lines. A backend capturing at a backing scale reads
+/// [`unstretch::scaled_rows`] of these.
+pub fn rows_needed(height: u32, source: u32) -> u32 {
+    unstretch::rows_for(height, source, HUD_ROWS)
+}
+
+/// After a frame whose EXP bar couldn't be read (`reading`): the height of another picture the
+/// game area may be scaled up from, if the HUD shows only at that one. Full Screen scales the
+/// size the player chose to fit the display, so on a 14-inch MacBook Pro 1366x768 and 1280x720
+/// fill the same 1512x850 picture, and only the HUD's size inside it tells them apart. The HUD
+/// shows when its "EXP." label and EXP field are where the game area's size puts them, which needs
+/// nothing learned. `None` after a reading, while learning (the HUD was seen), on a dark screen,
+/// or when the HUD shows at the frame's own [`Frame::source`], at no other size, or at more than
+/// one.
+pub fn other_source(frame: &Frame, reading: &Result<ExpReading, Unreadable>) -> Option<u32> {
+    match reading {
+        Err(
+            Unreadable::HudNotFound
+            | Unreadable::NoText(_)
+            | Unreadable::UnknownGlyph(_)
+            | Unreadable::Garbled(_)
+            | Unreadable::UnsupportedSize { .. },
+        ) => {}
+        _ => return None,
+    }
+    hud_source(frame)
+}
+
+/// The height of another picture the game area may be scaled up from, if the HUD shows only at
+/// that one: [`other_source`] without looking at a reading first, for a caller with no EXP bar
+/// reader. `None` when the HUD shows at the frame's own [`Frame::source`], at no other size, or at
+/// more than one.
+pub fn hud_source(frame: &Frame) -> Option<u32> {
+    let shows = |lines: u32| {
+        at_1x(&frame.with_source(lines), |frame, nominal| {
+            find_by_structure(frame, nominal).is_some()
+        })
+        .unwrap_or(false)
+    };
+    if shows(frame.source()) {
+        return None;
+    }
+    let scale = frame.scale();
+    let mut found = unstretch::sources(frame.width() / scale, frame.height() / scale)
+        .into_iter()
+        .filter(|&lines| lines != frame.source() && shows(lines));
+    match (found.next(), found.next()) {
+        (Some(lines), None) => Some(lines),
+        _ => None,
+    }
 }
 
 /// What the HUD showed.
@@ -2013,10 +2063,10 @@ mod tests {
         );
     }
 
-    /// `canvas`, a 768-line picture, stretched to `width` x `height` the way the game does. Only
-    /// the rows the HUD's recovery needs are drawn, to keep the tests quick.
+    /// `canvas`, the game's picture (768 lines, or a smaller Full Screen size), stretched to
+    /// `width` x `height` the way the game does. Only the rows the HUD's recovery needs are drawn,
+    /// to keep the tests quick.
     fn stretched(canvas: &Canvas, width: u32, height: u32) -> Canvas {
-        assert_eq!(canvas.height, MAX_NATIVE_HEIGHT);
         let rgb: Vec<[u8; 3]> = canvas
             .bgra
             .as_chunks::<4>()
@@ -2024,7 +2074,7 @@ mod tests {
             .iter()
             .map(|p| [p[2], p[1], p[0]])
             .collect();
-        let from_row = height - (HUD_ROWS + 4) * height / MAX_NATIVE_HEIGHT;
+        let from_row = height - (HUD_ROWS + 4) * height / canvas.height;
         let bgra = unstretch::stretch(&rgb, canvas.width, width, height, from_row);
         Canvas {
             width,
@@ -2039,7 +2089,7 @@ mod tests {
     fn calibrates_itself_at_a_stretched_size() {
         let hud = Hud::new();
         for (w, h) in STRETCHED {
-            let picture = unstretch::picture_width(w, h);
+            let picture = unstretch::picture_width(w, h, MAX_NATIVE_HEIGHT);
             let mut reader = ExpBarReader::new();
             let results: Vec<_> = GRIND
                 .iter()
@@ -2061,6 +2111,48 @@ mod tests {
         }
     }
 
+    // Full Screen scales the size the player chose: 1280x720 fills the same 1512x850 picture as
+    // 1366x768 on a 14-inch MacBook Pro, and 800x600 fills 4:3 between side bars. Fails if the
+    // smaller picture isn't found from the HUD, a 768-line one is taken for another size, or the
+    // HUD is looked for elsewhere after a reading, while learning or on a dark screen.
+    #[test]
+    fn finds_the_size_full_screen_scaled_up_from_the_hud() {
+        let hud = Hud::new();
+        let reader = typed(&hud);
+        let expected = (Some(41), FIRST.exp, FIRST.pct_hundredths);
+        for ((width, lines), (to_width, to_height)) in
+            [((1280, 720), (1512, 850)), ((800, 600), (1308, 982))]
+        {
+            let canvas = stretched(&hud.draw_typed(width, lines, FIRST), to_width, to_height);
+            let frame = canvas.frame();
+            assert!(
+                reader.read(&frame).is_err(),
+                "{width}x{lines} read as 768 lines"
+            );
+            let missed = Err(Unreadable::HudNotFound);
+            assert_eq!(
+                other_source(&frame, &missed),
+                Some(lines),
+                "{width}x{lines}"
+            );
+            assert_eq!(
+                values(&reader.read(&frame.with_source(lines)).unwrap()),
+                expected,
+                "{width}x{lines}"
+            );
+            assert_eq!(hud_source(&frame.with_source(lines)), None, "already there");
+            for reading in [
+                reader.read(&frame.with_source(lines)),
+                Err(Unreadable::Learning),
+                Err(Unreadable::ScreenDark),
+            ] {
+                assert_eq!(other_source(&frame, &reading), None, "{reading:?}");
+            }
+        }
+        let usual = stretched(&hud.draw_typed(1366, 768, FIRST), 1512, 850);
+        assert_eq!(hud_source(&usual.frame()), None, "1366x768 stays 768 lines");
+    }
+
     #[test]
     fn what_is_learned_at_one_size_reads_every_size() {
         let hud = Hud::new();
@@ -2068,7 +2160,7 @@ mod tests {
         // Learned at 1x, read stretched: the player changed the window size.
         let at_1x = typed(&hud);
         for (w, h) in STRETCHED {
-            let picture = unstretch::picture_width(w, h);
+            let picture = unstretch::picture_width(w, h, MAX_NATIVE_HEIGHT);
             let frame = stretched(&hud.draw_typed(picture, 768, FIRST), w, h);
             assert_eq!(
                 values(&at_1x.read(&frame.frame()).unwrap()),
@@ -2092,11 +2184,11 @@ mod tests {
         let reader = typed(&hud);
         let expected = (Some(41), FIRST.exp, FIRST.pct_hundredths);
         let at_1x = hud.draw_typed(1366, 768, FIRST);
-        let picture = unstretch::picture_width(1920, 1080);
+        let picture = unstretch::picture_width(1920, 1080, MAX_NATIVE_HEIGHT);
         let large = stretched(&hud.draw_typed(picture, 768, FIRST), 1920, 1080);
         for canvas in [at_1x, large] {
             let (w, h) = (canvas.width, canvas.height);
-            let first = h - rows_needed(h);
+            let first = h - rows_needed(h, MAX_NATIVE_HEIGHT);
             let stride = w as usize * 4;
             let strip = &canvas.bgra[first as usize * stride..];
             let frame = Frame::bottom(w, h, first, stride, strip).unwrap();
@@ -2406,7 +2498,7 @@ mod tests {
     /// down, leaving black where the game doesn't reach. Returns the strip and its first row.
     fn doubled_strip(canvas: &Canvas, phase: (u32, u32), shift: (i32, i32)) -> (Vec<u8>, u32) {
         let (w, h) = (canvas.width * 2, canvas.height * 2);
-        let first = h - unstretch::scaled_rows(rows_needed(canvas.height), 2);
+        let first = h - unstretch::scaled_rows(rows_needed(canvas.height, MAX_NATIVE_HEIGHT), 2);
         let mut bgra = vec![0u8; ((h - first) * w * 4) as usize];
         for y in first..h {
             for x in 0..w {
@@ -2477,7 +2569,7 @@ mod tests {
         let hud = Hud::new();
         let reader = typed(&hud);
         // A 1920x1080 game area on a Retina display: the game's own stretch, then the doubling.
-        let picture = unstretch::picture_width(1920, 1080);
+        let picture = unstretch::picture_width(1920, 1080, MAX_NATIVE_HEIGHT);
         let canvas = stretched(&hud.draw_typed(picture, 768, FIRST), 1920, 1080);
         let strip = doubled_strip(&canvas, (1, 0), (0, 0));
         assert_eq!(
