@@ -188,15 +188,20 @@ impl<B: Backend> Runner<B> {
                     match grab.frame() {
                         Some(_) if !grab.fresh || self.state != CaptureState::Capturing => {}
                         Some(frame) => {
+                            let sized_for = self.bar;
                             if let Some(bar) = letterbox::bottom_bar(&frame) {
                                 self.bar = bar;
                             }
-                            // A bar taller than the rows read can't be cut: read the frame as it is.
-                            let frame = letterbox::inside(&frame, self.bar).unwrap_or(frame);
-                            let reading = self.exp.observe(&frame);
-                            tick.events = self.events_for(&reading);
-                            tick.exp = Some(reading);
-                            tick.chat = Some(self.chat.observe(&frame));
+                            // A taller bar than the grab was sized for leaves too few rows above it
+                            // for the chat box: this frame only measures, and the next one reads.
+                            if self.bar <= sized_for {
+                                // A bar taller than the rows read can't be cut: read the frame as it is.
+                                let frame = letterbox::inside(&frame, self.bar).unwrap_or(frame);
+                                let reading = self.exp.observe(&frame);
+                                tick.events = self.events_for(&reading);
+                                tick.exp = Some(reading);
+                                tick.chat = Some(self.chat.observe(&frame));
+                            }
                         }
                         None => tick.error = Some(CaptureError("a malformed frame".to_string())),
                     }
@@ -525,11 +530,22 @@ mod tests {
             window: Some(full),
             ..Fake::default()
         });
+        // The first frame is grabbed for no bar, too short above the bar for the chat box: it's
+        // measured, not read.
+        runner.backend_mut().canvas = Some(full_screen(&hud, GRIND[0]));
+        let first = runner.tick();
+        assert_eq!((first.exp, first.chat), (None, None));
+        assert_eq!(first.window.map(|w| (w.width, w.height)), Some((1512, 850)));
         let mut changes = Vec::new();
         for &exp in &GRIND {
             runner.backend_mut().canvas = Some(full_screen(&hud, exp));
             let tick = runner.tick();
             assert_ne!(tick.exp, Some(Err(Unreadable::ScreenDark)));
+            assert_eq!(
+                tick.chat,
+                Some(Err(ChatUnreadable::NotFound)),
+                "the chat box looked for with all the rows it needs above the bar"
+            );
             assert_eq!(tick.window.map(|w| (w.width, w.height)), Some((1512, 850)));
             changes.extend(tick.events);
         }
@@ -565,6 +581,17 @@ mod tests {
             "{:?}",
             tick.exp
         );
+
+        // The game restarted at the same size draws the same bars: its black loading frames keep
+        // them, so MesoVibe's windows stay on the picture.
+        runner.backend_mut().window = Some(GameWindow { id: 8, ..full });
+        runner.backend_mut().canvas = Some(Canvas {
+            width: 1512,
+            height: 982,
+            bgra: [0, 0, 0, 255].repeat(1512 * 982),
+        });
+        let tick = runner.tick();
+        assert_eq!(tick.window.map(|w| w.height), Some(850));
 
         // Back to windowed: the same game, no bars.
         runner.backend_mut().window = Some(GAME);

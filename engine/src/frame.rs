@@ -84,8 +84,12 @@ impl<'a> Frame<'a> {
 
     /// The frame without its top `top` rows and bottom `bottom` rows, as a game area of its own:
     /// row `top` becomes row 0. The same pixels, nothing copied. `None` when that leaves no rows,
-    /// leaves none of the rows the frame holds, or splits the frame's pixel blocks at its scale.
+    /// leaves none of the rows the frame holds, or cuts through the frame's pixel blocks at its
+    /// scale (either count not a whole number of blocks).
     pub fn without_rows(&self, top: u32, bottom: u32) -> Option<Frame<'a>> {
+        if !top.is_multiple_of(self.scale) || !bottom.is_multiple_of(self.scale) {
+            return None;
+        }
         let height = self.height.checked_sub(top)?.checked_sub(bottom)?;
         let first = self.first_row.max(top);
         if height == 0 || first - top >= height {
@@ -240,6 +244,10 @@ mod tests {
             .unwrap();
         assert!(blocks.without_rows(2, 2).is_some());
         assert!(blocks.without_rows(1, 2).is_none(), "splits a 2x2 block");
+        assert!(
+            blocks.without_rows(1, 1).is_none(),
+            "an even height, but every block cut in half"
+        );
     }
 
     #[test]

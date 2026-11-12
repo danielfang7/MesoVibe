@@ -9,8 +9,9 @@
 //! The bottom bar is measured on every frame ([`bottom_bar`]). The engine reads only the bottom
 //! of the game window, so the top bar isn't seen; the game centers its picture, so it's taken to
 //! be as tall as the bottom one. A windowed game has no bars: its bottom row is the HUD's frame,
-//! which is never black all the way across, and the row of black Wine can leave under a game it
-//! places a point off is too short to count ([`MIN_BAR`]).
+//! which is never black all the way across. Nor is the row of black Wine can leave under a game
+//! it places a point off ([`MIN_BAR`]), or black that leaves a picture of another shape, like a
+//! loading screen's band ([`PICTURE`]).
 
 use crate::capture::{GameWindow, Placement, ScreenRect};
 use crate::frame::Frame;
@@ -25,16 +26,26 @@ const LIT: u8 = 64;
 /// fall on the row above a last row the scaling only partly covers.
 const EDGE_ROWS: u32 = 2;
 
-/// The shortest black band under the picture that counts as a bar, in game pixels. Wine can place
-/// a windowed game up to a point off where its window puts it, which can leave a row of black
-/// under it; a Full Screen bar is tens of points (66 on a 1512x982 screen).
+/// The shape of the picture the game letterboxes in Full Screen: 1366x768 (1280x720 is the same
+/// shape). Bars above and below it leave that shape at the display's full width.
+const PICTURE: (u32, u32) = (1366, 768);
+
+/// How far, in game pixels, the picture between the bars may be from [`PICTURE`]'s shape: the game
+/// rounds the picture's height, and the bar above it may be a point taller than the one below.
+const SHAPE_SLACK: f64 = 2.0;
+
+/// The shortest bar, in game pixels. Wine can place a windowed game up to a point off where its
+/// window puts it, which can leave a row of black under it; a Full Screen bar is tens of points
+/// (66 on a 1512x982 screen).
 const MIN_BAR: u32 = 4;
 
 /// How tall the black bar under the game's picture is, in game pixels: 0 when the picture reaches
-/// the frame's bottom, or leaves less than [`MIN_BAR`] under it. Bar rows are pure black across
-/// the frame's whole width. `None` when the frame can't tell: black as far up as it holds (a map
-/// change's fade, or a bar taller than the rows read), a picture edge too dark to be sure of, or a
-/// bar that isn't a whole number of game pixels.
+/// the frame's bottom. Bar rows are pure black across the frame's whole width, at least
+/// [`MIN_BAR`] of them, and leave a picture of [`PICTURE`]'s shape between them and a bar as tall
+/// above. `None` when the frame can't tell: black as far up as it holds (a map change's fade, or a
+/// bar taller than the rows read), a picture edge too dark to be sure of, a bar that isn't a whole
+/// number of game pixels, or black that isn't a bar (Wine's row under a windowed game, a loading
+/// screen's band).
 pub fn bottom_bar(frame: &Frame) -> Option<u32> {
     let (width, height, first, scale) = (
         frame.width(),
@@ -47,11 +58,14 @@ pub fn bottom_bar(frame: &Frame) -> Option<u32> {
     let lit = (edge.saturating_sub(EDGE_ROWS * scale - 1).max(first)..=edge)
         .any(|y| (0..width).any(|x| frame.rgb(x, y).into_iter().max().unwrap_or(0) >= LIT));
     let rows = height - 1 - edge;
-    match rows / scale {
-        _ if !lit => None,
-        bar if bar < MIN_BAR => Some(0),
-        bar => rows.is_multiple_of(scale).then_some(bar),
+    if !lit || !rows.is_multiple_of(scale) {
+        return None;
     }
+    let bar = rows / scale;
+    let picture = f64::from((height / scale).saturating_sub(bar.saturating_mul(2)));
+    let shaped = f64::from(width / scale) * f64::from(PICTURE.1) / f64::from(PICTURE.0);
+    let letterboxed = bar >= MIN_BAR && (picture - shaped).abs() <= SHAPE_SLACK;
+    (bar == 0 || letterboxed).then_some(bar)
 }
 
 /// The game's picture inside a frame with bars `bar` game pixels tall above and below it: the
@@ -190,18 +204,43 @@ mod tests {
         assert_eq!(bottom_bar(&frame(&bgra, 200, 400, 100, 2)), None);
     }
 
-    // Wine can leave a row of black under a windowed game it places a point off. Fails if that
-    // row is taken for a bar, which would cut the picture short and misjudge its stretch.
+    // Only black that leaves a letterboxed picture's shape is a bar. Fails if the row of black Wine
+    // can leave under a windowed game, or a loading screen's black band, is taken for one: that
+    // would cut the picture short, misjudge its stretch and move MesoVibe's windows.
     #[test]
-    fn a_row_or_two_of_black_is_not_a_bar() {
-        for (bar, scale) in [(1, 1), (3, 1), (1, 2), (2, 2), (6, 2)] {
-            let bgra = strip(400, 100, bar);
-            let height = 400 * scale / 2;
-            let measured = bottom_bar(&frame(&bgra, 400, height, 100, scale));
-            assert_eq!(measured, Some(0), "{bar} rows at scale {scale}");
+    fn only_black_that_leaves_the_pictures_shape_is_a_bar() {
+        // (window width, height, black rows, scale) that aren't bars.
+        for (width, height, bar, scale) in [
+            (1366, 768, 1, 1),
+            (1366, 768, 2, 2),
+            (1280, 720, 1, 1),
+            (1920, 1080, 1, 2),
+            (1366, 768, 40, 1),
+            (1512, 982, 40, 1),
+            (1512, 982, 80, 2),
+        ] {
+            let bgra = strip(width * scale, 120 * scale, bar * scale);
+            let measured = bottom_bar(&frame(
+                &bgra,
+                width * scale,
+                height * scale,
+                120 * scale,
+                scale,
+            ));
+            assert_eq!(
+                measured, None,
+                "{bar} rows under {width}x{height} at scale {scale}"
+            );
         }
-        let bgra = strip(400, 100, 8);
-        assert_eq!(bottom_bar(&frame(&bgra, 400, 200, 100, 2)), Some(4));
+        // Letterboxed pictures: 1512x982 (MacBook Pro 14), 1440x900, 1728x1117 (MacBook Pro 16).
+        for (width, height, bar) in [(1512, 982, 66), (1440, 900, 45), (1728, 1117, 73)] {
+            let bgra = strip(width, 120, bar);
+            assert_eq!(
+                bottom_bar(&frame(&bgra, width, height, 120, 1)),
+                Some(bar),
+                "{width}x{height}"
+            );
+        }
     }
 
     // MesoVibe's windows line up with the picture, not the black around it. Fails if the area
