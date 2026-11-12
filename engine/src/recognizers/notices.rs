@@ -36,9 +36,10 @@
 //! a map whose monsters all give the same EXP that may be only a few of them. The others are named
 //! by their shapes, the way a person reads digits in a new font (loops and strokes), but only
 //! after those rules name every digit the EXP lines taught correctly. A digit named that way is
-//! dropped, with every other one named by shape, if an EXP line using it ever disagrees with the
-//! HUD. A mesos amount with a digit still unknown is reported missed, kept, and counted late as
-//! soon as its digits are known.
+//! dropped, with every other one named by shape, when the HUD shows an EXP line using it read
+//! wrong: with those digits set aside, the HUD's gain fits that line, and it names them. EXP lines
+//! off for another reason, as a line the reader never saw, leave them be. A mesos amount with a
+//! digit still unknown is reported missed, kept, and counted late as soon as its digits are known.
 //!
 //! A line's letters are cut from the first frame it shows in, while it's still at full strength:
 //! at four frames a second that's within a quarter second of its arrival. Letters are compared
@@ -992,7 +993,8 @@ pub struct NoticeReader {
     unread: std::collections::VecDeque<Unread>,
     /// Digits named by their shapes that no EXP line checked against the HUD has shown yet.
     shaped: Vec<char>,
-    /// A digit named by its shape turned out wrong: no more are named that way.
+    /// A digit named by its shape turned out wrong this session: no more are named that way. Not
+    /// kept: the digit the HUD named instead keeps later sessions from naming any.
     shapes_failed: bool,
     /// Digits named by their shapes were dropped since the last reading said so.
     shapes_wrong: bool,
@@ -1073,9 +1075,6 @@ impl NoticeReader {
                 glyph.encode()
             ));
         }
-        if self.shapes_failed {
-            text.push_str("no-shapes\n");
-        }
         Some(text)
     }
 
@@ -1092,10 +1091,11 @@ impl NoticeReader {
         for line in lines.filter(|l| !l.is_empty()) {
             let parts: Vec<&str> = line.split(' ').collect();
             let (name, glyph, shaped) = match parts[..] {
-                ["no-shapes"] => {
-                    reader.shapes_failed = true;
-                    continue;
-                }
+                // MesoVibe 0.5.0 kept this to name no digit by its shape again, and could keep it
+                // after EXP lines that were off for another reason. A digit shown wrong is now
+                // learned as the HUD named it instead, which keeps the shape rules from naming
+                // more ([`NoticeReader::name_by_shape`]).
+                ["no-shapes"] => continue,
                 [name, glyph] => (name, glyph, false),
                 [name, glyph, "shape"] => (name, glyph, true),
                 _ => return None,
@@ -1421,12 +1421,44 @@ impl NoticeReader {
         }
     }
 
-    /// Drops every digit named by its shape, one of them having turned out wrong, and names no
-    /// more that way.
-    fn drop_shaped(&mut self) {
-        for digit in self.shaped.drain(..) {
-            self.atlas.forget(digit);
+    /// What the HUD's gain teaches when the window's EXP lines don't add up because a digit named
+    /// by its shape is wrong: the atlas without the digits named by shape, the one line that uses
+    /// them named as the HUD's gain less the other lines says. `None` when the lines are off for
+    /// some other reason, as a line the reader never saw: then setting those digits aside leaves
+    /// no line, or more than one, with a digit unknown, or the gain doesn't fit the line, its
+    /// letters and the digits learned from EXP lines.
+    fn disproves_shapes(&self) -> Option<Atlas> {
+        if self.shaped.is_empty() || self.window.blocked {
+            return None;
         }
+        let mut plain = self.atlas.clone();
+        for &digit in &self.shaped {
+            plain.forget(digit);
+        }
+        let mut rest: u64 = 0;
+        let mut unknown = None;
+        for line in &self.window.lines {
+            match (read_number(&plain, &line.digits), unknown) {
+                (Some(value), _) => rest += value,
+                (None, None) => unknown = Some(line),
+                (None, Some(_)) => return None,
+            }
+        }
+        let line = unknown.filter(|line| uses_shaped(&self.atlas, &self.shaped, &line.digits))?;
+        let amount = self
+            .window
+            .hud
+            .checked_sub(rest)
+            .filter(|&amount| amount > 0)?;
+        line.teach(&mut plain, amount).then_some(plain)
+    }
+
+    /// A digit named by its shape turned out wrong ([`NoticeReader::disproves_shapes`]): `taught`
+    /// names it as the HUD did, and every other digit named by shape is dropped. No more are named
+    /// that way, this session or later ones, since the shape rules misread a digit now learned.
+    fn correct_shapes(&mut self, taught: Atlas) {
+        self.atlas = taught;
+        self.shaped.clear();
         self.shapes_failed = true;
         self.shapes_wrong = true;
     }
@@ -1734,12 +1766,12 @@ impl NoticeReader {
             let rest: u64 = window.lines.iter().filter_map(|l| l.value).sum();
             let (blocked, gained) = (window.blocked, window.hud);
             if !blocked && gained > rest {
-                let mut taught = line.teach(&mut self.atlas, gained - rest);
-                if !taught && !self.shaped.is_empty() {
-                    self.drop_shaped();
-                    taught = line.teach(&mut self.atlas, gained - rest);
+                if line.teach(&mut self.atlas, gained - rest) {
+                    self.window = Window::default();
+                    return None;
                 }
-                if taught {
+                if let Some(taught) = self.disproves_shapes() {
+                    self.correct_shapes(taught);
                     self.window = Window::default();
                     return None;
                 }
@@ -1751,17 +1783,13 @@ impl NoticeReader {
         }
         let short = read.is_none_or(|read| read < window.hud);
         let evidence = !window.blocked && read.is_some();
-        // EXP lines read with a digit named by its shape that don't add up: that digit is wrong.
-        let atlas = &self.atlas;
-        let used_shaped = window
-            .lines
-            .iter()
-            .flat_map(|line| &line.digits)
-            .filter_map(|glyph| atlas.name(glyph))
-            .any(|digit| self.shaped.contains(&digit));
+        let disproved = match evidence {
+            true => self.disproves_shapes(),
+            false => None,
+        };
         self.window = Window::default();
-        if evidence && used_shaped {
-            self.drop_shaped();
+        if let Some(taught) = disproved {
+            self.correct_shapes(taught);
         }
         if self.confirmed {
             return Some(if short {
@@ -2746,7 +2774,8 @@ mod tests {
     }
 
     // A digit named by its shape that's wrong shows when an EXP line using it disagrees with the
-    // HUD: every digit named that way is dropped, and no more are. Fails if a wrong name stays.
+    // HUD: the HUD names it, every other digit named that way is dropped, and no more are, this
+    // session or the next. Fails if a wrong name stays, or the next session names digits by shape.
     #[test]
     fn a_digit_named_wrong_by_its_shape_is_dropped_when_an_exp_line_disagrees() {
         // A font whose 5 looks like a 7 and 7 like a 5: the rules name them the wrong way round.
@@ -2788,9 +2817,181 @@ mod tests {
                 .count(),
             1
         );
+        // The HUD named the two digits the right way round.
         let after = run(&mut game, &mut reader, vec![one(&mesos("75"), 0)]);
-        assert_eq!(after[0].missed, Some(Missed::NotLearned));
-        assert!(reader.knowledge().unwrap().contains("no-shapes"));
+        assert_eq!(
+            notices(&after),
+            [Notice::Mesos {
+                amount: 75,
+                shaped: false
+            }]
+        );
+        // The next session names no digit by its shape either: the rules misread digits it has
+        // learned. Nothing needs to be kept to say so.
+        let kept = reader.knowledge().unwrap();
+        assert!(!kept.contains("no-shapes"));
+        let mut next = NoticeReader::from_knowledge(&kept).unwrap();
+        let mut steps = vec![(Vec::new(), 0)];
+        for amount in ["89", "98", "89"] {
+            steps.push(one(&mesos(amount), 0));
+            steps.push((Vec::new(), 0));
+        }
+        let next_read = run(&mut game, &mut next, steps);
+        assert_eq!(notices(&next_read), []);
+        assert_eq!(next.waiting_mesos(), 3);
+    }
+
+    /// A reader that learned 0, 1, 2, 3, 4 and 6 from EXP lines and named 5 and 7 by their
+    /// shapes, the 8 and 9 still unknown.
+    fn five_and_seven_named_by_shape(game: &mut Game) -> NoticeReader {
+        let mut reader = missing_five_seven_eight_nine(game);
+        let mut steps = Vec::new();
+        for amount in ["75", "57"] {
+            steps.push(one(&mesos(amount), 0));
+            steps.push((Vec::new(), 0));
+        }
+        let read = run(game, &mut reader, steps);
+        assert_eq!(notices(&read).len(), 2, "{read:?}");
+        assert_eq!(reader.waiting_mesos(), 0);
+        reader
+    }
+
+    // EXP lines that don't add up for some other reason, as when the HUD gained EXP from a line
+    // the reader never saw, say nothing about the digits named by their shapes: they stay. Fails
+    // if they're dropped, as one such line used to drop them for good, leaving every mesos amount
+    // with those digits waiting forever.
+    #[test]
+    fn exp_lines_off_for_another_reason_keep_the_digits_named_by_shape() {
+        // A line with a digit named by its shape, all its digits read: "57", but the HUD gained 3
+        // more than it says.
+        let mut game = Game::new(Scene::Rock).plain_digits();
+        let mut reader = five_and_seven_named_by_shape(&mut game);
+        let all_read = run(
+            &mut game,
+            &mut reader,
+            [vec![one(&exp("57"), 60)], vec![(Vec::new(), 0); 3]].concat(),
+        );
+        assert!(
+            all_read.iter().any(|r| r.missed == Some(Missed::ExpShort)),
+            "{all_read:?}"
+        );
+        // A line with a digit named by its shape and one not learned yet: "58", with the HUD again
+        // gaining 3 more.
+        let one_unknown = run(
+            &mut game,
+            &mut reader,
+            [vec![one(&exp("58"), 61)], vec![(Vec::new(), 0); 3]].concat(),
+        );
+        assert!(
+            one_unknown
+                .iter()
+                .any(|r| r.missed == Some(Missed::ExpShort)),
+            "{one_unknown:?}"
+        );
+        let later = run(
+            &mut game,
+            &mut reader,
+            vec![one(&mesos("75"), 0), (Vec::new(), 0)],
+        );
+        assert!(
+            all_read
+                .iter()
+                .chain(&one_unknown)
+                .chain(&later)
+                .all(|r| r.missed != Some(Missed::ShapesWrong)),
+            "no digit named by shape was shown wrong"
+        );
+        assert_eq!(
+            notices(&later),
+            [Notice::Mesos {
+                amount: 75,
+                shaped: true
+            }]
+        );
+        assert!(!reader.knowledge().unwrap().contains("no-shapes"));
+    }
+
+    // An EXP line with a digit not learned yet shows a digit named by its shape wrong when the
+    // HUD's gain fits it only with that digit named otherwise: the HUD names both, and the digits
+    // named by shape are dropped. Fails if the wrong name stays, or the HUD's names aren't learned.
+    #[test]
+    fn an_exp_line_with_a_new_digit_corrects_a_digit_named_wrong_by_its_shape() {
+        // The 5 and 7 drawn each as the other: the rules name them the wrong way round.
+        let mut game = Game::new(Scene::Rock)
+            .plain_digits()
+            .swap_digit_shapes('5', '7');
+        let mut reader = five_and_seven_named_by_shape(&mut game);
+        let checked = run(
+            &mut game,
+            &mut reader,
+            [vec![one(&exp("58"), 58)], vec![(Vec::new(), 0); 3]].concat(),
+        );
+        assert_eq!(
+            checked
+                .iter()
+                .filter(|r| r.missed == Some(Missed::ShapesWrong))
+                .count(),
+            1,
+            "{checked:?}"
+        );
+        // The HUD taught the 5 and the 8. The 7 is unknown again, and the rules, having misread
+        // the 5, name no more digits.
+        let after = run(
+            &mut game,
+            &mut reader,
+            vec![
+                one(&mesos("85"), 0),
+                (Vec::new(), 0),
+                one(&mesos("75"), 0),
+                (Vec::new(), 0),
+                one(&mesos("75"), 0),
+                (Vec::new(), 0),
+            ],
+        );
+        assert_eq!(
+            notices(&after),
+            [Notice::Mesos {
+                amount: 85,
+                shaped: false
+            }]
+        );
+        assert_eq!(reader.waiting_mesos(), 2);
+    }
+
+    // MesoVibe 0.5.0 kept a mark that turned naming digits by shape off for good, and could keep
+    // it after EXP lines that were off for another reason. A later session ignores it and names
+    // digits by shape again. Fails if the mark still stops it, or the kept letters are refused.
+    #[test]
+    fn a_mark_turning_naming_by_shape_off_from_an_earlier_version_is_ignored() {
+        let mut game = Game::new(Scene::Rock).plain_digits();
+        let reader = missing_five_seven_eight_nine(&mut game);
+        let kept = format!("{}no-shapes\n", reader.knowledge().unwrap());
+        let mut next = NoticeReader::from_knowledge(&kept).unwrap();
+        let read = run(
+            &mut game,
+            &mut next,
+            vec![
+                (Vec::new(), 0),
+                one(&mesos("75"), 0),
+                (Vec::new(), 0),
+                one(&mesos("57"), 0),
+                (Vec::new(), 0),
+            ],
+        );
+        assert_eq!(
+            notices(&read),
+            [
+                Notice::LateMesos {
+                    amount: 75,
+                    shaped: true
+                },
+                Notice::LateMesos {
+                    amount: 57,
+                    shaped: true
+                }
+            ]
+        );
+        assert!(!next.knowledge().unwrap().contains("no-shapes"));
     }
 
     // Guards amounts over a thousand: the HUD's gain names the comma too.
