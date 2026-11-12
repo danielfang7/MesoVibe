@@ -1237,8 +1237,17 @@ impl NoticeReader {
                 self.accept(Read::Unknown, &mut notices, &mut missed);
                 continue;
             }
-            let (read, damaged) = cut(picture, layout, layout.top(k, shift), line.strength)
-                .map_or((Read::Unknown, true), |cut| self.read(&cut, arrived));
+            let (mut read, mut damaged) =
+                cut(picture, layout, layout.top(k, self.shift), line.strength)
+                    .map_or((Read::Unknown, true), |cut| self.read(&cut, arrived));
+            // The stack sits where lines read: a reader a row off reads none of them, and the
+            // vote that places it keeps where it is unless another place clearly wins.
+            if !read.sure()
+                && let Some((there, moved)) = self.read_a_row_off(picture, layout, k, line.strength)
+            {
+                self.shift = there;
+                (read, damaged) = (moved, false);
+            }
             // Read again in the next frame if it will still be strong enough then (only when
             // frames come often), when something passing behind it may have spoiled it: it
             // couldn't be read, or its amount has a glyph that isn't a known digit with letters of
@@ -1250,6 +1259,13 @@ impl NoticeReader {
             }
             self.accept(read, &mut notices, &mut missed);
         }
+        // Moved: the stack where it sits, for the next frame to follow.
+        let now = match self.shift == shift {
+            true => now,
+            false => (0..SLOTS)
+                .map(|k| slot(picture, layout, layout.top(k, self.shift)))
+                .collect(),
+        };
         self.lines = Some(now);
         self.lost = false;
         // Lines may have come and gone unseen: the EXP window can't teach or check anything.
@@ -1342,6 +1358,28 @@ impl NoticeReader {
         }
         self.learn_from(cut);
         self.parse(cut)
+    }
+
+    /// Slot `k`'s line read a row up or down from where the stack is thought to sit, when it reads
+    /// for sure there as a pickup or an EXP line: where the stack sits. A row off, every letter is
+    /// cut a row off and matches none learned, so no line reads there by chance, and none of its
+    /// letters are learned. Read as a line seen again, so kept letters aren't checked against it.
+    fn read_a_row_off(
+        &mut self,
+        picture: &Frame,
+        layout: Layout,
+        k: usize,
+        strength: u8,
+    ) -> Option<(i32, Read)> {
+        if self.atlas.is_empty() {
+            return None;
+        }
+        let others: Vec<i32> = shifts(self.shift).skip(1).collect();
+        others.into_iter().find_map(|shift| {
+            let line = cut(picture, layout, layout.top(k, shift), strength)?;
+            let (read, _) = self.read(&line, false);
+            (read.sure() && !matches!(read, Read::Other)).then_some((shift, read))
+        })
     }
 
     /// How many mesos amounts with a digit not learned yet are waiting to be read.
@@ -2611,6 +2649,44 @@ mod tests {
         assert_eq!(notices(&first), [Notice::Exp(43)]);
         assert_eq!(notices(&later), []);
         assert!(later.iter().all(|r| r.missed.is_none()), "{later:?}");
+    }
+
+    // A reader that sits a row off reads nothing there, and the vote on where the stack sits keeps
+    // it there: it finds the stack by the lines that read a row up or down. Fails if it stays off
+    // and misses every line after, as it did live until the app restarted.
+    #[test]
+    fn a_reader_a_row_off_finds_the_stack_by_the_lines_it_reads() {
+        for off in [1, -1] {
+            let mut game = Game::new(Scene::Rock);
+            let mut reader = confirmed_reader(&mut game);
+            run(&mut game, &mut reader, vec![(Vec::new(), 0); 20]);
+            reader.shift = off;
+            let read = run(
+                &mut game,
+                &mut reader,
+                vec![
+                    one(&mesos("85"), 0),
+                    (Vec::new(), 0),
+                    one(&exp("43"), 43),
+                    (Vec::new(), 0),
+                    (Vec::new(), 0),
+                    (Vec::new(), 0),
+                ],
+            );
+            assert_eq!(
+                notices(&read),
+                [
+                    Notice::Mesos {
+                        amount: 85,
+                        shaped: false
+                    },
+                    Notice::Exp(43)
+                ],
+                "a row off by {off}: {read:?}"
+            );
+            assert!(read.iter().all(|r| r.missed.is_none()), "{read:?}");
+            assert_eq!(reader.shift, 0, "a row off by {off}");
+        }
     }
 
     /// A reader that learned only the digits 0, 1, 2, 3, 4 and 6 from EXP lines, with the lines
