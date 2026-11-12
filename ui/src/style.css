@@ -1147,19 +1147,20 @@ html.hud-page body {
   color: inherit;
 }
 
-/* A game name as a picture of its lettering, in the text's color. Pixel art: no smoothing. */
+/* A game name as a picture of its lettering, in the text's color, about as tall as the text
+   beside it and smoothed when scaled, so it reads like a line of text. */
+/* Inline, so the picture's baseline shift takes effect and it wraps like text. */
 .game-text-cell {
-  display: inline-flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--space-xs);
+  display: inline;
+}
+
+.game-text-suffix {
+  margin-left: var(--space-xs);
 }
 
 .game-text {
   display: inline-block;
-  vertical-align: baseline;
   background: currentColor;
-  image-rendering: pixelated;
   max-width: 100%;
 }
 

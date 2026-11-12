@@ -17,8 +17,13 @@ import type { Confirm } from "@mesovibe/sdk";
 import { h } from "./dom.js";
 import type { GamePicture, Host } from "./ipc.js";
 
-/** CSS pixels to a game pixel for name pictures: the game's letters are small (design: 2x). */
-const NAME_SCALE = 2;
+/**
+ * A name picture's scale, in the surrounding text's em per game pixel. The minimap's capitals are
+ * 9 game pixels tall, so at this scale they stand as tall as the text's capitals beside them.
+ */
+const NAME_EM_PER_PIXEL = 0.08;
+/** Where the minimap lettering's baseline is, in game pixels from the picture's top. */
+const NAME_BASELINE = 10;
 /** How long a name with no picture kept waits before it's asked for again. */
 const ASK_AGAIN_MS = 5_000;
 
@@ -271,10 +276,15 @@ export function namePicture(cell: Exclude<Cell, string | null>, pictures: Pick<N
       box.style.setProperty(name, value);
       box.style.setProperty(`-webkit-${name}`, value);
     };
-    box.style.width = `${picture.width * NAME_SCALE}px`;
-    box.style.height = `${picture.height * NAME_SCALE}px`;
+    const width = picture.width * NAME_EM_PER_PIXEL;
+    const height = picture.height * NAME_EM_PER_PIXEL;
+    box.style.width = `${width}em`;
+    box.style.height = `${height}em`;
+    // The picture's bottom sits below its letters (descenders, then a margin): lower it so the
+    // letters sit on the text's baseline.
+    box.style.verticalAlign = `${-Math.max(0, picture.height - NAME_BASELINE) * NAME_EM_PER_PIXEL}em`;
     set("mask-image", `url("${picture.png}")`);
-    set("mask-size", `${picture.width * NAME_SCALE}px ${picture.height * NAME_SCALE}px`);
+    set("mask-size", `${width}em ${height}em`);
     set("mask-repeat", "no-repeat");
   }
   return h("span", { class: "game-text-cell" }, box, suffix);
