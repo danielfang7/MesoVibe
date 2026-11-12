@@ -4,9 +4,13 @@
 //! folder. Nothing leaves the device.
 //!
 //! Writes go to a temporary file that is then renamed over the old one, so a crash never leaves a
-//! half-written file. A file that can't be read back (a disk error, a hand edit) is set aside as
-//! `<name>.corrupt` and MesoVibe starts from defaults, rather than refusing to open.
+//! half-written file. A file whose contents can't be understood (a hand edit, a damaged disk) is
+//! set aside as `<name>.corrupt` and MesoVibe starts from defaults, rather than refusing to open.
+//! A plugin's file that can't be opened at all (locked by another program, a permission) is a
+//! different case: it may be fine, so nothing is saved over it until it can be read.
 
+use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -173,6 +177,9 @@ impl Default for Settings {
 pub struct Store {
     dir: PathBuf,
     settings: Mutex<Settings>,
+    /// Plugins whose saved data couldn't be opened since the last read that worked. Their saves are
+    /// refused, so a plugin that started with nothing never overwrites history it couldn't read.
+    unreadable: Mutex<HashSet<String>>,
 }
 
 impl Store {
@@ -186,6 +193,7 @@ impl Store {
         Store {
             dir,
             settings: Mutex::new(settings),
+            unreadable: Mutex::new(HashSet::new()),
         }
     }
 
@@ -209,14 +217,40 @@ impl Store {
         Ok(next)
     }
 
-    /// A plugin's data, or `null` when it has kept nothing yet.
+    /// A plugin's data, or `null` when it has kept nothing yet. An error when the file is there but
+    /// can't be opened; until a later read works, that plugin's saves are refused.
     pub fn plugin_get(&self, plugin: &str) -> Result<Value, String> {
-        Ok(read_json(&self.plugin_path(plugin)?).unwrap_or(Value::Null))
+        let path = self.plugin_path(plugin)?;
+        let read = try_read_json(&path);
+        let mut unreadable = self
+            .unreadable
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match read {
+            Ok(value) => {
+                unreadable.remove(plugin);
+                Ok(value.unwrap_or(Value::Null))
+            }
+            Err(e) => {
+                unreadable.insert(plugin.to_string());
+                Err(e.to_string())
+            }
+        }
     }
 
     /// Replaces a plugin's data.
     pub fn plugin_set(&self, plugin: &str, value: &Value) -> Result<(), String> {
         let path = self.plugin_path(plugin)?;
+        let unreadable = self
+            .unreadable
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(plugin);
+        if unreadable {
+            return Err(format!(
+                "{plugin}'s saved data couldn't be read, so nothing is saved over it."
+            ));
+        }
         let size = serde_json::to_vec(value).map_err(|e| e.to_string())?.len();
         if size > MAX_PLUGIN_BYTES {
             return Err(format!(
@@ -278,14 +312,44 @@ pub fn valid_plugin_id(id: &str) -> bool {
 /// A JSON file's contents. `None` when it doesn't exist, or when it can't be read, in which case
 /// it's set aside as `<name>.corrupt`.
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
-    let text = std::fs::read_to_string(path).ok()?;
+    try_read_json(path).ok().flatten()
+}
+
+/// A JSON file's contents: `None` when it doesn't exist, or when its contents can't be understood,
+/// in which case it's set aside. An error when the file can't be opened (another program holds
+/// it, a permission): it may be fine, so the caller mustn't treat it as empty.
+fn try_read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> std::io::Result<Option<T>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        // Not UTF-8: unreadable contents, like a JSON error.
+        Err(e) if e.kind() == ErrorKind::InvalidData => {
+            set_aside(path);
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
     match serde_json::from_str(&text) {
-        Ok(value) => Some(value),
+        Ok(value) => Ok(Some(value)),
         Err(_) => {
-            let _ = std::fs::rename(path, path.with_extension("json.corrupt"));
-            None
+            set_aside(path);
+            Ok(None)
         }
     }
+}
+
+/// Moves a file whose contents can't be understood to `<name>.json.corrupt`, or, when that's taken
+/// by an earlier one, to a name with the time, so an older copy is never replaced.
+fn set_aside(path: &Path) {
+    let mut aside = path.with_extension("json.corrupt");
+    if aside.exists() {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        aside = path.with_extension(format!("json.corrupt-{secs}"));
+    }
+    let _ = std::fs::rename(path, aside);
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
@@ -496,6 +560,83 @@ mod tests {
         }
         let big = Value::String("x".repeat(MAX_PLUGIN_BYTES + 1));
         assert!(store.plugin_set("session-tracker", &big).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // A plugin's file that can't be opened (here a folder in its place, which fails to open on
+    // every OS) must not read as "nothing saved", or the plugin's next save replaces its history.
+    // Fails if the read returns null or the save goes through; and if a later good read doesn't
+    // let saves through again.
+    #[test]
+    fn plugin_data_that_cant_be_opened_is_never_saved_over() {
+        let dir = temp_dir("plugin-locked");
+        let store = Store::open(dir.clone());
+        let file = dir.join("plugins").join("session-tracker.json");
+        std::fs::create_dir_all(&file).unwrap();
+        assert!(store.plugin_get("session-tracker").is_err());
+        let value = serde_json::json!({ "version": 1 });
+        assert!(store.plugin_set("session-tracker", &value).is_err());
+        assert!(file.is_dir(), "nothing was written in its place");
+        assert!(
+            store.plugin_set("other-plugin", &value).is_ok(),
+            "other plugins still save"
+        );
+
+        std::fs::remove_dir(&file).unwrap();
+        assert_eq!(store.plugin_get("session-tracker").unwrap(), Value::Null);
+        store.plugin_set("session-tracker", &value).unwrap();
+        assert_eq!(store.plugin_get("session-tracker").unwrap(), value);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // The case players hit: a real file another program or a permission keeps closed. Fails if
+    // its bytes change after the plugin tries to save.
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_file_without_read_permission_keeps_its_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("plugin-permission");
+        let store = Store::open(dir.clone());
+        let file = dir.join("plugins").join("session-tracker.json");
+        std::fs::write(&file, br#"{"version":1,"history":[1,2,3]}"#).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&file).is_ok() {
+            // Running as root: permissions don't stop the read, so there's nothing to check.
+            let _ = std::fs::remove_dir_all(dir);
+            return;
+        }
+        assert!(store.plugin_get("session-tracker").is_err());
+        assert!(
+            store
+                .plugin_set("session-tracker", &serde_json::json!(null))
+                .is_err()
+        );
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            br#"{"version":1,"history":[1,2,3]}"#
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // Damaged contents are set aside, and a second damaged file doesn't replace the first copy.
+    // Fails if the earlier .corrupt file is overwritten.
+    #[test]
+    fn a_second_damaged_file_keeps_the_first_set_aside_copy() {
+        let dir = temp_dir("corrupt-twice");
+        let store = Store::open(dir.clone());
+        let file = dir.join("plugins").join("session-tracker.json");
+        std::fs::write(&file, "{ first").unwrap();
+        assert_eq!(store.plugin_get("session-tracker").unwrap(), Value::Null);
+        std::fs::write(&file, "{ second").unwrap();
+        assert_eq!(store.plugin_get("session-tracker").unwrap(), Value::Null);
+        let kept: Vec<String> = std::fs::read_dir(dir.join("plugins"))
+            .unwrap()
+            .flatten()
+            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .collect();
+        assert!(kept.contains(&"{ first".to_string()));
+        assert!(kept.contains(&"{ second".to_string()));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

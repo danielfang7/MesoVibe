@@ -209,6 +209,23 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     failed.close();
   });
 
+  // Saved sessions that can't be opened must not read as empty: the tracker stays off with the
+  // reason and Restart, and saves nothing over them. Fails if it starts with nothing (its first
+  // save would replace the history) or if Restart doesn't read again.
+  await t.test("saved sessions that can't be read keep the tracker off until Restart reads them", async () => {
+    const page = await openPage(devtools, at("unreadable"));
+    const alert = `document.querySelector(".view .state.error")?.textContent`;
+    assert.equal(
+      await page.until(alert, "the read error"),
+      "Couldn't read Session Tracker's saved data (Access is denied. (os error 5)). It's kept as it is, and Session Tracker stays off so nothing is saved over it. Restart to try again.",
+    );
+    assert.equal(await page.evaluate("window.__mockStorage.saves"), 0, "nothing saved over it");
+    await page.evaluate(`document.querySelector('[data-key="restart"]').click()`);
+    await page.until(`!document.querySelector(".view .state.error") && window.__mockStorage.reads === 2`, "the tracker after Restart");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
   // A login item registered from the disk image would stop working, so the switch stays off and
   // says what to do instead. Fails if the switch is on or usable, or the reason is hidden.
   await t.test("run from the disk image, Open with MapleStory Classic says to move MesoVibe first", async () => {
