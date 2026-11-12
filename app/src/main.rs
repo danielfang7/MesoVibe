@@ -9,6 +9,7 @@ compile_error!("Release builds must go through `pnpm tauri build`, which embeds 
 mod chat;
 mod dock;
 mod engine;
+mod game_text;
 mod presence;
 mod store;
 mod updater;
@@ -53,6 +54,9 @@ fn main() {
             // MesoVibe reads the game from its first start; Safe mode in Settings turns that off.
             let reading = !settings.safe_mode;
             // Before the engine starts: it reads the display settings every tick.
+            app.manage(game_text::GameText::open(
+                app.path().app_data_dir()?.join("game-text.json"),
+            ));
             app.manage(store);
             app.manage(dock::Latest::default());
             app.manage(chat::ChatLog::default());
@@ -77,6 +81,7 @@ fn main() {
             open_privacy_settings,
             plugin_storage_get,
             plugin_storage_set,
+            game_text,
             set_display,
             share_summary,
             hud_summary,
@@ -203,6 +208,16 @@ fn open_privacy_settings() -> Result<(), String> {
     {
         Err("There's no capture permission to set on this system.".to_string())
     }
+}
+
+/// Pictures of game names by key, for the plugin views' name cells. A key with no picture kept is
+/// left out.
+#[tauri::command]
+fn game_text(
+    keys: Vec<String>,
+    names: State<'_, game_text::GameText>,
+) -> std::collections::BTreeMap<String, game_text::Picture> {
+    names.pictures(&keys)
 }
 
 #[tauri::command]

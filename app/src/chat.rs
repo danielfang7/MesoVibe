@@ -146,13 +146,19 @@ pub fn words(line: &ChatLine) -> Vec<[u32; 2]> {
 
 /// The line as a PNG data URL: white, with the text's coverage as alpha.
 fn encode(line: &ChatLine) -> Option<String> {
+    coverage_png(line.width, line.height, &line.coverage)
+}
+
+/// A picture of game text as a PNG data URL: white, with each pixel's coverage (255 is all
+/// letter) as alpha, so the panel can draw it in any color as a mask.
+pub(crate) fn coverage_png(width: u32, height: u32, coverage: &[u8]) -> Option<String> {
     let mut png = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut png, line.width, line.height);
+        let mut encoder = png::Encoder::new(&mut png, width, height);
         encoder.set_color(png::ColorType::GrayscaleAlpha);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().ok()?;
-        let pixels: Vec<u8> = line.coverage.iter().flat_map(|&a| [255, a]).collect();
+        let pixels: Vec<u8> = coverage.iter().flat_map(|&a| [255, a]).collect();
         writer.write_image_data(&pixels).ok()?;
     }
     Some(format!(
