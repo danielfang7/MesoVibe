@@ -96,6 +96,9 @@ pub struct Status {
     /// `off`, `no_game`, `capturing`, `paused` or `blocked`.
     pub state: &'static str,
     pub game: Option<Game>,
+    /// The game window covers its whole display: Full Screen, where the game scales its picture
+    /// to the display and only some of its sizes can be read.
+    pub full_screen: bool,
     /// The EXP bar this tick, when it was read.
     pub exp: Option<Reading>,
     /// Why the EXP bar couldn't be read this tick (`learning`, `screen_dark`, `hud_not_found`,
@@ -259,7 +262,15 @@ fn tick(
     if tick.state != CaptureState::CaptureBlocked {
         *blocked = None;
     }
-    let _ = app.emit("engine://status", status(&tick, runner, blocked.clone()));
+    let full_screen = tick
+        .window
+        .as_ref()
+        .and_then(|w| w.placement.as_ref())
+        .is_some_and(|p| dock::fills_display(p, &dock::displays(app)));
+    let _ = app.emit(
+        "engine://status",
+        status(&tick, runner, blocked.clone(), full_screen),
+    );
     let chat_box = match &tick.chat {
         Some(Ok(reading)) => reading.place,
         _ => None,
@@ -380,6 +391,7 @@ fn off_status() -> Status {
         reading: false,
         state: "off",
         game: None,
+        full_screen: false,
         exp: None,
         unreadable: None,
         error: None,
@@ -393,7 +405,12 @@ fn off_status() -> Status {
     }
 }
 
-fn status<B: Backend>(tick: &Tick, runner: &Runner<B>, blocked: Option<String>) -> Status {
+fn status<B: Backend>(
+    tick: &Tick,
+    runner: &Runner<B>,
+    blocked: Option<String>,
+    full_screen: bool,
+) -> Status {
     let (exp, unreadable) = match &tick.exp {
         Some(Ok(r)) => (
             Some(Reading {
@@ -421,6 +438,7 @@ fn status<B: Backend>(tick: &Tick, runner: &Runner<B>, blocked: Option<String>) 
             height: w.height,
             scale: w.scale,
         }),
+        full_screen,
         exp,
         unreadable,
         error: blocked,

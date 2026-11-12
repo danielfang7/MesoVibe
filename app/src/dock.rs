@@ -150,6 +150,8 @@ impl From<ScreenRect> for Rect {
 /// A display, as far as docking cares.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Display {
+    /// The whole display, in desktop units.
+    pub bounds: Rect,
     /// The part windows may use (no menu bar, Dock or taskbar), in desktop units.
     pub work_area: Rect,
     /// Desktop units per logical pixel: 1 on a Mac (both are points), the display's scale on
@@ -589,6 +591,20 @@ pub fn panel_frame(panel: &WebviewWindow) -> Option<Rect> {
     })
 }
 
+/// Whether the game window covers a whole display: Full Screen, where nothing fits beside the
+/// game and the game scales its picture to the display. Within a unit on each edge, since a Mac
+/// reports window bounds in rounded points.
+pub fn fills_display(game: &Placement, displays: &[Display]) -> bool {
+    let frame = Rect::from(game.frame);
+    displays.iter().any(|d| {
+        let b = d.bounds;
+        (frame.x - b.x).abs() <= 1.0
+            && (frame.y - b.y).abs() <= 1.0
+            && (frame.right() - b.right()).abs() <= 1.0
+            && (frame.bottom() - b.bottom()).abs() <= 1.0
+    })
+}
+
 /// The display a frame's center is on, if any.
 pub fn display_of<'a>(frame: &Rect, displays: &'a [Display]) -> Option<&'a Display> {
     let (cx, cy) = (frame.x + frame.width / 2.0, frame.y + frame.height / 2.0);
@@ -601,8 +617,15 @@ pub fn displays(app: &AppHandle) -> Vec<Display> {
         .iter()
         .map(|m| {
             let scale = m.scale_factor();
+            let (position, whole) = (m.position(), m.size());
             let area = m.work_area();
             Display {
+                bounds: Rect {
+                    x: desktop(f64::from(position.x), scale),
+                    y: desktop(f64::from(position.y), scale),
+                    width: desktop(f64::from(whole.width), scale),
+                    height: desktop(f64::from(whole.height), scale),
+                },
                 work_area: Rect {
                     x: desktop(f64::from(area.position.x), scale),
                     y: desktop(f64::from(area.position.y), scale),
@@ -707,6 +730,12 @@ mod tests {
 
     /// A 1512×982-point Mac display with a 33-point menu bar, like a 14-inch MacBook Pro's.
     const MAC: Display = Display {
+        bounds: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1512.0,
+            height: 982.0,
+        },
         work_area: Rect {
             x: 0.0,
             y: 33.0,
@@ -958,6 +987,12 @@ mod tests {
     fn the_display_under_the_game_decides_and_bounds_the_panel() {
         // A 1920×1080 display at 150% beside a full-HD one, with a 48-pixel taskbar.
         let left = Display {
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
             work_area: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -967,6 +1002,12 @@ mod tests {
             scale: 1.0,
         };
         let right = Display {
+            bounds: Rect {
+                x: 1920.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
             work_area: Rect {
                 x: 1920.0,
                 y: 0.0,
@@ -1009,5 +1050,41 @@ mod tests {
         // A game off every display: nothing to dock to.
         let lost = game(-5000, 0, 1366, 768);
         assert_eq!(layout(&lost, &[left, right], 540.0, &ON), Layout::Free);
+    }
+
+    // Full Screen is a game window that covers its whole display, menu bar and taskbar included.
+    // Fails if a windowed game, or one that only fills the work area, is called Full Screen, or a
+    // Full Screen game on a second display isn't.
+    #[test]
+    fn full_screen_is_a_game_window_that_covers_its_display() {
+        let whole = |x: i32, y: i32, width: u32, height: u32| Placement {
+            frame: ScreenRect {
+                x,
+                y,
+                width,
+                height,
+            },
+            ..game(x, y, width, height)
+        };
+        assert!(fills_display(&whole(0, 0, 1512, 982), &[MAC]));
+        assert!(!fills_display(&game(76, 40, 1366, 768), &[MAC]), "windowed");
+        assert!(
+            !fills_display(&whole(0, 33, 1512, 949), &[MAC]),
+            "the work area only"
+        );
+        let second = Display {
+            bounds: Rect {
+                x: 1920.0,
+                y: 0.0,
+                width: 2560.0,
+                height: 1440.0,
+            },
+            ..MAC
+        };
+        assert!(fills_display(&whole(1920, 0, 2560, 1440), &[MAC, second]));
+        assert!(
+            !fills_display(&whole(1900, 0, 2560, 1440), &[MAC, second]),
+            "across two displays"
+        );
     }
 }

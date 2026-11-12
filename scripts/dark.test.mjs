@@ -4,13 +4,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { DARK_WARN_MS, darkWatch } from "../ui/src/dark.ts";
+import { DARK_WARN_MS, darkWatch, fullScreenWatch } from "../ui/src/dark.ts";
 
 /** A status `ms` after the start, capturing unless `over` says otherwise. */
 const at = (ms, over = {}) => ({
   reading: true,
   state: "capturing",
   game: { width: 1366, height: 768, scale: 2 },
+  fullScreen: false,
   exp: null,
   unreadable: null,
   error: null,
@@ -66,4 +67,48 @@ test("anything read ends a dark spell, and a tick with no new frame doesn't", ()
   watch(at(4_000, { stale: true }));
   watch(at(8_000, { stale: true }));
   assert.equal(watch(dark(DARK_WARN_MS)), true, "dark the whole time, with no new frame for a while");
+});
+
+/** Full Screen with no HUD seen, `ms` after the start. */
+const unseen = (ms, unreadable = "hud_not_found") => at(ms, { fullScreen: true, unreadable });
+
+// At a Full Screen size MesoVibe can't read, every frame has no HUD or looks dark. Fails if that
+// doesn't warn after the wait, or if a windowed game, or one still learning its digits, does.
+test("Full Screen with no HUD seen for the whole wait says so", () => {
+  const watch = fullScreenWatch();
+  assert.equal(watch(unseen(0)), false);
+  assert.equal(watch(unseen(3_000, "screen_dark")), false, "dark and no HUD are one spell");
+  assert.equal(watch(unseen(DARK_WARN_MS - 1, "garbled")), false);
+  assert.equal(watch(unseen(DARK_WARN_MS)), true);
+
+  const windowed = fullScreenWatch();
+  windowed(at(0, { unreadable: "hud_not_found" }));
+  assert.equal(windowed(at(60_000, { unreadable: "hud_not_found" })), false, "windowed: something covers the bar");
+
+  const learning = fullScreenWatch();
+  learning(unseen(0, "learning"));
+  assert.equal(learning(unseen(60_000, "learning")), false, "learning reads the HUD");
+});
+
+// Fails if the warning outlives the game leaving Full Screen or the next reading, or if a tick
+// with no new frame cuts the spell short.
+test("leaving Full Screen or reading ends the spell, and a tick with no new frame doesn't", () => {
+  const ends = [
+    ["windowed again", at(9_000)],
+    ["an EXP reading", at(9_000, { fullScreen: true, exp: { level: 41, exp: 1, pctHundredths: 0, needed: 2, confirmed: true } })],
+    ["learning", unseen(9_000, "learning")],
+    ["the game closed", at(9_000, { state: "no_game", game: null })],
+  ];
+  for (const [what, status] of ends) {
+    const watch = fullScreenWatch();
+    watch(unseen(0));
+    watch(status);
+    assert.equal(watch(unseen(10_000)), false, `${what} ends the spell`);
+    assert.equal(watch(unseen(10_000 + DARK_WARN_MS)), true, `${what}: a new spell warns in its own time`);
+  }
+
+  const watch = fullScreenWatch();
+  watch(unseen(0));
+  watch(at(5_000, { fullScreen: true, stale: true }));
+  assert.equal(watch(unseen(DARK_WARN_MS)), true, "no new frame for a while in between");
 });

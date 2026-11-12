@@ -132,6 +132,8 @@ export interface Status {
   reading: boolean;
   state: State;
   game: { width: number; height: number; scale: number } | null;
+  /** The game window covers its whole display (Full Screen). */
+  fullScreen: boolean;
   exp: Reading | null;
   unreadable: string | null;
   error: string | null;
