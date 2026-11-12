@@ -43,6 +43,17 @@ pub struct Glyph {
 }
 
 impl Glyph {
+    /// A glyph from its rows' bit masks, left pixel in bit 0, for readers that tell ink from
+    /// more than one pixel's color. `None` when it's wider than [`MAX_GLYPH_WIDTH`], or a row has
+    /// ink past `width`.
+    pub fn from_rows(width: u32, rows: Vec<u32>) -> Option<Glyph> {
+        let fits = |row: &u32| width == MAX_GLYPH_WIDTH || *row >> width == 0;
+        (width > 0 && width <= MAX_GLYPH_WIDTH && rows.iter().all(fits)).then_some(Glyph {
+            width: width as u8,
+            rows,
+        })
+    }
+
     pub fn width(&self) -> u32 {
         u32::from(self.width)
     }
@@ -242,6 +253,18 @@ impl Atlas {
     /// draws every glyph the same way each time, so a difference means something else is there.
     pub fn name(&self, glyph: &Glyph) -> Option<char> {
         self.names.get(glyph).copied()
+    }
+
+    /// The shape learned for `name`, if any.
+    pub fn shape(&self, name: char) -> Option<&Glyph> {
+        self.shapes.get(&name)
+    }
+
+    /// Drops what was learned for `name`, so its shape is unknown again.
+    pub fn forget(&mut self, name: char) {
+        if let Some(shape) = self.shapes.remove(&name) {
+            self.names.remove(&shape);
+        }
     }
 
     /// The characters of `wanted` the atlas hasn't learned yet.

@@ -1362,6 +1362,12 @@ pub(crate) mod test_support {
             self.bgra[i..i + 4].copy_from_slice(&[b, g, r, 255]);
         }
 
+        /// The pixel at (x, y) as RGB.
+        pub(crate) fn get(&self, x: u32, y: u32) -> [u8; 3] {
+            let i = ((y * self.width + x) * 4) as usize;
+            [self.bgra[i + 2], self.bgra[i + 1], self.bgra[i]]
+        }
+
         pub(crate) fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: [u8; 3]) {
             for yy in y..y + h {
                 for xx in x..x + w {

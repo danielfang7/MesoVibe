@@ -3,7 +3,8 @@
 //!
 //! The caller drives it with [`Runner::tick`] at up to 4 Hz. A tick reads back only the
 //! rows the readers need, and only while capturing, so a paused or blocked engine reads nothing
-//! and emits nothing.
+//! and emits nothing. Now and then a tick reads the whole game area, for the map's name at the
+//! top of the minimap ([`MapFollower`]): at the first capture, after a map change, and every 30 s.
 //!
 //! In Full Screen on a display of another shape, the game's picture has black bars above and
 //! below it. The engine measures them on each frame and reads the picture between them
@@ -15,11 +16,16 @@
 //! tick, which resumes capture. The HUD's pixels alone can't tell, because they often don't change
 //! for minutes.
 
+use std::time::Instant;
+
 use crate::capture::{Backend, CaptureError, CaptureSignal, CaptureState, GameWindow, Grab};
 use crate::events::Event;
 use crate::letterbox;
+use crate::notice_health::{NoticeHealth, NoticeState};
 use crate::recognizers::chat::{self, ChatReader, ChatReading, ChatUnreadable};
 use crate::recognizers::exp_bar::{self, ExpBarReader, ExpReading, Unreadable};
+use crate::recognizers::map_name::{MapFollower, MapName};
+use crate::recognizers::notices::{self, Notice, NoticeReader, NoticeReading, NoticeUnreadable};
 
 /// The name the EXP bar reader goes by in [`Event::Unreadable`].
 pub const EXP_BAR: &str = "exp_bar";
@@ -30,7 +36,9 @@ pub const STALE_AFTER: u32 = 8;
 /// How many of a game area's bottom rows the engine reads at first when the area is `height` game
 /// pixels tall: what its readers need, in game rows.
 pub fn rows_needed(height: u32) -> u32 {
-    exp_bar::rows_needed(height).max(chat::rows_needed(height))
+    exp_bar::rows_needed(height)
+        .max(chat::rows_needed(height))
+        .max(notices::rows_needed(height))
 }
 
 /// What one tick saw and did.
@@ -43,6 +51,11 @@ pub struct Tick {
     /// New chat lines this tick: `None` unless capturing. Chat stays out of `events`, so plugins
     /// never see it.
     pub chat: Option<Result<ChatReading, ChatUnreadable>>,
+    /// New pickup notices this tick: `None` unless capturing.
+    pub notices: Option<Result<NoticeReading, NoticeUnreadable>>,
+    /// A map the player settled on this tick: its name, or `None` for a map whose name can't be
+    /// read.
+    pub map: Option<Option<MapName>>,
     /// Typed events. Only ever produced while capturing.
     pub events: Vec<Event>,
     /// Why capture failed, on the tick it did.
@@ -58,14 +71,25 @@ pub struct Runner<B> {
     window: Option<GameWindow>,
     exp: ExpBarReader,
     chat: ChatReader,
+    notices: NoticeReader,
+    map: MapFollower,
     /// The last confirmed reading, which events are measured from.
     confirmed: Option<ExpReading>,
     /// Whether the EXP bar read last tick, so a covered bar is reported once, not every tick.
     readable: bool,
-    /// What the engine last saw, for the "What MesoVibe sees" panel.
+    /// What the engine last saw, for the "What MesoVibe sees" panel and the recorder.
     last_grab: Option<Grab>,
+    /// Whether that was a whole frame, read for the map's name rather than the usual strip.
+    last_whole: bool,
     /// Grabs in a row that brought no new frame.
     stale: u32,
+    /// How the pickup notices are being read, decided each tick.
+    health: NoticeHealth,
+    notice_state: NoticeState,
+    /// When the runner started: the clock `health` measures time on.
+    started: Instant,
+    /// Capturing on the last tick, so a resumed capture checks the map again.
+    was_capturing: bool,
     /// The black bar above and below the game's picture in Full Screen, in game pixels, as last
     /// measured: 0 when the picture fills the window.
     bar: u32,
@@ -73,28 +97,42 @@ pub struct Runner<B> {
 
 impl<B: Backend> Runner<B> {
     pub fn new(backend: B) -> Self {
-        Self::with_reader(backend, ExpBarReader::new())
+        Self::with_readers(backend, ExpBarReader::new(), NoticeReader::new())
     }
 
-    /// Starts with what an EXP bar reader learned before.
-    pub fn with_reader(backend: B, exp: ExpBarReader) -> Self {
+    /// Starts with what an EXP bar reader and a notice reader learned before.
+    pub fn with_readers(backend: B, exp: ExpBarReader, notices: NoticeReader) -> Self {
         Runner {
             backend,
             state: CaptureState::NoGame,
             window: None,
             exp,
             chat: ChatReader::new(),
+            notices,
+            map: MapFollower::new(),
             confirmed: None,
             readable: false,
             last_grab: None,
+            last_whole: false,
             stale: 0,
+            health: NoticeHealth::new(),
+            notice_state: NoticeState::Off,
+            started: Instant::now(),
+            was_capturing: false,
             bar: 0,
         }
     }
 
-    /// The rows the engine read on the last tick that captured, exactly as it saw them.
+    /// The rows the engine read on the last tick that captured, exactly as it saw them: the
+    /// bottom strip, or now and then the whole game area for the map's name.
     pub fn last_grab(&self) -> Option<&Grab> {
         self.last_grab.as_ref()
+    }
+
+    /// The last grab when it was the bottom strip. The "What MesoVibe sees" picture shows only
+    /// this: the whole game area, read for the map's name, holds chat and other players' names.
+    pub fn last_strip(&self) -> Option<&Grab> {
+        self.last_grab.as_ref().filter(|_| !self.last_whole)
     }
 
     pub fn state(&self) -> CaptureState {
@@ -103,6 +141,21 @@ impl<B: Backend> Runner<B> {
 
     pub fn exp_reader(&self) -> &ExpBarReader {
         &self.exp
+    }
+
+    pub fn notice_reader(&self) -> &NoticeReader {
+        &self.notices
+    }
+
+    /// How the pickup notices are being read, as of the last tick.
+    pub fn notice_state(&self) -> NoticeState {
+        self.notice_state
+    }
+
+    /// The map the player is on: `None` before one settled, `Some(None)` for a map whose name
+    /// can't be read, else its key.
+    pub fn current_map(&self) -> Option<Option<&str>> {
+        self.map.current()
     }
 
     pub fn backend_mut(&mut self) -> &mut B {
@@ -127,6 +180,8 @@ impl<B: Backend> Runner<B> {
             // A game started again may be another character: don't measure from the old one.
             self.confirmed = None;
             self.chat.reset();
+            self.notices.restart();
+            self.map = MapFollower::new();
             self.readable = false;
             self.stale = 0;
         }
@@ -155,6 +210,8 @@ impl<B: Backend> Runner<B> {
             window: found,
             exp: None,
             chat: None,
+            notices: None,
+            map: None,
             events: Vec::new(),
             error: None,
             stale: false,
@@ -165,11 +222,16 @@ impl<B: Backend> Runner<B> {
             && found.is_some_and(|w| !w.minimized);
         let capturing = self.state == CaptureState::Capturing;
         if let Some(window) = found.filter(|_| capturing || probing) {
-            // The chat reader may want more rows than at first, for a chat box the player made taller.
-            // Under a bar, the readers' rows start above it.
+            // The chat reader may want more rows than at first, for a chat box the player made
+            // taller, and the map's name is at the top. Under a bar, the readers' rows start above
+            // it.
+            let whole = self.map.wants_whole_frame();
             let area = window.height.saturating_sub(self.bar.saturating_mul(2));
-            let rows =
-                (self.bar + rows_needed(area).max(self.chat.rows_needed(area))).min(window.height);
+            let rows = match whole {
+                true => window.height,
+                false => (self.bar + rows_needed(area).max(self.chat.rows_needed(area)))
+                    .min(window.height),
+            };
             let grab = self.backend.grab(&window, rows);
             match grab {
                 Ok(grab) => {
@@ -198,14 +260,29 @@ impl<B: Backend> Runner<B> {
                                 // A bar taller than the rows read can't be cut: read the frame as it is.
                                 let frame = letterbox::inside(&frame, self.bar).unwrap_or(frame);
                                 let reading = self.exp.observe(&frame);
+                                // The game fades to black when the map changes.
+                                let dark = matches!(reading, Err(Unreadable::ScreenDark));
+                                let notices = match dark {
+                                    true => Ok(self.notices.screen_dark()),
+                                    false => self.notices.observe(&frame, reading.as_ref().ok()),
+                                };
                                 tick.events = self.events_for(&reading);
+                                tick.events.extend(notice_events(&notices));
+                                if let Some(map) = self.map.observe(&frame, dark) {
+                                    tick.events.push(Event::MapChanged {
+                                        map_key: map.as_ref().map(|name| name.key.clone()),
+                                    });
+                                    tick.map = Some(map);
+                                }
                                 tick.exp = Some(reading);
                                 tick.chat = Some(self.chat.observe(&frame));
+                                tick.notices = Some(notices);
                             }
                         }
                         None => tick.error = Some(CaptureError("a malformed frame".to_string())),
                     }
                     self.last_grab = Some(grab);
+                    self.last_whole = whole;
                 }
                 Err(error) => tick.error = Some(error),
             }
@@ -214,9 +291,31 @@ impl<B: Backend> Runner<B> {
                 self.backend.stop();
             }
         }
+        // Not reading: pickups may come and go unseen until it reads again.
+        if self.state != CaptureState::Capturing {
+            self.notices.reset();
+        }
         debug_assert!(tick.events.is_empty() || self.state.emits_events());
         tick.state = self.state;
         tick.window = found.map(|window| letterbox::in_window(window, self.bar));
+        let capturing = self.state == CaptureState::Capturing;
+        // Back from a pause: the player may have taken a portal meanwhile.
+        if capturing && !self.was_capturing {
+            self.map.recheck();
+        }
+        self.was_capturing = capturing;
+        let gained = tick
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::ExpChanged { .. }));
+        let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.notice_state = self.health.observe(
+            now,
+            capturing,
+            tick.notices.as_ref(),
+            self.notices.confirmed(),
+            gained,
+        );
         tick
     }
 
@@ -246,10 +345,41 @@ impl<B: Backend> Runner<B> {
     }
 }
 
+/// The events a notice reading brings: its mesos and items, and whether lines may have been
+/// missed. None while the reader is still learning its letters.
+fn notice_events(reading: &Result<NoticeReading, NoticeUnreadable>) -> Vec<Event> {
+    let Some(reading) = reading.as_ref().ok().filter(|r| r.confirmed) else {
+        return Vec::new();
+    };
+    let gained = reading.notices.iter().filter_map(|notice| match notice {
+        Notice::Mesos { amount, shaped } => Some(Event::MesosGained {
+            amount: *amount,
+            late: false,
+            shaped: *shaped,
+        }),
+        Notice::LateMesos { amount, shaped } => Some(Event::MesosGained {
+            amount: *amount,
+            late: true,
+            shaped: *shaped,
+        }),
+        Notice::Item { name, count, tab } => Some(Event::ItemGained {
+            item_key: name.key.clone(),
+            count: *count,
+            tab: *tab,
+        }),
+        Notice::PartyBonus(amount) => Some(Event::PartyBonus { amount: *amount }),
+        // EXP comes from the EXP bar.
+        Notice::Exp(_) | Notice::Other => None,
+    });
+    let missed = reading.missed.map(|reason| Event::NoticesMissed { reason });
+    gained.chain(missed).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recognizers::exp_bar::test_support::{Canvas, DARK, GRIND, Hud, NEEDED_41, pct_of};
+    use crate::recognizers::notices::{Missed, Tab};
 
     /// A backend driven by the test: the window it reports and the picture in it.
     #[derive(Default)]
@@ -362,13 +492,16 @@ mod tests {
             canvas: Some(chat.draw()),
             ..Fake::default()
         });
-        runner.tick();
-        runner.tick();
+        for _ in 0..4 {
+            runner.tick();
+        }
         let grabs = &runner.backend_mut().grabs;
         assert_eq!(grabs[0], (7, rows_needed(768)));
+        // Any whole frames read for the map's name aside, the next strip reaches higher.
+        let strips: Vec<u32> = grabs.iter().map(|g| g.1).filter(|&r| r < 768).collect();
         assert!(
-            grabs[1].1 > rows_needed(768),
-            "second grab asks for more rows: {grabs:?}"
+            strips.len() >= 2 && strips[1] > rows_needed(768),
+            "the next strip asks for more rows: {grabs:?}"
         );
     }
 
@@ -403,10 +536,17 @@ mod tests {
             window: Some(GAME),
             ..Fake::default()
         });
+        // The map's events are another test's: there's no minimap here.
+        let next = |runner: &mut Runner<Fake>| {
+            let mut tick = runner.tick();
+            tick.events
+                .retain(|e| !matches!(e, Event::MapChanged { .. }));
+            tick
+        };
         let mut changes = Vec::new();
         for &exp in &GRIND {
             runner.backend_mut().canvas = Some(hud_at(&hud, exp));
-            let tick = runner.tick();
+            let tick = next(&mut runner);
             let confirmed = matches!(tick.exp, Some(Ok(r)) if r.confirmed);
             if !confirmed {
                 assert!(tick.events.is_empty(), "no events before confirmation");
@@ -424,10 +564,10 @@ mod tests {
             })
         );
         // The same picture again changes nothing.
-        assert!(runner.tick().events.is_empty());
+        assert!(next(&mut runner).events.is_empty());
         // A map change fades the screen to black: there's no bar to read, and nothing to report.
         runner.backend_mut().canvas = Some(Canvas::new(1366, 768));
-        let tick = runner.tick();
+        let tick = next(&mut runner);
         assert_eq!(tick.exp, Some(Err(Unreadable::ScreenDark)));
         assert!(tick.events.is_empty());
         // Something covers the bar: reported once, then quiet until it reads again.
@@ -437,10 +577,117 @@ mod tests {
         let unreadable = Event::Unreadable {
             recognizer: EXP_BAR,
         };
-        let tick = runner.tick();
+        let tick = next(&mut runner);
         assert_eq!(tick.exp, Some(Err(Unreadable::HudNotFound)));
         assert_eq!(tick.events, [unreadable]);
-        assert!(runner.tick().events.is_empty());
+        assert!(next(&mut runner).events.is_empty());
+    }
+
+    // The map's name is read from whole frames only at the first capture and after a fade, and a
+    // new map reaches plugins once two reads agree. Fails if a new map is never reported, or the
+    // whole frame is grabbed when nothing asked for it.
+    #[test]
+    fn the_map_is_read_at_the_start_and_after_each_fade() {
+        use crate::recognizers::map_name::test_support::Minimap;
+        let hud = Hud::new();
+        let on_map = |name: &str| {
+            let mut canvas = hud_at(&hud, GRIND[0]);
+            Minimap::new("Victoria Road", name).draw(&mut canvas);
+            canvas
+        };
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(on_map("Forest I")),
+            ..Fake::default()
+        });
+        let maps = |runner: &mut Runner<Fake>, ticks: usize| -> Vec<Option<String>> {
+            (0..ticks)
+                .flat_map(|_| runner.tick().events)
+                .filter_map(|e| match e {
+                    Event::MapChanged { map_key } => Some(map_key),
+                    _ => None,
+                })
+                .collect()
+        };
+        let forest = maps(&mut runner, 6);
+        assert!(matches!(forest.as_slice(), [Some(_)]), "{forest:?}");
+        // A map change: the screen goes dark, then the new map shows.
+        runner.backend_mut().canvas = Some(Canvas::new(1366, 768));
+        assert!(maps(&mut runner, 2).is_empty());
+        runner.backend_mut().canvas = Some(on_map("Henesys"));
+        let town = maps(&mut runner, 6);
+        assert!(matches!(town.as_slice(), [Some(_)]), "{town:?}");
+        assert_ne!(town, forest);
+        // Two whole frames for each map, and strips otherwise.
+        let whole = runner
+            .backend_mut()
+            .grabs
+            .iter()
+            .filter(|g| g.1 == 768)
+            .count();
+        assert_eq!(whole, 4);
+    }
+
+    // A player can take a portal while capture is paused (the game minimized). Fails if the map
+    // isn't read again as soon as capture resumes, which would file the new map's play under the
+    // old one for up to 30 s.
+    #[test]
+    fn the_map_is_read_again_when_capture_resumes() {
+        use crate::recognizers::map_name::test_support::Minimap;
+        let mut canvas = hud_at(&Hud::new(), GRIND[0]);
+        Minimap::new("Victoria Road", "Forest I").draw(&mut canvas);
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(canvas),
+            ..Fake::default()
+        });
+        for _ in 0..6 {
+            runner.tick();
+        }
+        assert!(matches!(runner.current_map(), Some(Some(_))));
+        runner.backend_mut().window = Some(GameWindow {
+            minimized: true,
+            ..GAME
+        });
+        runner.tick();
+        assert_ne!(runner.tick().state, CaptureState::Capturing);
+        runner.backend_mut().window = Some(GAME);
+        let before = runner.backend_mut().grabs.len();
+        for _ in 0..3 {
+            runner.tick();
+        }
+        let whole = runner.backend_mut().grabs[before..]
+            .iter()
+            .filter(|g| g.1 == 768)
+            .count();
+        assert!(whole > 0, "the map was read again");
+    }
+
+    // The "What MesoVibe sees" picture shows only the bottom strip. Fails if a whole frame read
+    // for the map's name, which holds chat and other players' names, is offered for it.
+    #[test]
+    fn only_strips_are_offered_for_the_picture() {
+        use crate::recognizers::map_name::test_support::Minimap;
+        let mut canvas = hud_at(&Hud::new(), GRIND[0]);
+        Minimap::new("Victoria Road", "Forest I").draw(&mut canvas);
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(canvas),
+            ..Fake::default()
+        });
+        let mut whole = 0;
+        for _ in 0..6 {
+            runner.tick();
+            let height = |g: &Grab| g.height - g.first_row;
+            let last = runner.last_grab().map(height);
+            if last == Some(768) {
+                whole += 1;
+                assert_eq!(runner.last_strip().map(height), None);
+            } else {
+                assert_eq!(runner.last_strip().map(height), last);
+            }
+        }
+        assert!(whole > 0, "a whole frame was read");
     }
 
     // A Mac hands over a minimized window's last picture as if it were new. Fails if stale frames
@@ -488,6 +735,207 @@ mod tests {
         assert_eq!(tick.state, CaptureState::Capturing);
         assert_eq!(tick.exp, Some(Err(Unreadable::Learning)));
         assert!(!tick.stale);
+    }
+
+    // Pickups reach plugins as events only once the notice reader's letters are confirmed, and a
+    // spell of not reading says pickups may be missing. Fails if a pickup is lost between the
+    // reader and the events, one shows while learning, or a pause passes silently.
+    #[test]
+    fn pickups_become_events_once_the_letters_are_confirmed() {
+        use crate::recognizers::notices::test_support::{
+            Game, Scene, WHITE, confirmed_reader, item, mesos,
+        };
+        let mut game = Game::new(Scene::Rock);
+        let mut learning = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(lit(game.next(&[], 0))),
+            ..Fake::default()
+        });
+        learning.tick();
+        learning.backend_mut().canvas = Some(lit(game.next(&[(&mesos("12"), WHITE)], 0)));
+        let tick = learning.tick();
+        assert!(matches!(&tick.notices, Some(Ok(r)) if !r.confirmed));
+        assert!(pickups(tick.events).is_empty(), "nothing while learning");
+
+        let reader = confirmed_reader(&mut game);
+        let mut runner = Runner::with_readers(
+            Fake {
+                window: Some(GAME),
+                canvas: Some(lit(game.next(&[], 0))),
+                ..Fake::default()
+            },
+            ExpBarReader::new(),
+            reader,
+        );
+        assert!(runner.notice_reader().confirmed());
+        assert!(
+            pickups(runner.tick().events).is_empty(),
+            "lines already on screen"
+        );
+        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("75"), WHITE)], 0)));
+        assert_eq!(
+            pickups(runner.tick().events),
+            [Event::MesosGained {
+                amount: 75,
+                late: false,
+                shaped: false
+            }]
+        );
+        runner.backend_mut().canvas =
+            Some(lit(game.next(&[(&item("Red Potion", 2, "Use"), WHITE)], 0)));
+        let events = pickups(runner.tick().events);
+        assert!(
+            matches!(
+                events.as_slice(),
+                [Event::ItemGained { item_key, count: 2, tab: Some(Tab::Use) }] if item_key.len() == 16
+            ),
+            "{events:?}"
+        );
+        // Minimized and back: whatever arrived meanwhile went unseen.
+        runner.backend_mut().window = Some(GameWindow {
+            minimized: true,
+            ..GAME
+        });
+        runner.tick();
+        runner.backend_mut().window = Some(GAME);
+        runner.backend_mut().canvas = Some(lit(game.next(&[], 0)));
+        assert_eq!(
+            pickups(runner.tick().events),
+            [Event::NoticesMissed {
+                reason: Missed::Lost
+            }]
+        );
+        // Closed and started again: nothing could be picked up meanwhile.
+        runner.backend_mut().window = None;
+        runner.tick();
+        runner.backend_mut().window = Some(GameWindow { id: 8, ..GAME });
+        assert!(pickups(runner.tick().events).is_empty());
+        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("12"), WHITE)], 0)));
+        assert_eq!(
+            pickups(runner.tick().events),
+            [Event::MesosGained {
+                amount: 12,
+                late: false,
+                shaped: false
+            }]
+        );
+    }
+
+    /// The notices over the scene, with white where the HUD's text would be: a frame with nothing
+    /// white there is a screen the game dimmed to change maps.
+    fn lit(mut canvas: Canvas) -> Canvas {
+        canvas.fill(300, canvas.height - 10, 2, 2, [255, 255, 255]);
+        canvas
+    }
+
+    /// The events but the map's: the frames these tests draw have no minimap.
+    fn pickups(events: Vec<Event>) -> Vec<Event> {
+        events
+            .into_iter()
+            .filter(|e| !matches!(e, Event::MapChanged { .. }))
+            .collect()
+    }
+
+    // Pickups on screen when the player takes a portal stay on screen over the new map, still
+    // fading. Fails if they're counted again when the new map shows, or the dark screen between
+    // is reported as pickups missed.
+    #[test]
+    fn a_map_change_counts_no_pickup_twice() {
+        use crate::recognizers::notices::test_support::{
+            Game, Scene, WHITE, confirmed_reader, mesos,
+        };
+        let mut game = Game::new(Scene::Rock);
+        let reader = confirmed_reader(&mut game);
+        let mut runner = Runner::with_readers(
+            Fake {
+                window: Some(GAME),
+                canvas: Some(lit(game.next(&[], 0))),
+                ..Fake::default()
+            },
+            ExpBarReader::new(),
+            reader,
+        );
+        runner.tick();
+        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("75"), WHITE)], 0)));
+        assert_eq!(
+            pickups(runner.tick().events),
+            [Event::MesosGained {
+                amount: 75,
+                late: false,
+                shaped: false
+            }]
+        );
+        let mut events = Vec::new();
+        for _ in 0..2 {
+            game.next(&[], 0);
+            runner.backend_mut().canvas = Some(Canvas::new(1366, 768));
+            events.extend(runner.tick().events);
+        }
+        game.scene = Scene::Cloud;
+        for _ in 0..3 {
+            runner.backend_mut().canvas = Some(lit(game.next(&[], 0)));
+            events.extend(runner.tick().events);
+        }
+        assert_eq!(pickups(events), []);
+        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("12"), WHITE)], 0)));
+        assert_eq!(
+            pickups(runner.tick().events),
+            [Event::MesosGained {
+                amount: 12,
+                late: false,
+                shaped: false
+            }]
+        );
+    }
+
+    // Plugins tell a mesos amount read late (reported missed when it arrived) from one read at
+    // once, and one read with a digit named by its shape; a party bonus line becomes its own
+    // event. Fails if any of them comes out the same as a plain amount, or the bonus is dropped.
+    #[test]
+    fn mesos_read_late_or_by_shape_say_so() {
+        let reading = NoticeReading {
+            notices: vec![
+                Notice::Mesos {
+                    amount: 30,
+                    shaped: false,
+                },
+                Notice::LateMesos {
+                    amount: 75,
+                    shaped: false,
+                },
+                Notice::Mesos {
+                    amount: 58,
+                    shaped: true,
+                },
+                Notice::PartyBonus(4),
+            ],
+            missed: Some(Missed::ShapesWrong),
+            confirmed: true,
+        };
+        assert_eq!(
+            notice_events(&Ok(reading)),
+            [
+                Event::MesosGained {
+                    amount: 30,
+                    late: false,
+                    shaped: false
+                },
+                Event::MesosGained {
+                    amount: 75,
+                    late: true,
+                    shaped: false
+                },
+                Event::MesosGained {
+                    amount: 58,
+                    late: false,
+                    shaped: true
+                },
+                Event::PartyBonus { amount: 4 },
+                Event::NoticesMissed {
+                    reason: Missed::ShapesWrong
+                }
+            ]
+        );
     }
 
     /// The HUD at `exp` in Full Screen on a 1512x982 screen: the 1366x768 picture scaled to the

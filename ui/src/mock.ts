@@ -115,7 +115,7 @@ export function mockHost(scenario: string): Host {
   const status = (): Status => {
     const now = Date.now();
     const t = now - started;
-    const base = { reading: !settings.safeMode, atMs: now, stale: false, chat: null };
+    const base = { reading: !settings.safeMode, atMs: now, stale: false, chat: null, notices: "off" as const, waitingMesos: 0, map: null };
     if (!base.reading) return { ...base, state: "off", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
     const game = { width: 1366, height: 768, scale: 2 };
     if (scenario === "blocked") {
@@ -133,13 +133,14 @@ export function mockHost(scenario: string): Host {
     if (t < 1500) return { ...base, state: "no_game", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
     if (scenario === "dark") return darkStatus(started, game);
     if (t < 4000) {
-      return { ...base, state: "capturing", game, exp: null, unreadable: "learning", error: null, chat: "reading", calibration: "learning" };
+      return { ...base, state: "capturing", game, exp: null, unreadable: "learning", error: null, chat: "reading", calibration: "learning", notices: "learning" };
     }
     const pctHundredths = Math.round((exp * 10_000) / NEEDED);
     return {
       ...base,
       state: "capturing",
       chat: "reading",
+      notices: "reading",
       game,
       exp: { level, exp, pctHundredths, needed: NEEDED, confirmed: true },
       unreadable: null,
@@ -176,7 +177,7 @@ export function mockHost(scenario: string): Host {
   }, 250);
 
   return {
-    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 2 }),
+    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 3 }),
     settings: async () => settings,
     startup: async () => startup,
     setStartup: async (on) => {
@@ -266,6 +267,9 @@ function darkStatus(started: number, game: Status["game"]): Status {
     unreadable: "screen_dark",
     error: null,
     calibration: "learning",
+    notices: "reading",
+    waitingMesos: 0,
+    map: null,
   };
 }
 
@@ -275,7 +279,16 @@ export function mockHudHost(scenario: string): HudHost {
     scenario === "grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51 } : null;
   const started = Date.now();
   const status = (): Status => {
-    const base = { reading: true, atMs: Date.now(), stale: false, chat: null, game: { width: 1366, height: 768, scale: 2 } };
+    const base = {
+      reading: true,
+      atMs: Date.now(),
+      stale: false,
+      chat: null,
+      game: { width: 1366, height: 768, scale: 2 },
+      notices: "reading" as const,
+      waitingMesos: 0,
+      map: null,
+    };
     if (scenario === "dark") return darkStatus(started, base.game);
     if (scenario === "blocked") {
       return { ...base, state: "blocked", exp: null, unreadable: null, error: "No permission.", calibration: "learning" };

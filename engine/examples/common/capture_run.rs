@@ -56,10 +56,18 @@ struct GameArea {
     scale: u32,
 }
 
+/// Saved by the macOS capture helper. Runs saved before the helper was renamed carry its earlier
+/// name, so any `*-capture-macos` tool is the helper.
+fn from_mac_helper(meta: &serde_json::Value) -> bool {
+    meta["tool"]
+        .as_str()
+        .is_some_and(|tool| tool.ends_with("-capture-macos"))
+}
+
 fn game_area(meta: &serde_json::Value) -> Result<GameArea, String> {
     let num = |v: &serde_json::Value| v.as_f64().ok_or("meta.json: missing number".to_string());
     let window = &meta["window"];
-    if meta["tool"] == "mesovibe-capture-macos" {
+    if from_mac_helper(meta) {
         // The macOS helper records the window's bounds in points, title bar included, and the
         // backing scale of its display. Full Screen windows fill a display and have no title bar.
         let bounds = &window["bounds"];
@@ -117,7 +125,7 @@ fn colors_of(meta: &serde_json::Value, png: &png::Info) -> Result<Colors, String
         };
     }
     match (meta["tool"].as_str(), meta["os"].as_str()) {
-        (Some("mesovibe-capture-macos"), _) => {
+        _ if from_mac_helper(meta) => {
             Err("a Mac capture without a color tag: its colors can't be told".into())
         }
         // The engine's Mac stream handed over the display's colors until it asked for sRGB.
@@ -206,7 +214,8 @@ pub fn load(run: &Path, png_path: &Path) -> Result<Image, String> {
         }
     };
     // A run saved with --crop-bottom holds only the bottom rows of the game area (more than asked
-    // for above 768 lines, where the tool scales the strip with the game).
+    // for above 768 lines, where the tool scales the strip with the game). Each PNG says how many:
+    // a recording by `live_exp` saves the frames the engine grabbed whole, for the map's name.
     let (cx, cy, rows) = match meta["cropBottom"].as_u64() {
         Some(_) => (0, 0, info.height.min(ch)),
         None => (cx, cy, ch),

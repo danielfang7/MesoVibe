@@ -5,9 +5,13 @@
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::recognizers::notices::{Missed, Tab};
+
 /// Version of the event schema. Bump on any change plugins can observe.
 /// 2: `ExpChanged` gained `needed`, and its `level` became optional.
-pub const SCHEMA_VERSION: u32 = 2;
+/// 3: `MesosGained`, `ItemGained`, `PartyBonus` and `NoticesMissed`, from the pickup notices, and
+/// `MapChanged`.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Events the engine emits after a confident read (below the confidence
 /// threshold a recognizer reports "unreadable" and no value event is sent).
@@ -29,6 +33,50 @@ pub enum Event {
     },
     /// The level went up by one or more.
     LevelUp { level: u16 },
+    /// Mesos picked up: the game's "You have gained mesos (+N)". `late` when it was picked up
+    /// earlier, while a digit of the amount wasn't learned yet (a `NoticesMissed` with
+    /// `not_learned` said so then), and is read only now. `shaped` when a digit of the amount was
+    /// named by its shape rather than learned from an EXP line; a `NoticesMissed` with
+    /// `shapes_wrong` later means such amounts may be wrong.
+    MesosGained {
+        #[ts(type = "number")]
+        amount: u64,
+        late: bool,
+        shaped: bool,
+    },
+    /// An item picked up: the game's `<name> xN earned. (<tab>)`. `item_key` identifies the
+    /// item's name by its exact shape, the same every time the same item is picked up, whether or
+    /// not its letters are known yet: it's a key for the name's picture, not the name. `tab` is the
+    /// inventory tab it went to, when its letters are known.
+    ItemGained {
+        item_key: String,
+        count: u32,
+        #[ts(inline)]
+        tab: Option<Tab>,
+    },
+    /// The game's "Bonus EXP for PARTY (+N)": the player is in a party. Its EXP is already in the
+    /// EXP bar's reading.
+    PartyBonus {
+        #[ts(type = "number")]
+        amount: u64,
+    },
+    /// The player is on another map, or the first map since the game was found. `map_key`
+    /// identifies the minimap's name for it by its exact shape, the same every time on this
+    /// computer (a key for the name's picture, not the name), or is `null` when the name can't be
+    /// read (the minimap closed or covered).
+    MapChanged { map_key: Option<String> },
+    /// Pickup notices may have been missed, so the mesos and items counted from them are at
+    /// least what was picked up. `reason`: `unaligned` (the notices moved in a way that lines up
+    /// with nothing, as when something covered them), `unreadable` (a new line couldn't be read),
+    /// `not_learned` (a mesos amount has a digit not learned yet; it's counted late, as a
+    /// `MesosGained` with `late`), `exp_short` or `exp_over` (the EXP lines read don't add up to
+    /// what the EXP bar gained), `lost` (the notices were out of sight for a while), `dropped`
+    /// (amounts waiting for a digit were given up and won't be counted), `shapes_wrong` (a digit
+    /// named by its shape was wrong: amounts marked `shaped` may be wrong).
+    NoticesMissed {
+        #[ts(inline)]
+        reason: Missed,
+    },
     /// A recognizer could not read its region confidently.
     Unreadable { recognizer: &'static str },
 }
@@ -44,7 +92,13 @@ mod tests {
     );
 
     fn generated() -> String {
-        let body = Event::export_to_string(&ts_rs::Config::new()).expect("Event exports");
+        let config = ts_rs::Config::new();
+        let body = [
+            Event::export_to_string(&config).expect("Event exports"),
+            crate::notice_health::NoticeState::export_to_string(&config)
+                .expect("NoticeState exports"),
+        ]
+        .join("\n");
         // ts-rs starts with its own banner; keep only the declarations.
         let body = body
             .lines()
