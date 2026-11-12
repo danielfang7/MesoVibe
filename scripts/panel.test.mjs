@@ -107,7 +107,9 @@ async function openPage(port, url) {
     );
     await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
   };
-  return { evaluate, until, click, hover, errors, close: () => socket.close() };
+  /** Sizes the page's window, as the host sizes the mini-HUD's. */
+  const resize = (width, height) => send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+  return { evaluate, until, click, hover, resize, errors, close: () => socket.close() };
 }
 
 test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME)", timeout: 180_000 }, async (t) => {
@@ -407,6 +409,18 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
+  // At a Full Screen size MesoVibe can't read yet, nothing covers the bar: the player changes a
+  // setting in the game. Fails if the panel doesn't say which.
+  await t.test("Full Screen that can't be read says what to change in the game", async () => {
+    const page = await openPage(devtools, at("fullscreen"));
+    await page.until(
+      `document.querySelector(".status-text")?.textContent === "Can't read the game in Full Screen at this size. In the game's Options > Graphics, try windowed or 1366×768."`,
+      "the Full Screen hint",
+    );
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
   // Safe mode is turned on only in Settings. Fails if the fix goes missing or the strip offers
   // Safe mode again.
   await t.test("a blocked capture says so and how to fix it", async () => {
@@ -489,6 +503,26 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.ok(await dark.evaluate(`document.querySelector(".dot.warn") !== null`));
     assert.deepEqual(dark.errors, []);
     dark.close();
+    // Full Screen at a size MesoVibe can't read: fails if the mini-HUD doesn't say what to change,
+    // or the hint is cut off or spills out of the card under a session's rate.
+    const full = await openPage(devtools, at("fullscreen", "hud.html"));
+    await full.until(`document.querySelector(".hud-note")?.textContent === "Can't read Full Screen"`, "the Full Screen note");
+    assert.equal(await full.evaluate(`document.querySelector(".hud-line")?.textContent`), "Try windowed or 1366×768");
+    assert.deepEqual(full.errors, []);
+    full.close();
+    const mid = await openPage(devtools, at("fullscreen-grind", "hud.html"));
+    await mid.resize(216, 100);
+    await mid.until(`document.querySelector(".hud-issue")?.textContent === "Can't read Full Screen"`, "the note under the rate");
+    const fits = `(() => {
+      const card = document.querySelector(".hud").getBoundingClientRect();
+      const rows = [...document.querySelectorAll(".hud > *")].map((row) => row.getBoundingClientRect());
+      const hint = [...document.querySelectorAll(".hud-line")].at(-1);
+      return rows.every((r) => r.top >= card.top && r.bottom <= card.bottom) && hint.scrollWidth <= hint.clientWidth && hint.textContent;
+    })()`;
+    assert.equal(await mid.until(fits, "the hint inside the card"), "Try windowed or 1366×768");
+    assert.equal(await mid.evaluate(`document.querySelector(".hud-progress")`), null, "the hint takes the progress row");
+    assert.deepEqual(mid.errors, []);
+    mid.close();
   });
 
   // A chat line as the host hands it over (app/src/chat.rs), with a one-pixel picture: these tests

@@ -117,7 +117,7 @@ export function mockHost(scenario: string): Host {
   const status = (): Status => {
     const now = Date.now();
     const t = now - started;
-    const base = { reading: !settings.safeMode, atMs: now, stale: false, chat: null, notices: "off" as const, waitingMesos: 0, map: null };
+    const base = { reading: !settings.safeMode, atMs: now, stale: false, chat: null, notices: "off" as const, waitingMesos: 0, map: null, fullScreen: false };
     if (!base.reading) return { ...base, state: "off", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
     const game = { width: 1366, height: 768, scale: 2 };
     if (scenario === "blocked") {
@@ -134,6 +134,7 @@ export function mockHost(scenario: string): Host {
     }
     if (t < 1500) return { ...base, state: "no_game", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
     if (scenario === "dark") return darkStatus(started, game);
+    if (scenario === "fullscreen") return fullScreenStatus(started);
     if (t < 4000) {
       return { ...base, state: "capturing", game, exp: null, unreadable: "learning", error: null, chat: "reading", calibration: "learning", notices: "learning" };
     }
@@ -280,6 +281,7 @@ function darkStatus(started: number, game: Status["game"]): Status {
     chat: "not_found",
     state: "capturing",
     game,
+    fullScreen: false,
     exp: null,
     unreadable: "screen_dark",
     error: null,
@@ -287,6 +289,18 @@ function darkStatus(started: number, game: Status["game"]): Status {
     notices: "reading",
     waitingMesos: 0,
     map: null,
+  };
+}
+
+/**
+ * `fullscreen`: the game fills a 1512×982 Mac display at a size MesoVibe can't read, so no HUD is
+ * ever found. The clock runs 20 times fast, as in `dark`.
+ */
+function fullScreenStatus(started: number): Status {
+  return {
+    ...darkStatus(started, { width: 1512, height: 982, scale: 2 }),
+    fullScreen: true,
+    unreadable: "hud_not_found",
   };
 }
 
@@ -311,10 +325,13 @@ function namePicture(name: string): GamePicture {
   return { width: canvas.width, height: canvas.height, png: canvas.toDataURL("image/png") };
 }
 
-/** The mini-HUD's stand-in: a steady grind, still learning, blocked, or a screen that stays dark. */
+/**
+ * The mini-HUD's stand-in: a steady grind, still learning, blocked, a screen that stays dark, or
+ * Full Screen at a size MesoVibe can't read (`fullscreen-grind`: after a session's rate came in).
+ */
 export function mockHudHost(scenario: string): HudHost {
   const summary: HudSummary | null =
-    scenario === "grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51 } : null;
+    scenario === "grind" || scenario === "fullscreen-grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51 } : null;
   const started = Date.now();
   const status = (): Status => {
     const base = {
@@ -323,11 +340,13 @@ export function mockHudHost(scenario: string): HudHost {
       stale: false,
       chat: null,
       game: { width: 1366, height: 768, scale: 2 },
+      fullScreen: false,
       notices: "reading" as const,
       waitingMesos: 0,
       map: null,
     };
     if (scenario === "dark") return darkStatus(started, base.game);
+    if (scenario.startsWith("fullscreen")) return fullScreenStatus(started);
     if (scenario === "blocked") {
       return { ...base, state: "blocked", exp: null, unreadable: null, error: "No permission.", calibration: "learning" };
     }

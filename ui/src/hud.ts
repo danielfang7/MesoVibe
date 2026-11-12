@@ -5,7 +5,7 @@
 // text node, never parsed HTML.
 import { formatCompact, formatDigits, formatMinutes, formatPercent } from "@mesovibe/sdk";
 
-import { darkWatch } from "./dark.js";
+import { darkWatch, fullScreenWatch } from "./dark.js";
 import { h, replace } from "./dom.js";
 import { connectHud } from "./ipc.js";
 import type { HudSummary, Status } from "./ipc.js";
@@ -22,10 +22,19 @@ interface Hud {
   lastReadAt: number | null;
   /** The screen has been dark for long: not a map change (dark.ts). */
   longDark: boolean;
+  /** Full Screen with no HUD seen for long: maybe a size MesoVibe can't read (dark.ts). */
+  fullScreenUnread: boolean;
+}
+
+/** A word for the card, and what the player can do about it. */
+interface Issue {
+  text: string;
+  tone: "live" | "idle" | "warn" | "danger";
+  hint?: string;
 }
 
 /** A word for when the numbers can't be trusted right now, in the strip's terms. */
-function problem(status: Status | null, longDark: boolean): { text: string; tone: "live" | "idle" | "warn" | "danger" } | null {
+function problem(status: Status | null, longDark: boolean, fullScreenUnread: boolean): Issue | null {
   // No status yet: the engine's first tick is on its way, and nothing is wrong.
   if (status === null) return null;
   if (!status.reading) return { text: "Not reading", tone: "idle" };
@@ -40,6 +49,7 @@ function problem(status: Status | null, longDark: boolean): { text: string; tone
       break;
   }
   // Kept through ticks that brought no new frame, which say nothing either way (dark.ts).
+  if (fullScreenUnread) return { text: "Can't read Full Screen", tone: "warn", hint: "Try windowed or 1366×768" };
   if (longDark) return { text: "Can't see the EXP bar", tone: "warn" };
   switch (status.unreadable) {
     case "learning":
@@ -60,7 +70,7 @@ function problem(status: Status | null, longDark: boolean): { text: string; tone
 
 function paint(hud: Hud): void {
   const { status, summary } = hud;
-  const issue = problem(status, hud.longDark);
+  const issue = problem(status, hud.longDark, hud.fullScreenUnread);
   const stale = hud.lastReadAt !== null && (status?.atMs ?? Date.now()) - hud.lastReadAt > STALE_MS;
   const rate = summary?.expPerHour ?? null;
   const rows: Node[] = [];
@@ -91,7 +101,10 @@ function paint(hud: Hud): void {
       ),
     );
   }
-  if (summary?.pctHundredths != null) {
+  // A hint takes the progress row: the card has room for three rows.
+  if (issue?.hint !== undefined) {
+    rows.push(h("p", { class: "hud-line" }, issue.hint));
+  } else if (summary?.pctHundredths != null) {
     rows.push(
       h(
         "div",
@@ -120,12 +133,14 @@ function paint(hud: Hud): void {
 
 async function boot(): Promise<void> {
   const host = await connectHud();
-  const hud: Hud = { status: null, summary: null, lastReadAt: null, longDark: false };
+  const hud: Hud = { status: null, summary: null, lastReadAt: null, longDark: false, fullScreenUnread: false };
   const dark = darkWatch();
+  const fullScreen = fullScreenWatch();
   paint(hud);
   void host.onStatus((status) => {
     hud.status = status;
     hud.longDark = dark(status);
+    hud.fullScreenUnread = fullScreen(status);
     if (status.exp?.confirmed) hud.lastReadAt = status.atMs;
     paint(hud);
   });

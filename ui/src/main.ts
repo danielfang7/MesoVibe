@@ -5,7 +5,7 @@ import { formatCompact, formatDigits, formatMinutes, formatPercent } from "@meso
 import type { CaptureState, SessionSummary } from "@mesovibe/sdk";
 
 import { CHANNEL_NAME, clockTime, messageText, messages } from "./chatlines.js";
-import { darkWatch } from "./dark.js";
+import { darkWatch, fullScreenWatch } from "./dark.js";
 import { append, h, icon, replace } from "./dom.js";
 import { connect } from "./ipc.js";
 import type { AppInfo, ChatChannel, ChatChannels, ChatColors, ChatLine, ChatPosition, Corner, Display, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
@@ -118,6 +118,8 @@ interface Panel {
   lastReadAt: number | null;
   /** The screen has been dark for long: not a map change (dark.ts). */
   longDark: boolean;
+  /** Full Screen with no HUD seen for long: maybe a size MesoVibe can't read (dark.ts). */
+  fullScreenUnread: boolean;
   snapshot: string | null;
   helpOpen: boolean;
   crashed: string | null;
@@ -158,6 +160,9 @@ function statusLine(panel: Panel): { text: string; tone: "live" | "idle" | "warn
   }
   // Dark for a moment is a map change's fade. Dark for long, MesoVibe isn't seeing the HUD. The
   // watch keeps a dark spell through ticks that brought no new frame, which say nothing either way.
+  if (panel.fullScreenUnread) {
+    return { text: "Can't read the game in Full Screen at this size. In the game's Options > Graphics, try windowed or 1366×768.", tone: "warn" };
+  }
   if (panel.longDark) return { text: "Can't see the EXP bar. If you play in Full Screen, try windowed.", tone: "warn" };
   switch (status.unreadable) {
     case "learning":
@@ -193,6 +198,7 @@ function shell(initial: Settings): void {
     notice: null,
     lastReadAt: null,
     longDark: false,
+    fullScreenUnread: false,
     snapshot: null,
     helpOpen: false,
     crashed: null,
@@ -1130,9 +1136,11 @@ function shell(initial: Settings): void {
   /** The Chat view's note as last drawn. */
   let paintedChatNote: string | null | undefined;
   const dark = darkWatch();
+  const fullScreen = fullScreenWatch();
   void host.onStatus((status) => {
     panel.status = status;
     panel.longDark = dark(status);
+    panel.fullScreenUnread = fullScreen(status);
     if (status.exp?.confirmed) panel.lastReadAt = status.atMs;
     if (status.state !== "blocked") panel.helpOpen = false;
     tracker.setCapture(captureState(status));
