@@ -7,12 +7,14 @@
 //! any tally of what the runs really hold.
 //!
 //! ```text
-//! cargo run -p mesovibe-engine --release --example replay_notices -- [--quiet] [--warm] [--carry | --join] <run folder>...
+//! cargo run -p mesovibe-engine --release --example replay_notices -- [--quiet] [--warm] [--carry | --join] [--knowledge <notices.txt>] <run folder>...
 //! ```
 //!
 //! Each run starts with readers that know nothing, unless `--carry` passes what the notice reader
 //! confirmed from one run to the next through the text the app keeps between launches, or `--join`
 //! reads the runs as one session with gaps between them, keeping what it was still learning too.
+//! `--knowledge` starts the first run's notice reader from a `notices.txt` the app kept, as the app
+//! starts a session.
 //! The EXP bar reader learns from scratch in each run too, unless `--warm` first runs it over all
 //! the runs to learn its digits and starts each run from them, as the app does with the digits it
 //! keeps between launches.
@@ -37,6 +39,8 @@ struct Args {
     warm: bool,
     carry: bool,
     join: bool,
+    /// A notice reader to start the first run from, as the app starts one from `notices.txt`.
+    knowledge: Option<NoticeReader>,
     runs: Vec<PathBuf>,
 }
 
@@ -46,19 +50,32 @@ fn parse_args() -> Result<Args, String> {
         warm: false,
         carry: false,
         join: false,
+        knowledge: None,
         runs: Vec::new(),
     };
-    for a in std::env::args().skip(1) {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
         match a.as_str() {
             "--quiet" => out.quiet = true,
             "--warm" => out.warm = true,
             "--carry" => out.carry = true,
             "--join" => out.join = true,
+            "--knowledge" => {
+                let path = args.next().ok_or("--knowledge needs a notices.txt")?;
+                let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+                let reader = NoticeReader::from_knowledge(&text)
+                    .ok_or(format!("{path}: not text a notice reader kept"))?;
+                out.knowledge = Some(reader);
+            }
             _ => out.runs.push(PathBuf::from(a)),
         }
     }
     if out.runs.is_empty() {
-        return Err("usage: replay_notices [--quiet] [--warm] [--carry | --join] <run>...".into());
+        return Err(
+            "usage: replay_notices [--quiet] [--warm] [--carry | --join] \
+                    [--knowledge <notices.txt>] <run>..."
+                .into(),
+        );
     }
     Ok(out)
 }
@@ -130,9 +147,10 @@ fn main() -> ExitCode {
     if let Some(None) = warm {
         eprintln!("--warm: the EXP bar reader didn't confirm its digits on these runs.");
     }
-    let mut notices = NoticeReader::new();
+    let from_file = args.knowledge.is_some();
+    let mut notices = args.knowledge.clone().unwrap_or_default();
     let mut timings: Vec<u128> = Vec::new();
-    for run in &args.runs {
+    for (i, run) in args.runs.iter().enumerate() {
         let name = run
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -146,6 +164,8 @@ fn main() -> ExitCode {
         let mut bar = 0;
         if args.join {
             notices.reset();
+        } else if i == 0 && from_file {
+            // The reader the kept text made.
         } else if args.carry {
             notices = notices
                 .knowledge()
