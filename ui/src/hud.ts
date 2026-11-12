@@ -5,6 +5,7 @@
 // text node, never parsed HTML.
 import { formatCompact, formatDigits, formatMinutes, formatPercent } from "@mesovibe/sdk";
 
+import { darkWatch } from "./dark.js";
 import { h, replace } from "./dom.js";
 import { connectHud } from "./ipc.js";
 import type { HudSummary, Status } from "./ipc.js";
@@ -19,10 +20,12 @@ interface Hud {
   status: Status | null;
   summary: HudSummary | null;
   lastReadAt: number | null;
+  /** The screen has been dark for long: not a map change (dark.ts). */
+  longDark: boolean;
 }
 
 /** A word for when the numbers can't be trusted right now, in the strip's terms. */
-function problem(status: Status | null): { text: string; tone: "live" | "idle" | "warn" | "danger" } | null {
+function problem(status: Status | null, longDark: boolean): { text: string; tone: "live" | "idle" | "warn" | "danger" } | null {
   // No status yet: the engine's first tick is on its way, and nothing is wrong.
   if (status === null) return null;
   if (!status.reading) return { text: "Not reading", tone: "idle" };
@@ -45,6 +48,8 @@ function problem(status: Status | null): { text: string; tone: "live" | "idle" |
     case "unknown_glyph":
     case "garbled":
       return { text: "Can't see the EXP bar", tone: "warn" };
+    case "screen_dark":
+      return longDark ? { text: "Can't see the EXP bar", tone: "warn" } : null;
     case "unsupported_size":
     case "unsupported_scale":
       return { text: "Can't read this game size", tone: "warn" };
@@ -55,7 +60,7 @@ function problem(status: Status | null): { text: string; tone: "live" | "idle" |
 
 function paint(hud: Hud): void {
   const { status, summary } = hud;
-  const issue = problem(status);
+  const issue = problem(status, hud.longDark);
   const stale = hud.lastReadAt !== null && (status?.atMs ?? Date.now()) - hud.lastReadAt > STALE_MS;
   const rate = summary?.expPerHour ?? null;
   const rows: Node[] = [];
@@ -115,10 +120,12 @@ function paint(hud: Hud): void {
 
 async function boot(): Promise<void> {
   const host = await connectHud();
-  const hud: Hud = { status: null, summary: null, lastReadAt: null };
+  const hud: Hud = { status: null, summary: null, lastReadAt: null, longDark: false };
+  const dark = darkWatch();
   paint(hud);
   void host.onStatus((status) => {
     hud.status = status;
+    hud.longDark = dark(status);
     if (status.exp?.confirmed) hud.lastReadAt = status.atMs;
     paint(hud);
   });
