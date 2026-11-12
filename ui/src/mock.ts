@@ -4,14 +4,16 @@
 // can't be turned on),
 // `loginfail` (the OS refuses the login item), `update` (MesoVibe 0.2.0 downloaded and ready:
 // Restart to update), `updatefail` (GitHub couldn't be reached; Check now then finds nothing)
-// and `unreadable` (the Session Tracker's saved data can't be opened the first time it's read).
+// `unreadable` (the Session Tracker's saved data can't be opened the first time it's read), and
+// `loot` (play with pickups: a map read from the minimap, mesos every few kills, a second map
+// after a while).
 // The mini-HUD page (hud.html) takes `grind`, `learning` and `blocked`; the chat overlay page
 // (chat.html) takes `grind`. During play, whisper, party and friend lines arrive every few
 // seconds, drawn here as pictures the way the host hands them over.
 // Release builds leave this file out (ipc.ts loads it only in development).
 import type { Event as GameEvent } from "@mesovibe/sdk";
 
-import type { ChatChannel, ChatHost, ChatLine, ChatPosition, HudHost, HudSummary, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
+import type { ChatChannel, ChatHost, ChatLine, ChatPosition, GamePicture, HudHost, HudSummary, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
 
 const NEEDED = 356_916;
 
@@ -141,6 +143,7 @@ export function mockHost(scenario: string): Host {
       state: "capturing",
       chat: "reading",
       notices: "reading",
+      map: scenario === "loot" ? { key: lootMap(t) } : null,
       game,
       exp: { level, exp, pctHundredths, needed: NEEDED, confirmed: true },
       unreadable: null,
@@ -173,8 +176,21 @@ export function mockHost(scenario: string): Host {
       };
       for (const handler of eventHandlers) handler(event, s.atMs);
       if (level > before) for (const handler of eventHandlers) handler({ type: "LevelUp", level }, s.atMs);
+      if (scenario === "loot") {
+        const map = lootMap(s.atMs - started);
+        if (map !== lastMap) {
+          lastMap = map;
+          for (const handler of eventHandlers) handler({ type: "MapChanged", map_key: map }, s.atMs);
+        }
+        // Mesos about every other kill.
+        if (Math.random() < 0.5) {
+          const mesos: GameEvent = { type: "MesosGained", amount: 40 + Math.round(Math.random() * 80), late: false, shaped: false };
+          for (const handler of eventHandlers) handler(mesos, s.atMs);
+        }
+      }
     }
   }, 250);
+  let lastMap: string | null = null;
 
   return {
     appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 3 }),
@@ -188,6 +204,7 @@ export function mockHost(scenario: string): Host {
     retry: async () => {},
     watch: async () => {},
     openPrivacySettings: async () => {},
+    gameText: async (keys) => Object.fromEntries(keys.flatMap((key) => (MAP_NAMES[key] ? [[key, namePicture(MAP_NAMES[key])]] : []))),
     storageGet: async (plugin) => {
       // Like a file another program holds open: the first read fails, a later one works.
       if (scenario === "unreadable" && storage.reads++ === 0) throw new Error("Access is denied. (os error 5)");
@@ -273,10 +290,33 @@ function darkStatus(started: number, game: Status["game"]): Status {
   };
 }
 
+/** The `loot` scenario's maps: the first for two minutes, then the second. */
+const MAP_NAMES: Record<string, string> = { "0a1b2c3d4e5f6071": "Ant Tunnel I", "8192a3b4c5d6e7f8": "Ant Tunnel II" };
+function lootMap(elapsedMs: number): string {
+  return elapsedMs < 120_000 ? "0a1b2c3d4e5f6071" : "8192a3b4c5d6e7f8";
+}
+
+/** A name drawn the way the engine hands pictures over: white, with the letters as alpha. */
+function namePicture(name: string): GamePicture {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (context === null) return { width: 1, height: 1, png: canvas.toDataURL() };
+  context.font = "10px sans-serif";
+  canvas.width = Math.ceil(context.measureText(name).width) + 2;
+  canvas.height = 12;
+  context.font = "10px sans-serif";
+  context.fillStyle = "white";
+  context.textBaseline = "top";
+  context.fillText(name, 1, 1);
+  return { width: canvas.width, height: canvas.height, png: canvas.toDataURL("image/png") };
+}
+
 /** The mini-HUD's stand-in: a steady grind, still learning, blocked, or a screen that stays dark. */
 export function mockHudHost(scenario: string): HudHost {
   const summary: HudSummary | null =
-    scenario === "grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51 } : null;
+    scenario === "grind"
+      ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51, mesosPerHour: 21_480 }
+      : null;
   const started = Date.now();
   const status = (): Status => {
     const base = {

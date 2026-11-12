@@ -294,11 +294,26 @@ dl {
   min-height: 44px;
 }
 
-.hero {
+.hero-stack {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.hero {
   display: flex;
   align-items: baseline;
   gap: var(--space-sm);
+}
+
+/* Mesos/hr under the hero: a figure, but quieter than EXP/hr. */
+.hero-mesos {
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.hero-mesos[hidden] {
+  display: none;
 }
 
 .hero.arrive {
@@ -1139,4 +1154,25 @@ html.hud-page body {
 /* The words take the chat type's color. */
 .side-message .chat-text {
   color: inherit;
+}
+
+/* A game name as a picture of its lettering, in the text's color. Pixel art: no smoothing. */
+.game-text-cell {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.game-text {
+  display: inline-block;
+  vertical-align: baseline;
+  background: currentColor;
+  image-rendering: pixelated;
+  max-width: 100%;
+}
+
+.game-text-suffix,
+.game-text-missing {
+  color: var(--text-muted);
 }

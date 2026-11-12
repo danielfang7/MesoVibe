@@ -79,6 +79,18 @@ function paint(hud: Hud): void {
           ),
     ),
   );
+  const mesos = summary?.mesosPerHour ?? null;
+  if (mesos !== null && (issue === null || issue.tone === "live")) {
+    // The same number the strip shows under its EXP/hr.
+    rows.push(
+      h(
+        "p",
+        { class: "hud-line hud-mesos", attrs: { title: `${formatDigits(mesos)} mesos per hour` } },
+        h("span", { class: "number" }, formatCompact(mesos)),
+        " mesos/hr",
+      ),
+    );
+  }
   if (rate !== null && issue !== null && issue.tone !== "live") {
     rows.push(h("p", { class: "hud-line hud-issue" }, issue.text));
   } else if (summary?.level != null) {

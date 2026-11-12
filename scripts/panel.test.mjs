@@ -209,6 +209,27 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     failed.close();
   });
 
+  // The map shows as a picture of its name, with a name screen readers can say, and mesos as a
+  // total. Fails if the picture never arrives from the host, is drawn without its mask, or the
+  // Mesos row is missing.
+  await t.test("This session shows the map's name picture and the mesos counted", async () => {
+    const page = await openPage(devtools, at("loot"));
+    const picture = `document.querySelector('.view .game-text[aria-label^="Map first played"]')`;
+    await page.until(`${picture}?.style.maskImage?.startsWith('url("data:image/png')`, "the map's picture");
+    assert.ok(await page.evaluate(`${picture}.getBoundingClientRect().width > 0`), "drawn with a size");
+    const mesos = `[...document.querySelectorAll(".view dt")].find((d) => d.textContent === "Mesos")?.nextElementSibling?.textContent`;
+    assert.match(await page.until(mesos, "the Mesos row"), /^[\d,]+\+?$/);
+
+    // What MesoVibe sees says how the notices are read and shows the map's name as read. Fails if
+    // either row is missing or the map row has no picture.
+    await page.evaluate(`document.querySelector('[aria-label="What MesoVibe sees"]').click()`);
+    const notices = `document.querySelector('[data-key="sees-notices"]')?.textContent`;
+    assert.equal(await page.until(notices, "the notices row"), "Pickup noticesReading");
+    await page.until(`document.querySelector('[data-key="sees-map"] .game-text')?.style.maskImage`, "the map row's picture");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
   // Saved sessions that can't be opened must not read as empty: the tracker stays off with the
   // reason and Restart, and saves nothing over them. Fails if it starts with nothing (its first
   // save would replace the history) or if Restart doesn't read again.
@@ -298,7 +319,11 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     const saved = await page.until(`document.querySelector(".notice")?.textContent.match(/Saved: [\\d,]+ EXP in .+\\./)?.[0]`, "the recap");
     assert.match(saved, /^Saved: [\d,]+ EXP in /);
     assert.equal(await page.until(focusedKey, "focus on Undo"), "notice-undo");
-    assert.equal(await page.until(`document.querySelector(".view .cell-detail")?.textContent`, "the level line"), "Lv\u00a042");
+    // Under the session's map: the day and time played, then the level line.
+    const detailLines = `[...(document.querySelector(".view .table td")?.querySelectorAll(".cell-detail") ?? [])].map((d) => d.textContent)`;
+    const lines = await page.until(`${detailLines}.length === 2 && ${detailLines}`, "the detail lines");
+    assert.match(lines[0], /· \d+s$/);
+    assert.equal(lines[1], "Lv\u00a042");
     // Statuses repaint the strip four times a second; the focused Undo must stay the same element
     // through them, and an Enter held down on End must not repeat onto it.
     await page.evaluate(`(() => {
@@ -445,7 +470,9 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
   await t.test("the mini-HUD shows the rate, time to level and progress, or what's wrong", async () => {
     const page = await openPage(devtools, at("grind", "hud.html"));
     assert.equal(await page.until(`document.querySelector(".hud-rate")?.textContent`, "the rate"), "48.2K");
-    await page.until(`document.querySelector(".hud-line")?.textContent === "Lv 42 → 43 in 51 min"`, "time to level");
+    // Mesos/hr under the EXP/hr, as in the strip, then time to level.
+    const hudLines = `[...document.querySelectorAll(".hud-line")].map((l) => l.textContent)`;
+    await page.until(`${hudLines}.join("|") === "21.5K mesos/hr|Lv 42 → 43 in 51 min"`, "mesos/hr and time to level");
     assert.equal(await page.evaluate(`document.querySelector(".hud-progress .number").textContent`), "64.62%");
     assert.deepEqual(page.errors, []);
     page.close();
