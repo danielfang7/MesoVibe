@@ -82,6 +82,26 @@ impl<'a> Frame<'a> {
         }
     }
 
+    /// The frame without its top `top` rows and bottom `bottom` rows, as a game area of its own:
+    /// row `top` becomes row 0. The same pixels, nothing copied. `None` when that leaves no rows,
+    /// leaves none of the rows the frame holds, or splits the frame's pixel blocks at its scale.
+    pub fn without_rows(&self, top: u32, bottom: u32) -> Option<Frame<'a>> {
+        let height = self.height.checked_sub(top)?.checked_sub(bottom)?;
+        let first = self.first_row.max(top);
+        if height == 0 || first - top >= height {
+            return None;
+        }
+        let skip = (first - self.first_row) as usize * self.stride;
+        Frame::bottom(
+            self.width,
+            height,
+            first - top,
+            self.stride,
+            self.bgra.get(skip..)?,
+        )?
+        .with_scale(self.scale)
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -190,6 +210,36 @@ mod tests {
         assert_eq!(frame.bottom_rows(9).first_row(), 0, "all it holds");
         let strip = Frame::bottom(2, 4, 3, 8, &bgra[24..]).unwrap();
         assert_eq!(strip.bottom_rows(2).first_row(), 3);
+    }
+
+    // Cutting rows off both ends keeps the pixels where they are and renumbers the rows from the
+    // new top. Fails if a held row moves, the held rows are miscounted, or a cut that leaves
+    // nothing (or splits a 2x2 block) is allowed.
+    #[test]
+    fn a_frame_without_rows_at_both_ends_is_a_smaller_game_area() {
+        // A 1x10 game area holding rows 4..10, each pixel's blue its row number.
+        let bgra: Vec<u8> = (4..10u8).flat_map(|y| [y, 0, 0, 255]).collect();
+        let frame = Frame::bottom(1, 10, 4, 4, &bgra).unwrap();
+        let cut = frame.without_rows(2, 3).unwrap();
+        assert_eq!((cut.height(), cut.first_row()), (5, 2));
+        assert_eq!(cut.bgra(0, 2)[0], 4);
+        assert_eq!(cut.bgra(0, 4)[0], 6, "the cut area's bottom row is row 6");
+        // Cutting more than the rows above the held ones skips into them.
+        let deep = frame.without_rows(5, 1).unwrap();
+        assert_eq!(
+            (deep.height(), deep.first_row(), deep.bgra(0, 0)[0]),
+            (4, 0, 5)
+        );
+        assert!(frame.without_rows(5, 5).is_none(), "no rows left");
+        assert!(
+            frame.without_rows(0, 6).is_none(),
+            "none of the held rows left"
+        );
+        let blocks = Frame::bottom(2, 8, 4, 8, &[0; 32])
+            .and_then(|f| f.with_scale(2))
+            .unwrap();
+        assert!(blocks.without_rows(2, 2).is_some());
+        assert!(blocks.without_rows(1, 2).is_none(), "splits a 2x2 block");
     }
 
     #[test]

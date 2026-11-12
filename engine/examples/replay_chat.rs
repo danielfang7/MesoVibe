@@ -16,7 +16,7 @@ use mesovibe_engine::unstretch;
 
 #[path = "common/capture_run.rs"]
 mod capture_run;
-use capture_run::{frames_of, load};
+use capture_run::{frames_of, load, picture};
 
 fn write_png(path: &std::path::Path, width: u32, height: u32, rgb: &[u8]) {
     let file = std::fs::File::create(path).expect("create the PNG");
@@ -47,6 +47,7 @@ fn main() -> ExitCode {
     let (mut gaps, mut unreadable, mut took) = (0, 0, std::time::Duration::ZERO);
     for run in &runs {
         let mut reader = ChatReader::new();
+        let mut bar = 0;
         for path in frames_of(run) {
             let image = match load(run, &path) {
                 Ok(image) => image,
@@ -55,7 +56,7 @@ fn main() -> ExitCode {
                     continue;
                 }
             };
-            let frame = image.frame();
+            let frame = picture(image.frame(), &mut bar);
             let name = path.file_name().unwrap().to_string_lossy().to_string();
             let started = std::time::Instant::now();
             let reading = reader.observe(&frame);
