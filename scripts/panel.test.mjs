@@ -353,6 +353,18 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
+  // A black screen for a moment is a map change; for long, MesoVibe isn't seeing the game's picture.
+  // Fails if a screen that stays black still reads as "Reading game".
+  await t.test("a screen that stays black says the EXP bar can't be seen", async () => {
+    const page = await openPage(devtools, at("dark"));
+    await page.until(
+      `document.querySelector(".status-text")?.textContent === "Can't see the EXP bar. If you play in Full Screen, try windowed."`,
+      "a long dark spell",
+    );
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
   // Safe mode is turned on only in Settings. Fails if the fix goes missing or the strip offers
   // Safe mode again.
   await t.test("a blocked capture says so and how to fix it", async () => {
@@ -428,6 +440,13 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await blocked.until(`document.querySelector(".hud-note")?.textContent === "Can't capture the game"`, "blocked");
     assert.ok(await blocked.evaluate(`document.querySelector(".dot.danger") !== null`));
     blocked.close();
+    // A screen that stays black isn't a map change: fails if the mini-HUD stays green and waits
+    // for EXP that will never be read.
+    const dark = await openPage(devtools, at("dark", "hud.html"));
+    await dark.until(`document.querySelector(".hud-note")?.textContent === "Can't see the EXP bar"`, "a long dark spell");
+    assert.ok(await dark.evaluate(`document.querySelector(".dot.warn") !== null`));
+    assert.deepEqual(dark.errors, []);
+    dark.close();
   });
 
   // A chat line as the host hands it over (app/src/chat.rs), with a one-pixel picture: these tests

@@ -11,6 +11,7 @@ pub mod capture;
 pub mod events;
 pub mod frame;
 pub mod glyph;
+pub mod letterbox;
 pub mod recognizers;
 pub mod runner;
 pub mod unstretch;

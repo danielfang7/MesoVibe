@@ -197,7 +197,7 @@ mod strip {
     use mesovibe_engine::runner::Tick;
 
     /// The meta.json for strips shaped like `grab`: the game area in captured pixels, the rows
-    /// each strip holds, the scale, and the colors. The Mac stream hands over sRGB since
+    /// the first strip holds (each PNG holds its own), the scale, and the colors. The Mac stream hands over sRGB since
     /// 2026-11-04; replays take a Mac recording without `colorSpace` as Display P3.
     fn meta(grab: &Grab, extra: serde_json::Value) -> serde_json::Value {
         let mut meta = serde_json::json!({
@@ -266,8 +266,8 @@ mod strip {
     pub struct Recorder {
         folder: PathBuf,
         hz: f64,
-        /// (width, height, rows, scale) of the first grab, which meta.json describes.
-        shape: Option<(u32, u32, u32, u32)>,
+        /// (width, height, scale) of the first grab, which meta.json describes.
+        shape: Option<(u32, u32, u32)>,
         grabs: u32,
         saved: u32,
         /// Grabs not saved because the game area's size changed after the first.
@@ -318,12 +318,9 @@ mod strip {
             };
             let frames = self.frames.as_ref().ok_or("stopped")?;
             self.grabs += 1;
-            let shape = (
-                grab.width,
-                grab.height,
-                grab.height - grab.first_row,
-                grab.scale,
-            );
+            // The rows a grab holds can change within a run (Full Screen adds the bar under the
+            // picture once it's measured); each PNG keeps its own, so only the game area counts.
+            let shape = (grab.width, grab.height, grab.scale);
             if self.shape.is_none() {
                 let meta = meta(
                     grab,
