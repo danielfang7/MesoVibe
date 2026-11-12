@@ -471,39 +471,44 @@ h1 {
   background: var(--app-accent);
 }
 
-.loot-total {
-  margin-top: 4px;
-  color: var(--app-muted);
-  font-family: var(--font-mono);
-  font-size: 0.875rem;
-}
-
-/* One row per monster: its name and mesos on top, the items it dropped underneath. */
-.mobs {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+/* Past sessions as the panel lists them: each map with its own rates, and when it was played
+   underneath. */
+.past {
+  width: 100%;
   margin-top: 12px;
-  padding: 0;
-  list-style: none;
-}
-.mobs li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--app-line);
+  border-collapse: collapse;
   font-size: 0.875rem;
 }
-.mob-mesos {
+.past th {
+  padding: 0 0 8px 12px;
+  color: var(--app-muted);
+  font-weight: 500;
+  text-align: right;
+  white-space: nowrap;
+}
+.past td {
+  padding: 10px 0 10px 12px;
+  border-top: 1px solid var(--app-line);
   font-family: var(--font-mono);
   font-feature-settings: "tnum";
   text-align: right;
+  vertical-align: top;
+  white-space: nowrap;
 }
-.mob-drops {
-  grid-column: 1 / -1;
+.past th:first-child,
+.past td:first-child {
+  padding-left: 0;
+  font-family: var(--font-body);
+  text-align: left;
+  white-space: normal;
+}
+.past .more,
+.past .when {
   color: var(--app-muted);
-  overflow-wrap: anywhere;
+}
+.past .when {
+  display: block;
+  margin-top: 2px;
 }
 
 /* FAQ: one reading column; each question opens in place (native <details>, no script). */
