@@ -36,6 +36,8 @@ export class PluginHost {
 
   constructor(
     readonly id: string,
+    /** The plugin's name for messages shown before it has started and said its own. */
+    private readonly name: string,
     private readonly host: Host,
     private readonly listener: PluginListener,
     private capture: CaptureState,
@@ -45,7 +47,22 @@ export class PluginHost {
     this.stop();
     const waiting: ToPlugin[] = [];
     this.waiting = waiting;
-    const saved = await this.host.storageGet(this.id).catch(() => null);
+    let saved: unknown;
+    try {
+      saved = await this.host.storageGet(this.id);
+    } catch (error) {
+      // Stopped, or started again, while the saved data loaded.
+      if (this.waiting !== waiting) return;
+      this.waiting = null;
+      // Started with nothing, the plugin's first save would replace data that may be fine, so it
+      // stays off until a read works. Restart reads again.
+      const name = this.manifest?.name ?? this.name;
+      const cause = error instanceof Error ? error.message : String(error);
+      this.listener.crashed(
+        `Couldn't read ${name}'s saved data (${cause}). It's kept as it is, and ${name} stays off so nothing is saved over it. Restart to try again.`,
+      );
+      return;
+    }
     // Stopped, or started again, while the saved data loaded.
     if (this.waiting !== waiting) return;
     this.waiting = null;
@@ -55,7 +72,7 @@ export class PluginHost {
     worker.onerror = (error) => {
       error.preventDefault();
       this.stop();
-      this.listener.crashed(`${this.manifest?.name ?? this.id} stopped responding and was turned off.`);
+      this.listener.crashed(`${this.manifest?.name ?? this.name} stopped responding and was turned off.`);
     };
     this.post({ type: "start", saved, atMs: Date.now(), capture: this.capture });
     for (const message of waiting) this.post(message);
@@ -102,7 +119,7 @@ export class PluginHost {
         break;
       case "save":
         this.host.storageSet(this.id, message.data).catch((error: unknown) => {
-          this.listener.notice(`Couldn't save ${this.manifest?.name ?? this.id}'s data: ${String(error)}`);
+          this.listener.notice(`Couldn't save ${this.manifest?.name ?? this.name}'s data: ${String(error)}`);
         });
         break;
       case "notice":
