@@ -366,3 +366,46 @@ fn show_error_box(message: &str) {
 // macOS and Linux keep stderr and the log file; a WebView failure there is rare.
 #[cfg(not(windows))]
 fn show_error_box(_message: &str) {}
+
+#[cfg(test)]
+mod tests {
+    /// The names inside `generate_handler![...]`.
+    fn handlers(main: &str) -> Vec<String> {
+        let start =
+            main.find("generate_handler![").expect("the handler list") + "generate_handler![".len();
+        let end = start + main[start..].find(']').expect("its end");
+        main[start..end]
+            .split(',')
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
+    // A command the windows aren't allowed to call is refused at run time, which no browser test
+    // sees: the panel's tests run against a stand-in host. Fails if a command registered here is
+    // missing from build.rs's list or from every window's capabilities.
+    #[test]
+    fn every_command_is_allowed_for_some_window() {
+        let main = include_str!("main.rs");
+        let build = include_str!("../build.rs");
+        let capabilities = [
+            include_str!("../capabilities/default.json"),
+            include_str!("../capabilities/hud.json"),
+            include_str!("../capabilities/chat.json"),
+        ]
+        .concat();
+        let commands = handlers(main);
+        assert!(commands.len() > 5, "{commands:?}");
+        for command in commands {
+            assert!(
+                build.contains(&format!("\"{command}\"")),
+                "{command} isn't in build.rs"
+            );
+            let allow = format!("\"allow-{}\"", command.replace('_', "-"));
+            assert!(
+                capabilities.contains(&allow),
+                "no window may call {command}"
+            );
+        }
+    }
+}
