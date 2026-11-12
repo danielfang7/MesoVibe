@@ -309,6 +309,7 @@ function shell(initial: Settings): void {
 
   const tracker = new PluginHost(
     "session-tracker",
+    "Session Tracker",
     host,
     {
       render: () => {

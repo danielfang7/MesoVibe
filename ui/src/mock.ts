@@ -3,7 +3,8 @@
 // `safe`, `levelup`, and `moved` (run from a disk image, where "Open with MapleStory Classic"
 // can't be turned on),
 // `loginfail` (the OS refuses the login item), `update` (MesoVibe 0.2.0 downloaded and ready:
-// Restart to update) and `updatefail` (GitHub couldn't be reached; Check now then finds nothing).
+// Restart to update), `updatefail` (GitHub couldn't be reached; Check now then finds nothing)
+// and `unreadable` (the Session Tracker's saved data can't be opened the first time it's read).
 // The mini-HUD page (hud.html) takes `grind`, `learning` and `blocked`; the chat overlay page
 // (chat.html) takes `grind`. During play, whisper, party and friend lines arrive every few
 // seconds, drawn here as pictures the way the host hands them over.
@@ -103,6 +104,9 @@ export function mockHost(scenario: string): Host {
   const statusHandlers: ((status: Status) => void)[] = [];
   const eventHandlers: ((event: GameEvent, atMs: number) => void)[] = [];
   const stored = new Map<string, unknown>();
+  /** Plugin reads and saves, for the panel tests (`window.__mockStorage`). */
+  const storage = { reads: 0, saves: 0 };
+  (window as unknown as { __mockStorage: typeof storage }).__mockStorage = storage;
   const started = Date.now();
   let exp = scenario === "levelup" ? NEEDED - 400 : 230_000;
   let level = 42;
@@ -183,8 +187,15 @@ export function mockHost(scenario: string): Host {
     retry: async () => {},
     watch: async () => {},
     openPrivacySettings: async () => {},
-    storageGet: async (plugin) => stored.get(plugin) ?? null,
-    storageSet: async (plugin, value) => void stored.set(plugin, value),
+    storageGet: async (plugin) => {
+      // Like a file another program holds open: the first read fails, a later one works.
+      if (scenario === "unreadable" && storage.reads++ === 0) throw new Error("Access is denied. (os error 5)");
+      return stored.get(plugin) ?? null;
+    },
+    storageSet: async (plugin, value) => {
+      storage.saves++;
+      stored.set(plugin, value);
+    },
     setDisplay: async ({ dock, miniHud, corner }) => (settings = { ...settings, dock, miniHud, miniHudCorner: corner }),
     shareSummary: async () => {},
     onStatus: async (handler) => statusHandlers.push(handler),
