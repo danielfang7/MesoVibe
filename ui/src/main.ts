@@ -156,10 +156,9 @@ function statusLine(panel: Panel): { text: string; tone: "live" | "idle" | "warn
     case "capturing":
       break;
   }
-  // Dark for a moment is a map change's fade. Dark for long, MesoVibe isn't seeing the picture.
-  if (status.unreadable === "screen_dark" && panel.longDark) {
-    return { text: "Can't see the EXP bar: the game has been black for a while. In Full Screen, try windowed.", tone: "warn" };
-  }
+  // Dark for a moment is a map change's fade. Dark for long, MesoVibe isn't seeing the HUD. The
+  // watch keeps a dark spell through ticks that brought no new frame, which say nothing either way.
+  if (panel.longDark) return { text: "Can't see the EXP bar. If you play in Full Screen, try windowed.", tone: "warn" };
   switch (status.unreadable) {
     case "learning":
     case "not_calibrated":

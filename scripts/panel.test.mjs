@@ -358,7 +358,7 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
   await t.test("a screen that stays black says the EXP bar can't be seen", async () => {
     const page = await openPage(devtools, at("dark"));
     await page.until(
-      `document.querySelector(".status-text")?.textContent.startsWith("Can't see the EXP bar: the game has been black")`,
+      `document.querySelector(".status-text")?.textContent === "Can't see the EXP bar. If you play in Full Screen, try windowed."`,
       "a long dark spell",
     );
     assert.deepEqual(page.errors, []);

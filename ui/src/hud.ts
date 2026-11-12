@@ -39,6 +39,8 @@ function problem(status: Status | null, longDark: boolean): { text: string; tone
     case "capturing":
       break;
   }
+  // Kept through ticks that brought no new frame, which say nothing either way (dark.ts).
+  if (longDark) return { text: "Can't see the EXP bar", tone: "warn" };
   switch (status.unreadable) {
     case "learning":
     case "not_calibrated":
@@ -48,8 +50,6 @@ function problem(status: Status | null, longDark: boolean): { text: string; tone
     case "unknown_glyph":
     case "garbled":
       return { text: "Can't see the EXP bar", tone: "warn" };
-    case "screen_dark":
-      return longDark ? { text: "Can't see the EXP bar", tone: "warn" } : null;
     case "unsupported_size":
     case "unsupported_scale":
       return { text: "Can't read this game size", tone: "warn" };
