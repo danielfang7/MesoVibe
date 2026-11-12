@@ -157,6 +157,9 @@ const KNOWLEDGE_HEADER: &str = "mesovibe notices 1";
 /// EXP lines in a row that letters kept from an earlier session can't read before the reader
 /// drops them and learns again. Only a game update that redrew the font should get there.
 const RESTORE_PATIENCE: usize = 3;
+/// EXP lines in a row whose letters clash with those being learned before the reader drops them
+/// and learns again.
+const CLASH_PATIENCE: usize = 3;
 
 /// The inventory tab a picked-up item went to, as the notice names it. In events it's the tab's
 /// name as the game writes it ("Equip", "Use", "Setup", "Etc" or "Cash").
@@ -1018,6 +1021,8 @@ pub struct NoticeReader {
     /// no EXP line has checked against the HUD yet this session: how many EXP lines in a row they
     /// couldn't read.
     restored: Option<usize>,
+    /// EXP lines in a row whose letters clashed with those being learned.
+    clashes: usize,
 }
 
 impl Default for NoticeReader {
@@ -1047,6 +1052,7 @@ impl NoticeReader {
             misses: 0,
             confirmed: false,
             restored: None,
+            clashes: 0,
         }
     }
 
@@ -1162,6 +1168,18 @@ impl NoticeReader {
             notices,
             missed,
             confirmed: self.confirmed,
+        }
+    }
+
+    /// For when the game's picture changed size or scale: the player switched between windowed
+    /// and Full Screen, or picked another size, and the letters may come out differently.
+    /// Confirmed letters are checked again the way kept ones are at the start of a session: after
+    /// a few lines shaped like EXP lines that they can't read, they're dropped and learned again.
+    /// Letters still being learned start over.
+    pub fn recheck(&mut self) {
+        match self.confirmed {
+            true => self.restored = self.restored.or(Some(0)),
+            false => self.forget_letters(),
         }
     }
 
@@ -1343,6 +1361,7 @@ impl NoticeReader {
     fn read(&mut self, cut: &Cut, arrived: bool) -> (Read, bool) {
         if arrived {
             self.check_restored(cut);
+            self.check_learning(cut);
         }
         if self.atlas.is_empty() {
             // Before any letter is known, a line shaped like an EXP line waits for the HUD to
@@ -1558,14 +1577,40 @@ impl NoticeReader {
             true => Some(0),
             false if strikes + 1 < RESTORE_PATIENCE => Some(strikes + 1),
             false => {
-                self.atlas = Atlas::default();
+                self.forget_letters();
                 self.confirmed = false;
-                self.checks = 0;
-                self.misses = 0;
-                self.window = Window::default();
                 None
             }
         };
+    }
+
+    /// Checks letters still being learned against a line shaped like an EXP line. Letters learned
+    /// from a line spoiled by something behind it, or cut a row off, clash with the phrase's
+    /// letters in the lines that follow, and then no line reads as an EXP line to show them wrong:
+    /// the reader would learn nothing more until the app restarts. After [`CLASH_PATIENCE`] such
+    /// lines in a row, it drops them and learns again.
+    fn check_learning(&mut self, cut: &Cut) {
+        if self.confirmed || self.atlas.is_empty() {
+            return;
+        }
+        let Some(fit) = fit_amount(cut, EXP_PHRASE).filter(|_| !cut.yellow) else {
+            return;
+        };
+        match agreement(&self.atlas, &fit.fixed) {
+            Some(_) => self.clashes = 0,
+            None if self.clashes + 1 < CLASH_PATIENCE => self.clashes += 1,
+            None => self.forget_letters(),
+        }
+    }
+
+    /// Starts learning the letters over, with nothing counted for or against them.
+    fn forget_letters(&mut self) {
+        self.atlas = Atlas::default();
+        self.shaped.clear();
+        self.checks = 0;
+        self.misses = 0;
+        self.clashes = 0;
+        self.window = Window::default();
     }
 
     /// Learns the letters of a line that splits exactly into one of the game's phrases, when the
@@ -1842,8 +1887,7 @@ impl NoticeReader {
             self.checks = 0;
             self.misses += 1;
             if self.misses >= FORGET_AFTER {
-                self.atlas = Atlas::default();
-                self.misses = 0;
+                self.forget_letters();
             }
         }
         None
@@ -1883,9 +1927,9 @@ fn newer_than(before: &[Slot], now: &[Slot]) -> usize {
 }
 
 /// How many of a game area's bottom rows the reader looks at when the area is `height` game
-/// pixels tall, in game rows.
-pub fn rows_needed(height: u32) -> u32 {
-    unstretch::rows_for(height, NOTICE_ROWS)
+/// pixels tall and scaled up from a picture `source` lines tall ([`Frame::source`]), in game rows.
+pub fn rows_needed(height: u32, source: u32) -> u32 {
+    unstretch::rows_for(height, source, NOTICE_ROWS)
 }
 
 #[cfg(test)]
@@ -2715,6 +2759,103 @@ mod tests {
             assert!(read.iter().all(|r| r.missed.is_none()), "{read:?}");
             assert_eq!(reader.shift, 0, "a row off by {off}");
         }
+    }
+
+    // Letters kept from an earlier session meet a stack that sits a row off: they must not be
+    // dropped for lines they can't read there. Fails if the reader forgets them and has to learn
+    // everything again, which is how a Mac ended up learning, stuck, for the rest of a session.
+    #[test]
+    fn kept_letters_a_row_off_are_kept_and_read() {
+        let kept = confirmed_reader(&mut Game::new(Scene::Rock))
+            .knowledge()
+            .unwrap();
+        for off in [1, -1] {
+            let mut reader = NoticeReader::from_knowledge(&kept).unwrap();
+            reader.shift = off;
+            let mut game = Game::new(Scene::Rock);
+            let read = run(
+                &mut game,
+                &mut reader,
+                [learning(&[21, 43, 60]), vec![one(&mesos("85"), 0)]].concat(),
+            );
+            assert!(reader.confirmed(), "kept a row off by {off}");
+            let now = reader.knowledge().unwrap();
+            assert!(
+                kept.lines().all(|line| now.lines().any(|l| l == line)),
+                "the kept letters are still there, a row off by {off}"
+            );
+            assert!(
+                notices(&read).contains(&Notice::Mesos {
+                    amount: 85,
+                    shaped: false
+                }),
+                "a row off by {off}: {read:?}"
+            );
+        }
+    }
+
+    // Letters learned early from lines that don't look like the game's (spoiled by something
+    // behind them, or cut a row off) clash with every EXP line after. Fails if the reader keeps
+    // them and learns nothing more for the rest of the session, as it did live on a Mac until the
+    // app restarted.
+    #[test]
+    fn letters_learned_wrong_are_dropped_and_learned_again() {
+        for wrong_lines in 1..=3 {
+            let mut reader = NoticeReader::new();
+            let mut spoiled = Game::new(Scene::Rock).redrawn();
+            run(
+                &mut spoiled,
+                &mut reader,
+                learning(&EVERY_DIGIT[..wrong_lines]),
+            );
+            assert!(!reader.confirmed() && !reader.atlas.is_empty());
+            let mut game = Game::new(Scene::Rock);
+            let amounts: Vec<u64> = EVERY_DIGIT.iter().chain(&EVERY_DIGIT).copied().collect();
+            let read = run(&mut game, &mut reader, learning(&amounts));
+            assert!(reader.confirmed(), "after {wrong_lines} wrong lines");
+            assert_eq!(
+                notices(&run(&mut game, &mut reader, vec![one(&mesos("70"), 0)])),
+                [Notice::Mesos {
+                    amount: 70,
+                    shaped: false
+                }],
+                "after {wrong_lines} wrong lines: {read:?}"
+            );
+        }
+    }
+
+    // Switching size can draw the pickup letters differently. Fails if letters confirmed at the
+    // old size keep the reader from learning the new ones, or if a recheck where they still fit
+    // stops it counting mesos.
+    #[test]
+    fn letters_learned_at_one_size_are_learned_again_after_a_switch() {
+        let twice: Vec<u64> = EVERY_DIGIT.iter().chain(&EVERY_DIGIT).copied().collect();
+        let mut reader = NoticeReader::new();
+        let mut game = Game::new(Scene::Rock);
+        run(&mut game, &mut reader, learning(&twice));
+        assert!(reader.confirmed());
+        let mut kept = reader.clone();
+        let seventy = || {
+            vec![Notice::Mesos {
+                amount: 70,
+                shaped: false,
+            }]
+        };
+
+        reader.recheck();
+        let mut switched = Game::new(Scene::Rock).redrawn();
+        run(&mut switched, &mut reader, learning(&twice));
+        assert!(reader.confirmed(), "learned again at the new size");
+        let read = run(&mut switched, &mut reader, vec![one(&mesos("70"), 0)]);
+        assert_eq!(notices(&read), seventy());
+
+        kept.recheck();
+        let read = run(&mut game, &mut kept, vec![one(&mesos("70"), 0)]);
+        assert_eq!(
+            notices(&read),
+            seventy(),
+            "letters that still fit keep reading"
+        );
     }
 
     /// A reader that learned only the digits 0, 1, 2, 3, 4 and 6 from EXP lines, with the lines

@@ -1,5 +1,7 @@
 //! One captured frame: the game's drawing area only, with the title bar and borders cropped.
 
+use crate::unstretch::NATIVE_HEIGHT;
+
 /// A view of one captured frame as 8-bit BGRA rows, the layout Windows.Graphics.Capture and
 /// ScreenCaptureKit deliver. Coordinates are the game's own pixels: (0, 0) is the top-left
 /// corner of its drawing area.
@@ -12,6 +14,10 @@
 /// pixel as a 2x2 block of screen pixels, and a capture holds those pixels as they are. Sizes and
 /// coordinates are then in captured pixels, and the readers undo the scale first
 /// ([`crate::unstretch::unscale`]).
+///
+/// Above the game's own picture size, a game area is a smaller picture the game scaled up to fill
+/// it, 768 lines tall unless the frame declares another height ([`Frame::with_source`]): Full
+/// Screen scales the size the player chose, 720 lines at 1280x720.
 #[derive(Debug, Clone, Copy)]
 pub struct Frame<'a> {
     width: u32,
@@ -22,6 +28,8 @@ pub struct Frame<'a> {
     bgra: &'a [u8],
     /// Captured pixels per game pixel, each way: 1, or a Mac display's backing scale.
     scale: u32,
+    /// How many lines tall the picture is that the game scales up to fill a taller game area.
+    source: u32,
 }
 
 impl<'a> Frame<'a> {
@@ -56,6 +64,7 @@ impl<'a> Frame<'a> {
             stride,
             bgra,
             scale: 1,
+            source: NATIVE_HEIGHT,
         })
     }
 
@@ -69,6 +78,21 @@ impl<'a> Frame<'a> {
     /// Captured pixels per game pixel, each way: 1 unless the frame declared a backing scale.
     pub fn scale(&self) -> u32 {
         self.scale
+    }
+
+    /// The same pixels, declared as a game area that, above `lines` game rows, is a picture
+    /// `lines` tall the game scaled up to fill it. Up to `lines` rows, it's the game's own pixels.
+    pub fn with_source(self, lines: u32) -> Self {
+        Frame {
+            source: lines,
+            ..self
+        }
+    }
+
+    /// How many lines tall the picture is that the game scales up to fill a taller game area: 768
+    /// unless the frame declared another height.
+    pub fn source(&self) -> u32 {
+        self.source
     }
 
     /// The same frame holding only its bottom `rows` rows (or all it holds, if fewer).
@@ -114,6 +138,7 @@ impl<'a> Frame<'a> {
             self.bgra.get(skip..)?,
         )?
         .with_scale(self.scale)
+        .map(|frame| frame.with_source(self.source))
     }
 
     pub fn width(&self) -> u32 {

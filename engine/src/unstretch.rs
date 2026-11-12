@@ -10,7 +10,9 @@
 //! **The stretch ([`bottom_rows`]).**
 //! Up to 768 lines tall the game draws at its own pixel size. Above that it draws a 768-line
 //! picture and stretches it to fill the game area with bilinear filtering: a 1228x768 picture at
-//! 1920x1200, and 1366x768 at 2560x1440 and in Full Screen there. A bilinear stretch is linear
+//! 1920x1200, and 1366x768 at 2560x1440 and in Full Screen there. Full Screen scales the size the
+//! player chose, so at 1280x720 and 800x600 the picture is 720 or 600 lines tall: a frame says
+//! which ([`Frame::source`]), and [`sources`] lists what a game area may be scaled from. A bilinear stretch is linear
 //! and its geometry is known, so least squares undoes it. On recorded captures the recovered HUD
 //! is within 1.2 (out of 255) of the same HUD at 1x, and every HUD glyph comes out exactly as it
 //! is at 1x. So the same glyph shapes, learned once, read every size.
@@ -32,16 +34,44 @@ const GUARD_ROWS: usize = 2;
 /// kept ones as the full-width recovery has them, to the byte.
 const GUARD_COLUMNS: usize = 32;
 
-/// The width of the picture the game stretches to fill a game area taller than 768 lines: the
-/// nearest even width with the same shape, which keeps the centered HUD on whole pixels.
-/// Measured: 1228 at 1920x1200 (1228.8 by shape), 1366 at 2560x1440 (1365.3).
-pub fn picture_width(width: u32, height: u32) -> u32 {
+/// The width of the picture `source` lines tall that the game stretches to fill a game area
+/// `width` x `height`: the nearest even width with the same shape, which keeps the centered HUD
+/// on whole pixels. Measured: 1228 at 1920x1200 (1228.8 by shape), 1366 at 2560x1440 (1365.3),
+/// both 768 lines; 1280 for 720 lines in a 1512x850 Full Screen picture.
+pub fn picture_width(width: u32, height: u32, source: u32) -> u32 {
     if height == 0 {
         return 0;
     }
-    let half_width = (u64::from(width) * u64::from(NATIVE_HEIGHT / 2) + u64::from(height / 2))
-        / u64::from(height);
+    let half_width =
+        (u64::from(width) * u64::from(source / 2) + u64::from(height / 2)) / u64::from(height);
     (2 * half_width) as u32
+}
+
+/// The game's sizes under 768 lines that Full Screen scales up as they are, so a game area may be
+/// a picture of that size: (width, lines).
+const SMALL_SIZES: [(u32, u32); 2] = [(1280, 720), (800, 600)];
+
+/// How far, in pixels, a picture may be narrower than one of [`SMALL_SIZES`] for a game area to
+/// be that size scaled up: the scaled picture's sides are rounded to whole pixels.
+const SIZE_SLACK: u32 = 2;
+
+/// The heights of the pictures a game area `width` x `height` (game pixels) may be scaled up
+/// from, the usual first: 768 lines whenever it's taller than that (every larger size draws a
+/// 768-line picture, of any width), and each of [`SMALL_SIZES`] that it's taller than and at least
+/// as wide as, by shape. A wider area is that size between black bars at its sides, which Full
+/// Screen leaves for 4:3 sizes on a wider display. They're centered and the scale is the same
+/// both ways, so the area reads as a wider picture with black at its edges.
+pub fn sources(width: u32, height: u32) -> Vec<u32> {
+    let mut found = Vec::new();
+    if height > NATIVE_HEIGHT {
+        found.push(NATIVE_HEIGHT);
+    }
+    for (size_width, lines) in SMALL_SIZES {
+        if height > lines && picture_width(width, height, lines) + SIZE_SLACK >= size_width {
+            found.push(lines);
+        }
+    }
+    found
 }
 
 /// Pixels owned in the layout [`Frame`] reads: rows `first_row..height` of a picture.
@@ -51,6 +81,8 @@ pub struct Picture {
     height: u32,
     first_row: u32,
     bgra: Vec<u8>,
+    /// What the frame it came from declared ([`Frame::source`]).
+    source: u32,
 }
 
 impl Picture {
@@ -63,6 +95,7 @@ impl Picture {
             &self.bgra,
         )
         .expect("a picture's buffer fits its size")
+        .with_source(self.source)
     }
 }
 
@@ -102,6 +135,7 @@ fn unscale_found_in(frame: &Frame, probe: &Frame) -> Option<Picture> {
         height,
         first_row,
         bgra,
+        source: frame.source(),
     })
 }
 
@@ -163,41 +197,37 @@ fn phase(frame: &Frame, vertical: bool) -> Option<u32> {
     })
 }
 
-/// The vertical inverse that recovers the bottom `rows` 1x rows of a frame `height` tall.
-fn vertical(height: u32, rows: u32) -> Option<Inverse> {
-    if height <= NATIVE_HEIGHT || rows == 0 || rows > NATIVE_HEIGHT {
+/// The vertical inverse that recovers the bottom `rows` 1x rows of a frame `height` tall that
+/// stretches a picture `source` lines tall.
+fn vertical(height: u32, source: u32, rows: u32) -> Option<Inverse> {
+    if height <= source || rows == 0 || rows > source {
         return None;
     }
-    let first_row = (NATIVE_HEIGHT - rows) as usize;
-    Inverse::new(
-        height as usize,
-        NATIVE_HEIGHT as usize,
-        first_row,
-        GUARD_ROWS,
-    )
+    let first_row = (source - rows) as usize;
+    Inverse::new(height as usize, source as usize, first_row, GUARD_ROWS)
 }
 
 /// How many of a stretched frame's bottom rows [`bottom_rows`] reads to recover `rows` 1x rows:
-/// what a capture backend must read back. `None` when a frame `height` tall isn't stretched, or
-/// `rows` is 0 or more than 768.
-pub fn rows_needed(height: u32, rows: u32) -> Option<u32> {
-    let first = vertical(height, rows)?.taps.first()?.0;
+/// what a capture backend must read back. `None` when a frame `height` tall isn't stretched from
+/// `source` lines, or `rows` is 0 or more than `source`.
+pub fn rows_needed(height: u32, source: u32, rows: u32) -> Option<u32> {
+    let first = vertical(height, source, rows)?.taps.first()?.0;
     Some(height - first as u32)
 }
 
 /// The bottom `rows` rows of the 1x picture behind a stretched frame, at the picture's full
-/// width, as the bottom strip of that 768-line picture (rows `768 - rows` to 768), so a reader
-/// measures up from the game's own height, as it does in an unscaled picture. `None` when the
-/// frame isn't stretched (768 lines or fewer), when `rows` is 0 or more than 768, when the
-/// picture would be narrower than one pixel, or when the frame doesn't hold the bottom
-/// [`rows_needed`] rows the recovery reads (all it reads).
+/// width, as the bottom strip of that picture (rows `source - rows` to `source`, where `source`
+/// is [`Frame::source`]), so a reader measures up from the game's own height, as it does in an
+/// unscaled picture. `None` when the frame isn't stretched (`source` lines or fewer), when `rows`
+/// is 0 or more than `source`, when the picture would be narrower than one pixel, or when the
+/// frame doesn't hold the bottom [`rows_needed`] rows the recovery reads (all it reads).
 pub fn bottom_rows(frame: &Frame, rows: u32) -> Option<Picture> {
-    let (width, height) = (frame.width(), frame.height());
-    let picture_width = picture_width(width, height);
+    let (width, height, source) = (frame.width(), frame.height(), frame.source());
+    let picture_width = picture_width(width, height, source);
     if picture_width == 0 {
         return None;
     }
-    let vertical = vertical(height, rows)?;
+    let vertical = vertical(height, source, rows)?;
     if vertical
         .taps
         .first()
@@ -235,9 +265,10 @@ pub fn bottom_rows(frame: &Frame, rows: u32) -> Option<Picture> {
     }
     Some(Picture {
         width: picture_width as u32,
-        height: NATIVE_HEIGHT,
-        first_row: NATIVE_HEIGHT - rows as u32,
+        height: source,
+        first_row: source - rows as u32,
         bgra,
+        source,
     })
 }
 
@@ -246,15 +277,15 @@ pub fn bottom_rows(frame: &Frame, rows: u32) -> Option<Picture> {
 /// black. It reads and solves only the frame columns those depend on, so it costs about
 /// `columns` over the picture's width of the full recovery. `None` as for [`bottom_rows`].
 pub fn bottom_right(frame: &Frame, rows: u32, columns: u32) -> Option<Picture> {
-    let (width, height) = (frame.width(), frame.height());
-    let picture_width = picture_width(width, height);
+    let (width, height, source) = (frame.width(), frame.height(), frame.source());
+    let picture_width = picture_width(width, height, source);
     if picture_width == 0 {
         return None;
     }
     if columns >= picture_width {
         return bottom_rows(frame, rows);
     }
-    let vertical = vertical(height, rows)?;
+    let vertical = vertical(height, source, rows)?;
     if vertical
         .taps
         .first()
@@ -302,25 +333,26 @@ pub fn bottom_right(frame: &Frame, rows: u32, columns: u32) -> Option<Picture> {
     }
     Some(Picture {
         width: picture_width as u32,
-        height: NATIVE_HEIGHT,
-        first_row: NATIVE_HEIGHT - rows as u32,
+        height: source,
+        first_row: source - rows as u32,
         bgra,
+        source,
     })
 }
 
 /// The top `rows` rows and left `columns` columns of the 1x picture behind a stretched frame:
 /// the game's top-left corner, where the minimap is, as a picture `columns` wide and `rows` tall.
 /// It reads and solves only the frame pixels those depend on. `None` when the frame isn't
-/// stretched (768 lines or fewer), doesn't hold its top rows, or `rows` or `columns` is 0 or more
-/// than the picture has.
+/// stretched ([`Frame::source`] lines or fewer), doesn't hold its top rows, or `rows` or
+/// `columns` is 0 or more than the picture has.
 pub fn top_left(frame: &Frame, rows: u32, columns: u32) -> Option<Picture> {
-    let (width, height) = (frame.width(), frame.height());
-    if frame.first_row() != 0 || height <= NATIVE_HEIGHT {
+    let (width, height, source) = (frame.width(), frame.height(), frame.source());
+    if frame.first_row() != 0 || height <= source {
         return None;
     }
-    let picture_width = picture_width(width, height) as usize;
+    let picture_width = picture_width(width, height, source) as usize;
     let (rows, columns) = (rows as usize, columns as usize);
-    let vertical = Inverse::leading(height as usize, NATIVE_HEIGHT as usize, rows, GUARD_COLUMNS)?;
+    let vertical = Inverse::leading(height as usize, source as usize, rows, GUARD_COLUMNS)?;
     let horizontal = Inverse::leading(width as usize, picture_width, columns, GUARD_COLUMNS)?;
     // The frame columns the horizontal solve reads: from the left edge to its last tap.
     let span = horizontal.taps.last()?.0 + 1;
@@ -353,6 +385,7 @@ pub fn top_left(frame: &Frame, rows: u32, columns: u32) -> Option<Picture> {
         height: rows as u32,
         first_row: 0,
         bgra,
+        source,
     })
 }
 
@@ -372,19 +405,20 @@ pub enum No1x {
 }
 
 /// How many of a game area's bottom rows hold the bottom `rows` rows of its 1x picture, in game
-/// rows: `rows` itself up to 768 lines, or the rows the stretch recovery reads above that. What a
-/// capture backend reads back for a reader that needs `rows` 1x rows.
-pub fn rows_for(height: u32, rows: u32) -> u32 {
-    if height <= NATIVE_HEIGHT {
+/// rows, when it's scaled up from a picture `source` lines tall: `rows` itself up to `source`
+/// lines, or the rows the stretch recovery reads above that. What a capture backend reads back
+/// for a reader that needs `rows` 1x rows.
+pub fn rows_for(height: u32, source: u32, rows: u32) -> u32 {
+    if height <= source {
         rows.min(height)
     } else {
-        rows_needed(height, rows).unwrap_or(height)
+        rows_needed(height, source, rows).unwrap_or(height)
     }
 }
 
 /// Calls `read` with the bottom `rows` rows of the frame's 1x picture: a frame that declares a
-/// backing scale is undone first; then it's the frame itself up to 768 lines, or else the rows
-/// recovered from the picture the game stretched. The bottom row of the picture `read` gets is
+/// backing scale is undone first; then it's the frame itself up to [`Frame::source`] lines, or
+/// else the rows recovered from the picture the game stretched. The bottom row of the picture `read` gets is
 /// the game area's bottom row, so a reader measures up from its height.
 pub fn with_bottom_1x<T>(
     frame: &Frame,
@@ -408,7 +442,8 @@ pub fn with_bottom_right_1x<T>(
 
 /// Calls `read` with the top-left `columns` x `rows` corner of the 1x picture of a frame that
 /// holds the whole game area: a frame that declares a backing scale is undone first; then it's the
-/// frame itself up to 768 lines (all of it, so a reader must stay in the corner it asked for), or
+/// frame itself up to [`Frame::source`] lines (all of it, so a reader must stay in the corner it
+/// asked for), or
 /// else the corner recovered from the picture the game stretched ([`top_left`]). `No1x::Rows`
 /// when the frame doesn't hold its top rows.
 pub fn with_top_left_1x<T>(
@@ -418,7 +453,7 @@ pub fn with_top_left_1x<T>(
     read: impl FnOnce(&Frame) -> T,
 ) -> Result<T, No1x> {
     let scale = frame.scale();
-    let corner = match scale > 1 && frame.height() / scale <= NATIVE_HEIGHT {
+    let corner = match scale > 1 && frame.height() / scale <= frame.source() {
         // Not stretched: the corner's own pixels are all a 1x read needs.
         true => frame.top_left(
             scaled_rows(columns, scale).min(frame.width()),
@@ -433,7 +468,7 @@ pub fn with_top_left_1x<T>(
         let picture = unscale_found_in(&corner, &probe).ok_or(No1x::Scale(scale))?;
         return with_top_left_1x(&picture.frame(), rows, columns, read);
     }
-    if frame.height() <= NATIVE_HEIGHT {
+    if frame.height() <= frame.source() {
         return Ok(read(frame));
     }
     let picture = top_left(frame, rows, columns).ok_or(No1x::Stretch)?;
@@ -446,16 +481,16 @@ fn with_1x<T>(
     columns: Option<u32>,
     read: impl FnOnce(&Frame) -> T,
 ) -> Result<T, No1x> {
-    let scale = frame.scale();
+    let (scale, source) = (frame.scale(), frame.source());
     if scale > 1 {
-        let held = scaled_rows(rows_for(frame.height() / scale, rows), scale);
+        let held = scaled_rows(rows_for(frame.height() / scale, source, rows), scale);
         let picture = unscale(&frame.bottom_rows(held)).ok_or(No1x::Scale(scale))?;
         return with_1x(&picture.frame(), rows, columns, read);
     }
-    if frame.first_row() + rows_for(frame.height(), rows) > frame.height() {
+    if frame.first_row() + rows_for(frame.height(), source, rows) > frame.height() {
         return Err(No1x::Rows);
     }
-    if frame.height() <= NATIVE_HEIGHT {
+    if frame.height() <= source {
         return Ok(read(frame));
     }
     let picture = match columns {
@@ -576,8 +611,9 @@ impl Inverse {
 }
 
 /// Stretches a picture the way the game does, for tests: bilinear, with the same alignment and
-/// edge clamping as [`Inverse`], rounded to 8 bits. `picture` is RGB rows of `width` pixels and
-/// 768 rows; only the stretched rows from `from_row` down are drawn, the rest stay black.
+/// edge clamping as [`Inverse`], rounded to 8 bits. `picture` is RGB rows of `width` pixels (768
+/// of them for the game's larger sizes); only the stretched rows from `from_row` down are drawn,
+/// the rest stay black.
 #[cfg(test)]
 pub(crate) fn stretch(
     picture: &[[u8; 3]],
@@ -586,7 +622,8 @@ pub(crate) fn stretch(
     to_height: u32,
     from_row: u32,
 ) -> Vec<u8> {
-    let (w, h) = (width as usize, NATIVE_HEIGHT as usize);
+    let w = width as usize;
+    let h = picture.len() / w;
     assert_eq!(picture.len(), w * h);
     let sample = |n: usize, to: u32, j: u32| {
         let t = (f64::from(j) + 0.5) * n as f64 / f64::from(to) - 0.5;
@@ -618,17 +655,57 @@ mod tests {
 
     #[test]
     fn picture_width_is_the_nearest_even_width_of_the_same_shape() {
-        assert_eq!(picture_width(1920, 1200), 1228);
-        assert_eq!(picture_width(2560, 1440), 1366);
-        assert_eq!(picture_width(1920, 1080), 1366);
-        assert_eq!(picture_width(3840, 2160), 1366);
-        assert_eq!(picture_width(2560, 1600), 1228);
-        assert_eq!(picture_width(10, 0), 0);
+        assert_eq!(picture_width(1920, 1200, NATIVE_HEIGHT), 1228);
+        assert_eq!(picture_width(2560, 1440, NATIVE_HEIGHT), 1366);
+        assert_eq!(picture_width(1920, 1080, NATIVE_HEIGHT), 1366);
+        assert_eq!(picture_width(3840, 2160, NATIVE_HEIGHT), 1366);
+        assert_eq!(picture_width(2560, 1600, NATIVE_HEIGHT), 1228);
+        assert_eq!(picture_width(10, 0, NATIVE_HEIGHT), 0);
+        // Full Screen at 1280x720 on a 14-inch MacBook Pro, and on a 1080p display.
+        assert_eq!(picture_width(1512, 850, 720), 1280);
+        assert_eq!(picture_width(1920, 1080, 720), 1280);
+        assert_eq!(picture_width(1308, 982, 600), 800);
+    }
+
+    // Full Screen scales the size the player chose, so a game area can be a 1280x720 or 800x600
+    // picture as well as a 768-line one, with black bars at its sides when the display is wider.
+    // Fails if one of those is missed, or offered for an area narrower than its shape or no
+    // taller than it.
+    #[test]
+    fn a_game_area_may_be_scaled_from_the_game_sizes_it_can_hold() {
+        assert_eq!(
+            sources(1512, 850),
+            [768, 720, 600],
+            "16:9 Full Screen on a MacBook"
+        );
+        assert_eq!(sources(2560, 1440), [768, 720, 600]);
+        assert_eq!(sources(1308, 982), [768, 600], "4:3 alone");
+        assert_eq!(
+            sources(1512, 982),
+            [768, 600],
+            "4:3 between side bars on a MacBook"
+        );
+        assert_eq!(sources(1024, 1000), [768], "narrower than 800x600's shape");
+        assert_eq!(
+            sources(1366, 768),
+            [720, 600],
+            "1280x720 scaled to a 1366x768 display"
+        );
+        assert_eq!(sources(1280, 720), [600]);
+        assert_eq!(
+            sources(800, 600),
+            Vec::<u32>::new(),
+            "the game's own pixels"
+        );
     }
 
     /// A busy 1x picture: hard one-pixel edges in every color, like HUD text.
     fn busy_picture(width: u32) -> Vec<[u8; 3]> {
-        (0..NATIVE_HEIGHT)
+        busy_picture_of(width, NATIVE_HEIGHT)
+    }
+
+    fn busy_picture_of(width: u32, lines: u32) -> Vec<[u8; 3]> {
+        (0..lines)
             .flat_map(|y| {
                 (0..width).map(move |x| {
                     let v = |k: u32| ((x * 7 + y * 13 + k * 29 + (x ^ y) * 3) % 251) as u8;
@@ -642,32 +719,48 @@ mod tests {
             .collect()
     }
 
+    // Larger sizes stretch a 768-line picture; Full Screen at 1280x720 and 800x600 scales a 720-
+    // and a 600-line one. Fails if the recovery is off for any of them, reads rows it didn't ask
+    // the capture for, or hands readers a picture whose bottom isn't the game's own bottom row.
     #[test]
     fn recovers_the_1x_rows_of_a_stretched_picture() {
-        for (width, height) in [(1920, 1200), (2560, 1440), (1920, 1080)] {
-            let narrow = picture_width(width, height);
-            let picture = busy_picture(narrow);
+        for (width, height, source) in [
+            (1920, 1200, NATIVE_HEIGHT),
+            (2560, 1440, NATIVE_HEIGHT),
+            (1920, 1080, NATIVE_HEIGHT),
+            (1512, 850, 720),
+            (1920, 1080, 720),
+            (1308, 982, 600),
+        ] {
+            let narrow = picture_width(width, height, source);
+            let picture = busy_picture_of(narrow, source);
             let rows = 32;
-            let needed = rows_needed(height, rows).unwrap();
+            let needed = rows_needed(height, source, rows).unwrap();
             // The capture tool's 40-row strips (scaled with the stretch) hold enough rows.
-            assert!(needed <= (40 * height).div_ceil(NATIVE_HEIGHT), "{needed}");
+            assert!(needed <= (40 * height).div_ceil(source), "{needed}");
             // Read back only the rows the recovery needs, as a capture backend does.
             let from_row = height - needed;
             let bgra = stretch(&picture, narrow, width, height, from_row);
             let stride = width as usize * 4;
             let strip = &bgra[from_row as usize * stride..];
-            let frame = Frame::bottom(width, height, from_row, stride, strip).unwrap();
+            let frame = Frame::bottom(width, height, from_row, stride, strip)
+                .unwrap()
+                .with_source(source);
             let short = Frame::bottom(width, height, from_row + 1, stride, &strip[stride..]);
-            assert_eq!(bottom_rows(&short.unwrap(), rows), None, "one row short");
+            assert_eq!(
+                bottom_rows(&short.unwrap().with_source(source), rows),
+                None,
+                "one row short"
+            );
             let recovered = bottom_rows(&frame, rows).unwrap();
             let recovered = recovered.frame();
-            // The bottom of the game's own 768-line picture, so readers measure up from there.
+            // The bottom of the game's own picture, so readers measure up from there.
             assert_eq!(
                 (recovered.width(), recovered.height(), recovered.first_row()),
-                (narrow, NATIVE_HEIGHT, NATIVE_HEIGHT - rows)
+                (narrow, source, source - rows)
             );
             let mut worst = 0;
-            for y in NATIVE_HEIGHT - rows..NATIVE_HEIGHT {
+            for y in source - rows..source {
                 for x in 0..narrow {
                     let truth = picture[(y * narrow + x) as usize];
                     let got = recovered.rgb(x, y);
@@ -685,10 +778,10 @@ mod tests {
     #[test]
     fn a_right_edge_window_matches_the_full_recovery_in_its_columns() {
         for (width, height) in [(1920, 1200), (2560, 1440), (1920, 1080)] {
-            let narrow = picture_width(width, height);
+            let narrow = picture_width(width, height, NATIVE_HEIGHT);
             let picture = busy_picture(narrow);
             let (rows, columns) = (40, 370);
-            let from_row = height - rows_needed(height, rows).unwrap();
+            let from_row = height - rows_needed(height, NATIVE_HEIGHT, rows).unwrap();
             let bgra = stretch(&picture, narrow, width, height, from_row);
             let stride = width as usize * 4;
             let frame = Frame::bottom(
@@ -730,7 +823,7 @@ mod tests {
     #[test]
     fn a_top_left_corner_matches_the_full_recovery() {
         for (width, height) in [(1920, 1200), (2560, 1440), (1920, 1080)] {
-            let narrow = picture_width(width, height);
+            let narrow = picture_width(width, height, NATIVE_HEIGHT);
             let picture = busy_picture(narrow);
             let (rows, columns) = (96, 512);
             let bgra = stretch(&picture, narrow, width, height, 0);
@@ -880,7 +973,7 @@ mod tests {
         assert!(bottom_rows(&frame, 0).is_none());
         assert!(bottom_rows(&frame, 769).is_none());
         assert!(bottom_rows(&frame, 32).is_some());
-        assert_eq!(rows_needed(768, 32), None);
-        assert_eq!(rows_needed(1080, 0), None);
+        assert_eq!(rows_needed(768, NATIVE_HEIGHT, 32), None);
+        assert_eq!(rows_needed(1080, NATIVE_HEIGHT, 0), None);
     }
 }

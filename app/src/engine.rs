@@ -275,7 +275,7 @@ fn tick(
         Some(Ok(reading)) => reading.place,
         _ => None,
     };
-    docker.follow(app, tick.window.as_ref(), chat_box);
+    docker.follow(app, tick.window.as_ref(), tick.source, chat_box);
     let game = match &tick.window {
         Some(window) => presence::Game::Present {
             placed: window.placement.is_some(),
