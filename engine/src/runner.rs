@@ -15,6 +15,10 @@
 //! engine assumes 768 until the EXP bar can't be read, then looks for the HUD at the game's other
 //! sizes of that shape and reads at the one where it shows ([`exp_bar::other_source`]).
 //!
+//! When the picture changes (its size, bars or scale), the HUD and the pickups may be drawn
+//! differently, so the readers check what they learned before against it, and learn again if it
+//! no longer fits.
+//!
 //! A grab that brought no new frame is stale: the window stopped drawing (a Mac reports a
 //! minimized window's last picture). It isn't read. After
 //! [`STALE_AFTER`] of them in a row the engine pauses, and it keeps checking for a new frame each
@@ -106,6 +110,9 @@ pub struct Runner<B> {
     /// How many lines tall the picture is that the game scales up to fill the game area: 768
     /// until the HUD shows another of the game's sizes.
     source: u32,
+    /// The game's picture as last read: the game area's size, the Full Screen bar, and the height
+    /// it's scaled up from. When it changes, the readers check what they learned against it.
+    picture: Option<(u32, u32, u32, u32)>,
 }
 
 impl<B: Backend> Runner<B> {
@@ -134,6 +141,7 @@ impl<B: Backend> Runner<B> {
             was_capturing: false,
             bar: 0,
             source: NATIVE_HEIGHT,
+            picture: None,
         }
     }
 
@@ -279,6 +287,14 @@ impl<B: Backend> Runner<B> {
                                 let frame = letterbox::inside(&frame, self.bar)
                                     .unwrap_or(frame)
                                     .with_source(self.source);
+                                // Another size or scale (windowed to Full Screen, or another size
+                                // in Full Screen) can draw the HUD and the pickups differently.
+                                let picture = (window.width, window.height, self.bar, self.source);
+                                if self.picture.is_some_and(|before| before != picture) {
+                                    self.exp.recheck();
+                                    self.notices.recheck();
+                                }
+                                self.picture = Some(picture);
                                 let reading = self.exp.observe(&frame);
                                 // Another of the game's sizes scaled up: read at it from the next
                                 // frame, which is grabbed with the rows it needs.

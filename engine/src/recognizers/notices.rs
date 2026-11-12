@@ -1165,6 +1165,23 @@ impl NoticeReader {
         }
     }
 
+    /// For when the game's picture changed size or scale: the player switched between windowed
+    /// and Full Screen, or picked another size, and the letters may come out differently.
+    /// Confirmed letters are checked again the way kept ones are at the start of a session: after
+    /// a few lines shaped like EXP lines that they can't read, they're dropped and learned again.
+    /// Letters still being learned start over.
+    pub fn recheck(&mut self) {
+        if self.confirmed {
+            self.restored = self.restored.or(Some(0));
+            return;
+        }
+        self.atlas = Atlas::default();
+        self.shaped.clear();
+        self.checks = 0;
+        self.misses = 0;
+        self.window = Window::default();
+    }
+
     /// Starts over for a game that was closed and started again, maybe with another character:
     /// nothing on screen carries over, and nothing could be picked up meanwhile. What was learned
     /// stays.

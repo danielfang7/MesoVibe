@@ -134,11 +134,14 @@ fn main() -> ExitCode {
     // The EXP bar digits learned over every run, for --warm.
     let warm = args.warm.then(|| {
         let mut hud = ExpBarReader::new();
+        let mut scene = Scene::default();
         for run in &args.runs {
-            let mut scene = Scene::default();
             for path in frames_of(run) {
                 if let Ok(image) = load(run, &path) {
                     let frame = scene.picture(image.frame());
+                    if scene.changed() {
+                        hud.recheck();
+                    }
                     let reading = hud.observe(&frame);
                     scene.follow(&frame, &reading);
                 }
@@ -152,6 +155,9 @@ fn main() -> ExitCode {
     let from_file = args.knowledge.is_some();
     let mut notices = args.knowledge.clone().unwrap_or_default();
     let mut timings: Vec<u128> = Vec::new();
+    // The Full Screen bar and picture size, carried from frame to frame as the engine does, and
+    // across runs, so runs at different sizes replay like one session that switched size.
+    let mut scene = Scene::default();
     for (i, run) in args.runs.iter().enumerate() {
         let name = run
             .file_name()
@@ -162,8 +168,6 @@ fn main() -> ExitCode {
             .and_then(|kept| kept.as_deref())
             .and_then(ExpBarReader::from_knowledge)
             .unwrap_or_default();
-        // The Full Screen bar and picture size, carried from frame to frame as the engine does.
-        let mut scene = Scene::default();
         if args.join {
             notices.reset();
         } else if i == 0 && from_file {
@@ -194,6 +198,10 @@ fn main() -> ExitCode {
                 }
             };
             let frame = scene.picture(image.frame());
+            if scene.changed() {
+                hud.recheck();
+                notices.recheck();
+            }
             let reading = hud.observe(&frame);
             scene.follow(&frame, &reading);
             // The game fades to black when the map changes, as the engine's runner sees it.

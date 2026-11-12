@@ -51,22 +51,23 @@ pub fn picture_width(width: u32, height: u32, source: u32) -> u32 {
 /// a picture of that size: (width, lines).
 const SMALL_SIZES: [(u32, u32); 2] = [(1280, 720), (800, 600)];
 
-/// How far, in pixels, a picture's width may be from one of [`SMALL_SIZES`] for a game area to be
-/// that size scaled up: the scaled picture's sides are rounded to whole pixels.
+/// How far, in pixels, a picture may be narrower than one of [`SMALL_SIZES`] for a game area to
+/// be that size scaled up: the scaled picture's sides are rounded to whole pixels.
 const SIZE_SLACK: u32 = 2;
 
 /// The heights of the pictures a game area `width` x `height` (game pixels) may be scaled up
 /// from, the usual first: 768 lines whenever it's taller than that (every larger size draws a
-/// 768-line picture, of any width), and each of [`SMALL_SIZES`] whose shape it has and that it's
-/// taller than.
+/// 768-line picture, of any width), and each of [`SMALL_SIZES`] that it's taller than and at least
+/// as wide as, by shape. A wider area is that size between black bars at its sides, which Full
+/// Screen leaves for 4:3 sizes on a wider display. They're centered and the scale is the same
+/// both ways, so the area reads as a wider picture with black at its edges.
 pub fn sources(width: u32, height: u32) -> Vec<u32> {
     let mut found = Vec::new();
     if height > NATIVE_HEIGHT {
         found.push(NATIVE_HEIGHT);
     }
     for (size_width, lines) in SMALL_SIZES {
-        if height > lines && picture_width(width, height, lines).abs_diff(size_width) <= SIZE_SLACK
-        {
+        if height > lines && picture_width(width, height, lines) + SIZE_SLACK >= size_width {
             found.push(lines);
         }
     }
@@ -667,29 +668,35 @@ mod tests {
     }
 
     // Full Screen scales the size the player chose, so a game area can be a 1280x720 or 800x600
-    // picture as well as a 768-line one. Fails if one of those is missed for an area of its shape,
-    // or offered for an area of another shape or one no taller than it.
+    // picture as well as a 768-line one, with black bars at its sides when the display is wider.
+    // Fails if one of those is missed, or offered for an area narrower than its shape or no
+    // taller than it.
     #[test]
-    fn a_game_area_may_be_scaled_from_the_game_sizes_of_its_shape() {
+    fn a_game_area_may_be_scaled_from_the_game_sizes_it_can_hold() {
         assert_eq!(
             sources(1512, 850),
-            [768, 720],
+            [768, 720, 600],
             "16:9 Full Screen on a MacBook"
         );
-        assert_eq!(sources(2560, 1440), [768, 720]);
-        assert_eq!(sources(1308, 982), [768, 600], "4:3 between side bars");
-        assert_eq!(sources(1920, 1200), [768], "16:10: a 768-line picture only");
+        assert_eq!(sources(2560, 1440), [768, 720, 600]);
+        assert_eq!(sources(1308, 982), [768, 600], "4:3 alone");
+        assert_eq!(
+            sources(1512, 982),
+            [768, 600],
+            "4:3 between side bars on a MacBook"
+        );
+        assert_eq!(sources(1024, 1000), [768], "narrower than 800x600's shape");
         assert_eq!(
             sources(1366, 768),
-            [720],
+            [720, 600],
             "1280x720 scaled to a 1366x768 display"
         );
+        assert_eq!(sources(1280, 720), [600]);
         assert_eq!(
-            sources(1280, 720),
+            sources(800, 600),
             Vec::<u32>::new(),
             "the game's own pixels"
         );
-        assert_eq!(sources(800, 600), Vec::<u32>::new());
     }
 
     /// A busy 1x picture: hard one-pixel edges in every color, like HUD text.

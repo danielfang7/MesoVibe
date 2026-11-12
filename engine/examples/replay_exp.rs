@@ -164,9 +164,10 @@ fn main() -> ExitCode {
     let (mut gate_frames, mut gate_read, mut gate_dark) = (0usize, 0usize, 0usize);
     // Microseconds `observe` took, by game area size (in game pixels) and scale.
     let mut timings: BTreeMap<(u32, u32, u32), Vec<u128>> = BTreeMap::new();
+    // Kept across runs, so runs at different sizes replay like one session that switched size.
+    let mut scene = Scene::default();
     for run in &args.runs {
         let mut previous: Option<ExpReading> = None;
-        let mut scene = Scene::default();
         let name = run
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -186,6 +187,9 @@ fn main() -> ExitCode {
                 }
             };
             let frame = scene.picture(image.frame());
+            if scene.changed() {
+                reader.recheck();
+            }
             let started = Instant::now();
             let result = reader.observe(&frame);
             timings

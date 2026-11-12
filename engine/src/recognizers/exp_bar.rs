@@ -549,6 +549,19 @@ impl ExpBarReader {
         Ok(reading)
     }
 
+    /// For when the game's picture changed size or scale: the player switched between windowed
+    /// and Full Screen, or picked another size, and the HUD's shapes may come out differently.
+    /// Shapes confirmed before are checked again the way saved ones are at the start of a session:
+    /// readings with them are unconfirmed until one fits the EXP table, and they're dropped and
+    /// learned again when the HUD is plainly there without the learned label, or when they keep
+    /// failing. Shapes still being learned start over.
+    pub fn recheck(&mut self) {
+        match self.learner.confirmed {
+            true => self.restored = self.restored.or(Some(0)),
+            false => *self = ExpBarReader::new(),
+        }
+    }
+
     /// Reads a frame with what's been learned so far, learning nothing.
     pub fn read(&self, frame: &Frame) -> Result<ExpReading, Unreadable> {
         at_1x(frame, |frame, nominal| {
@@ -1720,6 +1733,52 @@ mod tests {
         assert!(check(&relabelled, GRIND.len()) < GRIND.len());
     }
 
+    // Switching size can draw the HUD differently: on a Mac, Full Screen at another size blends
+    // the label and digits into other shapes. Fails if shapes learned this session keep a reader
+    // that can't find its label stuck for good (as players saw until they restarted), or if a
+    // recheck at a size where they still fit loses a reading.
+    #[test]
+    fn shapes_learned_at_one_size_are_learned_again_after_a_switch() {
+        let mut reader = ExpBarReader::new();
+        let hud = Hud::new();
+        for &exp in &GRIND {
+            let _ = reader.observe(&hud.draw_values(41, exp, pct_of(exp, NEEDED_41)).frame());
+        }
+        assert_eq!(reader.calibration(), Calibration::Confirmed);
+        let still = reader.clone();
+        let switched = Hud {
+            exp_font: Font::new(EXP_CHARS, 3),
+            label: 4,
+            ..Hud::new()
+        };
+        let frame = |hud: &Hud, exp: u64| hud.draw_values(41, exp, pct_of(exp, NEEDED_41));
+        // Without a recheck: never read again.
+        let mut stuck = reader.clone();
+        assert!(
+            GRIND
+                .iter()
+                .all(|&exp| stuck.observe(&frame(&switched, exp).frame()).is_err())
+        );
+        // With one: learned again from the next EXP values.
+        reader.recheck();
+        let read = GRIND
+            .iter()
+            .filter_map(|&exp| reader.observe(&frame(&switched, exp).frame()).ok())
+            .filter(|r| r.confirmed)
+            .last();
+        let last = *GRIND.last().unwrap();
+        assert_eq!(
+            read.map(|r| values(&r)),
+            Some((Some(41), last, pct_of(last, NEEDED_41)))
+        );
+        // Where the shapes still fit, the first reading after a recheck confirms them.
+        let mut kept = still;
+        kept.recheck();
+        let r = kept.observe(&frame(&hud, last).frame()).unwrap();
+        assert!(r.confirmed);
+        assert_eq!(kept.calibration(), Calibration::Confirmed);
+    }
+
     #[test]
     fn the_table_shows_readings_before_the_hud_alone_could() {
         let hud = Hud::new();
@@ -2151,6 +2210,20 @@ mod tests {
         }
         let usual = stretched(&hud.draw_typed(1366, 768, FIRST), 1512, 850);
         assert_eq!(hud_source(&usual.frame()), None, "1366x768 stays 768 lines");
+        // 800x600 between side bars on a 1512x982 display: the bars are centered, so the area
+        // reads as a wider 600-line picture with black at its edges.
+        let small = stretched(&hud.draw_typed(800, 600, FIRST), 1308, 982);
+        let mut barred = Canvas::new(1512, 982);
+        barred.fill(0, 0, 1512, 982, [0, 0, 0]);
+        for (y, row) in small.bgra.chunks(1308 * 4).enumerate() {
+            let at = (y * 1512 + 102) * 4;
+            barred.bgra[at..at + row.len()].copy_from_slice(row);
+        }
+        assert_eq!(hud_source(&barred.frame()), Some(600));
+        assert_eq!(
+            values(&reader.read(&barred.frame().with_source(600)).unwrap()),
+            expected
+        );
     }
 
     #[test]
