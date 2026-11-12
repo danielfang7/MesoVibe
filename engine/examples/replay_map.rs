@@ -19,7 +19,7 @@ use mesovibe_engine::recognizers::map_name::read;
 
 #[path = "common/capture_run.rs"]
 mod capture_run;
-use capture_run::{frames_of, load};
+use capture_run::{frames_of, load, picture};
 
 /// The picture with a character per pixel: `#` for letter, `+` for part letter.
 fn draw(picture: &NamePicture) -> String {
@@ -52,6 +52,8 @@ fn main() -> ExitCode {
         let mut maps: BTreeMap<String, (usize, String, NamePicture)> = BTreeMap::new();
         let mut unreadable: BTreeMap<String, usize> = BTreeMap::new();
         let frames = frames_of(run);
+        // The Full Screen bar last measured, carried from frame to frame as the engine does.
+        let mut bar = 0;
         for path in &frames {
             let label = path
                 .file_stem()
@@ -66,7 +68,7 @@ fn main() -> ExitCode {
                 }
             };
             let started = Instant::now();
-            let result = read(&image.frame());
+            let result = read(&picture(image.frame(), &mut bar));
             timings.push(started.elapsed().as_micros());
             match result {
                 Ok(name) => maps.entry(name.key).or_insert((0, label, name.picture)).0 += 1,

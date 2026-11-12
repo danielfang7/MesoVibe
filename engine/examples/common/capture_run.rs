@@ -6,6 +6,9 @@
 //! display's color space (macOS's `screencapture` tags them Display P3 on a built-in Retina
 //! screen), and so are `live_exp` recordings made on a Mac before 2026-11-04, when the engine's
 //! stream began asking for sRGB. Those are converted to sRGB as they load.
+//!
+//! A run recorded in Full Screen on a display of another shape holds the black bar under the
+//! game's picture, as the engine's grabs do. [`picture`] cuts the bars off the way the engine does.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -13,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use mesovibe_engine::frame::Frame;
+use mesovibe_engine::letterbox;
 
 /// A capture frame's game area as BGRA, cropped using the run's meta.json, in captured pixels.
 /// A run saved with --crop-bottom holds only the game area's bottom rows, from `first_row` down,
@@ -244,6 +248,16 @@ pub fn load(run: &Path, png_path: &Path) -> Result<Image, String> {
         scale,
         bgra,
     })
+}
+
+/// The game's picture in a frame, as the engine reads it: without the black bars Full Screen
+/// leaves above and below it on a display of another shape. `bar` carries the last bar measured
+/// from frame to frame, as the engine does, so a frame too dark to measure keeps it.
+pub fn picture<'a>(frame: Frame<'a>, bar: &mut u32) -> Frame<'a> {
+    if let Some(measured) = letterbox::bottom_bar(&frame) {
+        *bar = measured;
+    }
+    letterbox::inside(&frame, *bar).unwrap_or(frame)
 }
 
 pub fn frames_of(run: &Path) -> Vec<PathBuf> {

@@ -30,7 +30,7 @@ use mesovibe_engine::recognizers::notices::{Missed, Notice, NoticeReader};
 
 #[path = "common/capture_run.rs"]
 mod capture_run;
-use capture_run::{frames_of, load};
+use capture_run::{frames_of, load, picture};
 
 struct Args {
     quiet: bool,
@@ -118,9 +118,10 @@ fn main() -> ExitCode {
     let warm = args.warm.then(|| {
         let mut hud = ExpBarReader::new();
         for run in &args.runs {
+            let mut bar = 0;
             for path in frames_of(run) {
                 if let Ok(image) = load(run, &path) {
-                    let _ = hud.observe(&image.frame());
+                    let _ = hud.observe(&picture(image.frame(), &mut bar));
                 }
             }
         }
@@ -141,6 +142,8 @@ fn main() -> ExitCode {
             .and_then(|kept| kept.as_deref())
             .and_then(ExpBarReader::from_knowledge)
             .unwrap_or_default();
+        // The Full Screen bar last measured, carried from frame to frame as the engine does.
+        let mut bar = 0;
         if args.join {
             notices.reset();
         } else if args.carry {
@@ -168,7 +171,7 @@ fn main() -> ExitCode {
                     continue;
                 }
             };
-            let frame = image.frame();
+            let frame = picture(image.frame(), &mut bar);
             let reading = hud.observe(&frame);
             // The game fades to black when the map changes, as the engine's runner sees it.
             let dark = matches!(reading, Err(Unreadable::ScreenDark));

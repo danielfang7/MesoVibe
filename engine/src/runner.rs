@@ -6,6 +6,10 @@
 //! and emits nothing. Now and then a tick reads the whole game area, for the map's name at the
 //! top of the minimap ([`MapFollower`]): at the first capture, after a map change, and every 30 s.
 //!
+//! In Full Screen on a display of another shape, the game's picture has black bars above and
+//! below it. The engine measures them on each frame and reads the picture between them
+//! ([`letterbox`]), and reports the game area as that picture.
+//!
 //! A grab that brought no new frame is stale: the window stopped drawing (a Mac reports a
 //! minimized window's last picture). It isn't read. After
 //! [`STALE_AFTER`] of them in a row the engine pauses, and it keeps checking for a new frame each
@@ -16,6 +20,7 @@ use std::time::Instant;
 
 use crate::capture::{Backend, CaptureError, CaptureSignal, CaptureState, GameWindow, Grab};
 use crate::events::Event;
+use crate::letterbox;
 use crate::notice_health::{NoticeHealth, NoticeState};
 use crate::recognizers::chat::{self, ChatReader, ChatReading, ChatUnreadable};
 use crate::recognizers::exp_bar::{self, ExpBarReader, ExpReading, Unreadable};
@@ -85,6 +90,9 @@ pub struct Runner<B> {
     started: Instant,
     /// Capturing on the last tick, so a resumed capture checks the map again.
     was_capturing: bool,
+    /// The black bar above and below the game's picture in Full Screen, in game pixels, as last
+    /// measured: 0 when the picture fills the window.
+    bar: u32,
 }
 
 impl<B: Backend> Runner<B> {
@@ -111,6 +119,7 @@ impl<B: Backend> Runner<B> {
             notice_state: NoticeState::Off,
             started: Instant::now(),
             was_capturing: false,
+            bar: 0,
         }
     }
 
@@ -176,6 +185,12 @@ impl<B: Backend> Runner<B> {
             self.readable = false;
             self.stale = 0;
         }
+        // Another size (in or out of Full Screen, say) has bars of its own, if any.
+        if self.window.is_none_or(|before| {
+            found.is_none_or(|now| (now.width, now.height) != (before.width, before.height))
+        }) {
+            self.bar = 0;
+        }
         let frames_stopped = self.stale >= STALE_AFTER;
         if let Some(window) = found {
             let visible = !window.minimized && !frames_stopped;
@@ -208,11 +223,14 @@ impl<B: Backend> Runner<B> {
         let capturing = self.state == CaptureState::Capturing;
         if let Some(window) = found.filter(|_| capturing || probing) {
             // The chat reader may want more rows than at first, for a chat box the player made
-            // taller, and the map's name is at the top.
+            // taller, and the map's name is at the top. Under a bar, the readers' rows start above
+            // it.
             let whole = self.map.wants_whole_frame();
+            let area = window.height.saturating_sub(self.bar.saturating_mul(2));
             let rows = match whole {
                 true => window.height,
-                false => rows_needed(window.height).max(self.chat.rows_needed(window.height)),
+                false => (self.bar + rows_needed(area).max(self.chat.rows_needed(area)))
+                    .min(window.height),
             };
             let grab = self.backend.grab(&window, rows);
             match grab {
@@ -232,24 +250,34 @@ impl<B: Backend> Runner<B> {
                     match grab.frame() {
                         Some(_) if !grab.fresh || self.state != CaptureState::Capturing => {}
                         Some(frame) => {
-                            let reading = self.exp.observe(&frame);
-                            // The game fades to black when the map changes.
-                            let dark = matches!(reading, Err(Unreadable::ScreenDark));
-                            let notices = match dark {
-                                true => Ok(self.notices.screen_dark()),
-                                false => self.notices.observe(&frame, reading.as_ref().ok()),
-                            };
-                            tick.events = self.events_for(&reading);
-                            tick.events.extend(notice_events(&notices));
-                            if let Some(map) = self.map.observe(&frame, dark) {
-                                tick.events.push(Event::MapChanged {
-                                    map_key: map.as_ref().map(|name| name.key.clone()),
-                                });
-                                tick.map = Some(map);
+                            let sized_for = self.bar;
+                            if let Some(bar) = letterbox::bottom_bar(&frame) {
+                                self.bar = bar;
                             }
-                            tick.exp = Some(reading);
-                            tick.chat = Some(self.chat.observe(&frame));
-                            tick.notices = Some(notices);
+                            // A taller bar than the grab was sized for leaves too few rows above it
+                            // for the chat box: this frame only measures, and the next one reads.
+                            if self.bar <= sized_for {
+                                // A bar taller than the rows read can't be cut: read the frame as it is.
+                                let frame = letterbox::inside(&frame, self.bar).unwrap_or(frame);
+                                let reading = self.exp.observe(&frame);
+                                // The game fades to black when the map changes.
+                                let dark = matches!(reading, Err(Unreadable::ScreenDark));
+                                let notices = match dark {
+                                    true => Ok(self.notices.screen_dark()),
+                                    false => self.notices.observe(&frame, reading.as_ref().ok()),
+                                };
+                                tick.events = self.events_for(&reading);
+                                tick.events.extend(notice_events(&notices));
+                                if let Some(map) = self.map.observe(&frame, dark) {
+                                    tick.events.push(Event::MapChanged {
+                                        map_key: map.as_ref().map(|name| name.key.clone()),
+                                    });
+                                    tick.map = Some(map);
+                                }
+                                tick.exp = Some(reading);
+                                tick.chat = Some(self.chat.observe(&frame));
+                                tick.notices = Some(notices);
+                            }
                         }
                         None => tick.error = Some(CaptureError("a malformed frame".to_string())),
                     }
@@ -269,6 +297,7 @@ impl<B: Backend> Runner<B> {
         }
         debug_assert!(tick.events.is_empty() || self.state.emits_events());
         tick.state = self.state;
+        tick.window = found.map(|window| letterbox::in_window(window, self.bar));
         let capturing = self.state == CaptureState::Capturing;
         // Back from a pause: the player may have taken a portal meanwhile.
         if capturing && !self.was_capturing {
@@ -906,6 +935,121 @@ mod tests {
                     reason: Missed::ShapesWrong
                 }
             ]
+        );
+    }
+
+    /// The HUD at `exp` in Full Screen on a 1512x982 screen: the 1366x768 picture scaled to the
+    /// screen's width, 1512x850, between black bars 66 pixels tall. The HUD has the light bottom
+    /// line the game's has.
+    fn full_screen(hud: &Hud, exp: u64) -> Canvas {
+        let mut picture = hud_at(hud, exp);
+        picture.fill(283, 767, 800, 1, [200, 200, 200]);
+        let rgb: Vec<[u8; 3]> = picture
+            .bgra
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| [p[2], p[1], p[0]])
+            .collect();
+        let scaled = crate::unstretch::stretch(&rgb, 1366, 1512, 850, 0);
+        let mut bgra: Vec<u8> = [0, 0, 0, 255].repeat(1512 * 982);
+        bgra[66 * 1512 * 4..(66 + 850) * 1512 * 4].copy_from_slice(&scaled);
+        Canvas {
+            width: 1512,
+            height: 982,
+            bgra,
+        }
+    }
+
+    // Full Screen on a 16:10 Mac screen leaves black bars above and below the picture, so the
+    // window's bottom rows are black. Fails if the bars are taken for a dark screen (nothing is
+    // ever tracked), the grab stops short of the picture above the bar, the game area isn't
+    // reported as the picture, a map change's black frames make the engine forget the bars, or
+    // the bars outlive a switch back to windowed.
+    #[test]
+    fn reads_the_picture_between_full_screen_bars() {
+        let hud = Hud::new();
+        let full = GameWindow {
+            width: 1512,
+            height: 982,
+            ..GAME
+        };
+        let mut runner = Runner::new(Fake {
+            window: Some(full),
+            ..Fake::default()
+        });
+        // The first frame is grabbed for no bar, too short above the bar for the chat box: it's
+        // measured, not read.
+        runner.backend_mut().canvas = Some(full_screen(&hud, GRIND[0]));
+        let first = runner.tick();
+        assert_eq!((first.exp, first.chat), (None, None));
+        assert_eq!(first.window.map(|w| (w.width, w.height)), Some((1512, 850)));
+        let mut changes = Vec::new();
+        for &exp in &GRIND {
+            runner.backend_mut().canvas = Some(full_screen(&hud, exp));
+            let tick = runner.tick();
+            assert_ne!(tick.exp, Some(Err(Unreadable::ScreenDark)));
+            assert_eq!(
+                tick.chat,
+                Some(Err(ChatUnreadable::NotFound)),
+                "the chat box looked for with all the rows it needs above the bar"
+            );
+            assert_eq!(tick.window.map(|w| (w.width, w.height)), Some((1512, 850)));
+            changes.extend(tick.events);
+        }
+        let last = *GRIND.last().unwrap();
+        assert_eq!(
+            changes.last(),
+            Some(&Event::ExpChanged {
+                level: Some(41),
+                exp: last,
+                pct_hundredths: pct_of(last, NEEDED_41),
+                needed: Some(NEEDED_41),
+            })
+        );
+        let rows = runner.backend_mut().grabs.last().map(|g| g.1);
+        assert!(rows >= Some(66 + rows_needed(850)), "{rows:?}");
+
+        // A map change fades it all to black, where no bar can be measured. The bars stay as they
+        // were: MesoVibe's windows don't jump to the black around the picture, and it reads again
+        // as soon as the picture is back.
+        runner.backend_mut().canvas = Some(Canvas {
+            width: 1512,
+            height: 982,
+            bgra: [0, 0, 0, 255].repeat(1512 * 982),
+        });
+        let tick = runner.tick();
+        assert_eq!(tick.exp, Some(Err(Unreadable::ScreenDark)));
+        assert!(tick.events.is_empty());
+        assert_eq!(tick.window.map(|w| (w.width, w.height)), Some((1512, 850)));
+        runner.backend_mut().canvas = Some(full_screen(&hud, last));
+        let tick = runner.tick();
+        assert!(
+            matches!(tick.exp, Some(Ok(r)) if r.exp == last),
+            "{:?}",
+            tick.exp
+        );
+
+        // The game restarted at the same size draws the same bars: its black loading frames keep
+        // them, so MesoVibe's windows stay on the picture.
+        runner.backend_mut().window = Some(GameWindow { id: 8, ..full });
+        runner.backend_mut().canvas = Some(Canvas {
+            width: 1512,
+            height: 982,
+            bgra: [0, 0, 0, 255].repeat(1512 * 982),
+        });
+        let tick = runner.tick();
+        assert_eq!(tick.window.map(|w| w.height), Some(850));
+
+        // Back to windowed: the same game, no bars.
+        runner.backend_mut().window = Some(GAME);
+        runner.backend_mut().canvas = Some(hud_at(&hud, last + 21));
+        let tick = runner.tick();
+        assert_eq!(tick.window.map(|w| w.height), Some(768));
+        assert!(
+            matches!(tick.exp, Some(Ok(r)) if r.exp == last + 21),
+            "{:?}",
+            tick.exp
         );
     }
 

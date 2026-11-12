@@ -39,8 +39,8 @@ body:
   - type: input
     id: os-version
     attributes:
-      label: OS version and game window size
-      placeholder: Windows 11 24H2, game at 1366x768
+      label: OS version, game size, and windowed or Full Screen
+      placeholder: macOS 26.1, game in Full Screen at 1366x768 on a 14-inch MacBook Pro
   - type: textarea
     id: screenshots
     attributes:

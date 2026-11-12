@@ -32,7 +32,7 @@ use mesovibe_engine::recognizers::exp_bar::{ExpBarReader, ExpReading, TypedReadi
 
 #[path = "common/capture_run.rs"]
 mod capture_run;
-use capture_run::{frames_of, load};
+use capture_run::{frames_of, load, picture};
 
 fn parse_pct(text: &str) -> Option<u16> {
     let (whole, frac) = text.split_once('.')?;
@@ -138,7 +138,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        match reader.calibrate(&image.frame(), *reading) {
+        match reader.calibrate(&picture(image.frame(), &mut 0), *reading) {
             Ok(()) => println!(
                 "typed calibration on {}/{frame}: {reading:?}",
                 run.display()
@@ -166,6 +166,7 @@ fn main() -> ExitCode {
     let mut timings: BTreeMap<(u32, u32, u32), Vec<u128>> = BTreeMap::new();
     for run in &args.runs {
         let mut previous: Option<ExpReading> = None;
+        let mut bar = 0;
         let name = run
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -185,7 +186,7 @@ fn main() -> ExitCode {
                 }
             };
             let started = Instant::now();
-            let result = reader.observe(&image.frame());
+            let result = reader.observe(&picture(image.frame(), &mut bar));
             timings
                 .entry((
                     image.width / image.scale,

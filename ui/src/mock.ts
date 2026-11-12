@@ -127,6 +127,7 @@ export function mockHost(scenario: string): Host {
       };
     }
     if (t < 1500) return { ...base, state: "no_game", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
+    if (scenario === "dark") return darkStatus(started, game);
     if (t < 4000) {
       return { ...base, state: "capturing", game, exp: null, unreadable: "learning", error: null, chat: "reading", calibration: "learning", notices: "learning" };
     }
@@ -239,10 +240,33 @@ export function mockChatHost(scenario: string): ChatHost {
   };
 }
 
-/** The mini-HUD's stand-in: a steady grind, still learning, or blocked. */
+/**
+ * `dark`: the game's screen stays black, as when MesoVibe reads only black bars. Its clock runs 20
+ * times fast, so the panel's wait for a long dark spell takes half a second.
+ */
+function darkStatus(started: number, game: Status["game"]): Status {
+  return {
+    reading: true,
+    atMs: started + (Date.now() - started) * 20,
+    stale: false,
+    chat: "not_found",
+    state: "capturing",
+    game,
+    exp: null,
+    unreadable: "screen_dark",
+    error: null,
+    calibration: "learning",
+    notices: "reading",
+    waitingMesos: 0,
+    map: null,
+  };
+}
+
+/** The mini-HUD's stand-in: a steady grind, still learning, blocked, or a screen that stays dark. */
 export function mockHudHost(scenario: string): HudHost {
   const summary: HudSummary | null =
     scenario === "grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51 } : null;
+  const started = Date.now();
   const status = (): Status => {
     const base = {
       reading: true,
@@ -254,6 +278,7 @@ export function mockHudHost(scenario: string): HudHost {
       waitingMesos: 0,
       map: null,
     };
+    if (scenario === "dark") return darkStatus(started, base.game);
     if (scenario === "blocked") {
       return { ...base, state: "blocked", exp: null, unreadable: null, error: "No permission.", calibration: "learning" };
     }
