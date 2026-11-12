@@ -121,18 +121,27 @@
       </section>
 
       <section class="feature" aria-labelledby="loot-title">
-        <div class="panel mock-loot" role="img" aria-label="An example of loot tracking in Ant Tunnel: 45.8K mesos per hour, 6,100 mesos in 8 minutes. Zombie Mushrooms dropped 3,240 mesos, 18 Zombie Mushroom Caps and 2 Blue Potions. Horny Mushrooms dropped 2,860 mesos, 22 Horny Mushroom Caps and 3 Orange Potions.">
-          <p class="panel-label">Ant Tunnel</p>
-          <p class="rate"><span class="rate-number">45.8K</span> <span class="rate-unit">mesos/hr</span></p>
-          <p class="loot-total">6,100 mesos in 8m</p>
-          <ul class="mobs">
-            <li><span class="mob">Zombie Mushroom</span><span class="mob-mesos">3,240</span><span class="mob-drops">Zombie Mushroom Cap ×18 · Blue Potion ×2</span></li>
-            <li><span class="mob">Horny Mushroom</span><span class="mob-mesos">2,860</span><span class="mob-drops">Horny Mushroom Cap ×22 · Orange Potion ×3</span></li>
-          </ul>
+        <div class="panel mock-loot" role="img" aria-label="An example of past sessions, map by map. Ant Tunnel I, played Nov 10 for 1 hour 12 minutes: 1.24M EXP and 52.1K mesos per hour. Ant Tunnel II and one more map, Nov 9 for 48 minutes: 1.31M EXP and 47.8K mesos per hour. Sleepy Dungeon IV, Nov 8 for 35 minutes: 980K EXP and 39.5K mesos per hour.">
+          <p class="panel-label">Past sessions</p>
+          <table class="past">
+            <thead>
+              <tr><th>Map</th><th>EXP/hr</th><th>Mesos/hr</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Ant Tunnel I<span class="when">Nov 10 · 1h 12m</span></td><td>1.24M</td><td>52.1K</td></tr>
+              <tr><td>Ant Tunnel II <span class="more">+1 map</span><span class="when">Nov 9 · 48m</span></td><td>1.31M</td><td>47.8K</td></tr>
+              <tr><td>Sleepy Dungeon IV<span class="when">Nov 8 · 35m</span></td><td>980K</td><td>39.5K</td></tr>
+            </tbody>
+          </table>
         </div>
         <div class="feature-text">
-          <h2 id="loot-title">Track your loot <span class="chip">Coming soon</span></h2>
-          <p>MesoVibe will read the pickup notices at the bottom right of the game and add up your mesos per hour, map by map. Solo or in a party, it sorts the items you pick up by the monster that dropped them.</p>
+          <h2 id="loot-title">Track your mesos</h2>
+          <p>MesoVibe reads the pickup notices at the bottom right of the game and adds up the mesos you pick up. Each session remembers the map you played, so you can see which map pays best in EXP and mesos per hour.</p>
+          <ul class="points">
+            <li>A map's mesos per hour counts only the time the notices could be read, so a monster standing over them doesn't lower it.</li>
+            <li>In a party, the game's party list covers the notices, so mesos aren't counted there yet.</li>
+            <li>Items you pick up are coming next.</li>
+          </ul>
         </div>
       </section>
     </div>
@@ -150,8 +159,9 @@
             <p>The few things it keeps stay on your computer:</p>
             <ul class="points">
               <li>Your settings.</li>
-              <li>Your past sessions: EXP gained and time played. You can delete them anytime in Settings.</li>
-              <li>The EXP bar's numbers it has learned to read, so it can start reading right away next time.</li>
+              <li>Your past sessions: EXP gained, mesos picked up, time played and the maps you played. You can delete them anytime in Settings.</li>
+              <li>The numbers it has learned to read on the EXP bar and in the pickup notices, so it can start reading right away next time.</li>
+              <li>Small pictures of the map names it has read, cut from the minimap, so the panel can show which map a session was on. They stay when you delete your session history.</li>
             </ul>
             <p>Chat is never saved. MesoVibe holds it only while it's open, and it's gone when you quit. The only time MesoVibe goes online is to check for updates and download them.</p>
           </div>
@@ -160,7 +170,7 @@
           <summary><span>What can MesoVibe see?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
           <div class="answer">
             <p>Only the MapleStory window. It can't see your other apps, your browser or your desktop.</p>
-            <p>Inside the game, it reads a few spots, like the EXP bar and the chat box. It doesn't record video of your game.</p>
+            <p>Inside the game, it reads a few spots: the EXP bar, the chat box, the pickup notices at the bottom right and the map's name on the minimap. It doesn't record video of your game.</p>
             <p>You can check this yourself: open "What MesoVibe sees" in the app to see exactly what it's reading right now.</p>
           </div>
         </details>
@@ -195,7 +205,7 @@
             <ul class="points">
               <li>It's a small, separate app. It doesn't run inside the game.</li>
               <li>It glances at the game 4 times a second, not every time the game draws a new frame.</li>
-              <li>It only copies the strips of the picture it reads, like the EXP bar and the chat box, not your whole screen.</li>
+              <li>Most of the time it copies only a strip along the bottom of the game, where the EXP bar, the chat box and the pickup notices are. When you start and each time you change maps, it copies the game's picture a couple of times to read the map's name. It never copies your whole screen.</li>
               <li>When the game is minimized or closed, it stops looking and waits.</li>
             </ul>
             <p>If you ever do notice a slowdown, turn on Safe mode in Settings and <a href="https://github.com/danielfang7/MesoVibe/issues">tell us on GitHub</a>.</p>
@@ -230,7 +240,7 @@
               <li>It never touches the connection between your game and Nexon's servers.</li>
               <li>It won't help with the Lie Detector, the game's anti-bot check.</li>
             </ul>
-            <p>If Nexon ever asks us to remove a feature, we'll remove it. If you'd rather take no chances, turn on Safe mode in Settings. MesoVibe then stops looking at the game entirely, so EXP tracking and chat tabs pause too.</p>
+            <p>If Nexon ever asks us to remove a feature, we'll remove it. If you'd rather take no chances, turn on Safe mode in Settings. MesoVibe then stops looking at the game entirely, so EXP and mesos tracking and chat tabs pause too.</p>
           </div>
         </details>
       </div>
