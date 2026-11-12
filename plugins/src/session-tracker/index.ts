@@ -1,7 +1,7 @@
 /**
  * Session Tracker: EXP/hr for the session and the last 5 minutes, time to
- * level, mesos/hr and the map, and a history of past sessions kept on this computer. It feeds the
- * session strip and draws the Session view. End saves the session to Past sessions and Reset
+ * level, the map and the mesos picked up, and a history of past sessions kept on this computer. It
+ * feeds the session strip and draws the Session view. End saves the session to Past sessions and Reset
  * throws it away, each one click with Undo; deleting history asks first.
  */
 
@@ -15,7 +15,6 @@ import {
   longest,
   mapRates,
   mergeLoot,
-  mesosRate,
   reads,
   start as startLoot,
   totalMesos,
@@ -117,10 +116,8 @@ function canEnd(session: Session, atMs: number): boolean {
   return held !== undefined && held.mesos > 0 && atMs - held.atMs >= HOLD_MS;
 }
 
-function summary(session: Session, readers: Readers, atMs: number): SessionSummary {
+function summary(session: Session, atMs: number): SessionSummary {
   const last = session.last;
-  // While the letters are learned, or the party list covers the notices, no rate is shown.
-  const mesosShown = readers.notices !== "learning" && readers.notices !== "blocked";
   return {
     expPerHour: sessionRate(session),
     recentExpPerHour: recentRate(session),
@@ -129,7 +126,6 @@ function summary(session: Session, readers: Readers, atMs: number): SessionSumma
     pctHundredths: last?.pctHundredths ?? null,
     minutesToLevel: minutesToLevel(session),
     activeMs: session.activeMs,
-    mesosPerHour: mesosShown ? mesosRate(session) : null,
     canEnd: canEnd(session, atMs),
     canReset: session.expGained > 0 || (session.held?.mesos ?? 0) > 0,
     lootOnly: session.expGained <= 0 && (session.held?.mesos ?? 0) > 0,
@@ -229,7 +225,7 @@ function toGo(session: SessionState): number | null {
 /** The day and play time under a past session's map: "Nov 10 · 1h 12m". */
 function dayAndTime(past: Past): string {
   const day = new Date(past.startedAtMs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return `${day.replace(/ /g, " ")} · ${formatDuration(past.activeMs)}`;
+  return `${day.replace(/ /g, " ")} · ${formatDuration(past.activeMs)}`;
 }
 
 /** When each map was first played, oldest first: maps' accessible names tell them apart by it. */
@@ -298,12 +294,8 @@ function noticeLines(session: Session, notices: Notices): ViewNode[] {
 function pastRow(past: Past, first: Map<string, number>): [Cell[], string[]] {
   const lines = [dayAndTime(past), levels(past)].filter((line): line is string => line !== null);
   const sessionRate = past.activeMs >= MIN_RATE_MS ? formatCompact((past.expGained * 3_600_000) / past.activeMs) : null;
-  if (past.maps === undefined) {
-    // From before map and mesos tracking: as it read then, with its date in the map's place.
-    return [[when(past.startedAtMs), sessionRate, "—"], [formatDuration(past.activeMs), levels(past)].filter((l): l is string => l !== null)];
-  }
-  const main = longest(past.maps);
-  // Tracked, but no map's name was ever read.
+  const main = longest(past.maps ?? []);
+  // No map's name read, or a session from before maps were tracked: its own EXP/hr, no mesos.
   if (main === null) return [[mapCell(null, first), sessionRate, "—"], lines];
   const others = (past.maps?.length ?? 1) - 1;
   const suffix = others === 0 ? undefined : `+${others} map${others === 1 ? "" : "s"}`;
@@ -321,7 +313,7 @@ function pastRow(past: Past, first: Map<string, number>): [Cell[], string[]] {
 
 /**
  * The Session view. "This session" holds only what the strip above it doesn't show:
- * no EXP/hr, mesos/hr, level progress or time to level, which the strip already has. Before the
+ * no EXP/hr, level progress or time to level, which the strip already has. Before the
  * first gain while the game is being read, the strip shows the level and its bar, so nothing here
  * waits on the first gain, and with nothing else to show the section is left out.
  */
@@ -346,17 +338,17 @@ function view(
   } else if (session.expGained <= 0) {
     // At startup and after End or Reset: no list of zeros.
     if (!reading) current.push({ kind: "empty", text: "Your session numbers appear after your first gain." });
-    const items: [string, Cell][] = [...mesosRow, ...(mesos > 0 ? mapRow : [])];
+    const items: [string, Cell][] = [...(mesos > 0 ? mapRow : []), ...mesosRow];
     if (left !== null) items.push(["EXP to go", formatDigits(left)]);
     if (items.length > 0) current.push({ kind: "keyValue", items });
   } else {
     const recent = recentRate(session);
     const items: [string, Cell][] = [
-      ["Last 5 min", recent === null ? null : `${formatCompact(recent)}/hr`],
+      ...mapRow,
+      ["Last 5 min EXP/hr", recent === null ? null : formatCompact(recent)],
       ["Time played", formatDuration(session.activeMs)],
       ["EXP gained", formatDigits(session.expGained)],
       ...mesosRow,
-      ...mapRow,
     ];
     if (left !== null) items.push(["EXP to go", formatDigits(left)]);
     if (session.levelUps > 0) items.push(["Level-ups", String(session.levelUps)]);
@@ -365,18 +357,13 @@ function view(
   }
   if (reading) current.push(...noticeLines(session, notices));
 
-  const shown = history.slice(0, showMore ? SHOWN_MORE : SHOWN_HISTORY);
-  const tracked = shown.filter((s) => s.maps !== undefined);
-  const before = shown.filter((s) => s.maps === undefined);
-  const table = (sessions: Past[]): ViewNode => {
-    const rows = sessions.map((s) => pastRow(s, first));
-    return {
-      kind: "table",
-      columns: ["Map", "EXP/hr", "Mesos/hr"],
-      numeric: [false, true, true],
-      rows: rows.map(([cells]) => cells),
-      details: rows.map(([, lines]) => lines),
-    };
+  const rows = history.slice(0, showMore ? SHOWN_MORE : SHOWN_HISTORY).map((s) => pastRow(s, first));
+  const table: ViewNode = {
+    kind: "table",
+    columns: ["Map", "EXP/hr", "Mesos/hr"],
+    numeric: [false, true, true],
+    rows: rows.map(([cells]) => cells),
+    details: rows.map(([, lines]) => lines),
   };
   const more: ViewNode[] =
     history.length > SHOWN_HISTORY
@@ -386,11 +373,7 @@ function view(
     history.length === 0
       ? [{ kind: "empty", text: "Sessions show up here when you end them or close MesoVibe." }]
       : [
-          ...(tracked.length > 0 ? [table(tracked)] : []),
-          ...(tracked.length > 0 && before.length > 0
-            ? [{ kind: "text", variant: "muted", text: "Before map and mesos tracking" } as const]
-            : []),
-          ...(before.length > 0 ? [table(before)] : []),
+          table,
           ...more,
           {
             kind: "button",
@@ -452,7 +435,7 @@ definePlugin({
       unsaved = false;
     };
     const show = (atMs: number) => {
-      context.setSummary(summary(session, readers, atMs));
+      context.setSummary(summary(session, atMs));
       context.render(view(session, history, capture, map, { readers, learningSince, atMs }, showMore));
     };
     const remember = (kind: Undo["kind"], atMs: number) => {

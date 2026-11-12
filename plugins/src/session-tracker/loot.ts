@@ -179,15 +179,6 @@ export function totalMesos(loot: LootFields): number {
   return (loot.maps ?? []).reduce((sum, m) => sum + m.m, 0) + (loot.held?.mesos ?? 0);
 }
 
-/** Mesos per hour over the time the notices were read, or null before that means anything. */
-export function mesosRate(loot: LootFields): number | null {
-  const maps = loot.maps ?? [];
-  const read = maps.reduce((sum, m) => sum + m.l, 0);
-  const mesos = maps.reduce((sum, m) => sum + m.r, 0);
-  if (read < MESOS_RATE_MS || mesos <= 0) return null;
-  return (mesos * 3_600_000) / read;
-}
-
 /** A map's own EXP/hr and mesos/hr, each null when there's too little time for it. */
 export function mapRates(entry: MapEntry, minExpMs: number): { exp: number | null; mesos: number | null } {
   return {

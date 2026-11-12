@@ -213,9 +213,6 @@ function shell(initial: Settings): void {
   const hero = h("span", { class: "number-hero" });
   const heroUnit = h("span", { class: "hero-unit" }, "EXP/hr");
   const heroEmpty = h("p", { class: "hero-empty" });
-  // Mesos/hr under the EXP/hr, quieter: EXP/hr stays the one big number.
-  const mesosRate = h("span", { class: "number" });
-  const mesosLine = h("p", { class: "hero-mesos", attrs: { "data-key": "strip-mesos" } }, mesosRate, h("span", { class: "hero-unit" }, " mesos/hr"));
   /** After End or Reset, keyboard focus goes to the matching notice's Undo. */
   let focusUndo: { undo: string; until: number } | null = null;
   const sessionAction = (action: "end" | "reset") => () => {
@@ -279,7 +276,7 @@ function shell(initial: Settings): void {
     h(
       "div",
       { class: "strip-hero" },
-      h("div", { class: "hero-stack" }, h("span", { class: "hero" }, hero, heroUnit), heroEmpty, mesosLine),
+      h("div", { class: "hero-stack" }, h("span", { class: "hero" }, hero, heroUnit), heroEmpty),
       sessionActions,
     ),
     toLevel,
@@ -564,12 +561,6 @@ function shell(initial: Settings): void {
         panel.rateShown = true;
         heroBox.classList.add("arrive");
       }
-    }
-    const mesos = summary?.mesosPerHour ?? null;
-    mesosLine.hidden = mesos === null;
-    if (mesos !== null) {
-      mesosRate.textContent = formatCompact(mesos);
-      mesosLine.title = `${formatDigits(mesos)} mesos per hour`;
     }
     // End and Reset as the tracker offers them (nothing to end or reset before a gain or a
     // pickup), and none while capture is blocked or the tracker has crashed, when a press could

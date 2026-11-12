@@ -1,5 +1,5 @@
-// The Session Tracker's loot as the host runs it: mesos and time by map, mesos/hr, the lines about
-// reading pickups, and Past sessions rows named for a map. Bundled from source with the SDK and
+// The Session Tracker's loot as the host runs it: mesos and time by map, a map's mesos/hr, the
+// lines about reading pickups, and Past sessions rows named for a map. Bundled from source with the SDK and
 // driven only through the SDK's messages, like session-tracker-plugin.test.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -74,12 +74,17 @@ function play({ seconds = 120, readers = READING, key = "aaaa" } = {}) {
   return { ...plugin, now: T0 + seconds * 1000 };
 }
 
-// Mesos/hr is the mesos counted over the time the notices were read. Fails if mesos go unseen, the
-// rate shows before a minute of reading, or the map's share of the session doesn't add up.
-test("mesos count toward the map and the session's mesos/hr", () => {
-  const { sent } = play({ seconds: 120 });
-  // 12 pickups of 50 over two minutes of reading: 300 mesos a minute.
-  assert.equal(summary(sent).mesosPerHour, 18_000);
+/** Ends the session and returns its Past sessions row's Mesos/hr. */
+function endedMesosRate(plugin) {
+  plugin.send({ type: "action", action: "end", atMs: plugin.now });
+  return pastSessions(plugin.sent)[0].rows[0][2];
+}
+
+// A map's mesos/hr is the mesos counted over the time the notices were read. Fails if mesos go
+// unseen, a rate shows before a minute of reading, or the map's share doesn't add up.
+test("mesos count toward the map, and its mesos/hr", () => {
+  const played = play({ seconds: 120 });
+  const { sent } = played;
   assert.equal(items(sent).Mesos, "600");
   assert.deepEqual(items(sent).Map, { gameText: "aaaa", label: items(sent).Map.label });
   assert.match(items(sent).Map.label, /^Map first played /);
@@ -89,13 +94,14 @@ test("mesos count toward the map and the session's mesos/hr", () => {
     assert.equal(total, running.activeMs, "the maps add up to the session");
     for (const m of running.maps) assert.ok(m.l <= m.p, "read time never passes play time");
   }
-  const short = play({ seconds: 50 });
-  assert.equal(summary(short.sent).mesosPerHour, null, "under a minute of reading: no rate yet");
+  // 12 pickups of 50 over two minutes of reading: 300 mesos a minute.
+  assert.equal(endedMesosRate(played), "18K");
+  assert.equal(endedMesosRate(play({ seconds: 50 })), "—", "under a minute of reading: no rate");
 });
 
 // Covered notices are out of the rate both ways: their time and their mesos. Fails if mesos read
 // while covered raise the rate, or covered time lowers it.
-test("time with the notices covered changes neither side of mesos/hr", () => {
+test("time with the notices covered changes neither side of a map's mesos/hr", () => {
   const plugin = run();
   plugin.send({ type: "start", saved: null, atMs: T0, capture: "capturing", readers: READING });
   plugin.send(map("aaaa", T0));
@@ -111,18 +117,17 @@ test("time with the notices covered changes neither side of mesos/hr", () => {
       plugin.send(mesos(s > 60 && s <= 180 ? 500 : 50, at));
     }
   }
-  // Read for two minutes at 300 a minute: the covered 500s don't count, nor do their minutes.
-  assert.equal(summary(plugin.sent).mesosPerHour, 18_000);
-  // The total still has every amount read.
+  // The total has every amount read.
   assert.equal(items(plugin.sent).Mesos, (12 * 50 + 12 * 500).toLocaleString("en-US"));
+  // Read for two minutes at 300 a minute: the covered 500s don't count, nor do their minutes.
+  assert.equal(endedMesosRate({ ...plugin, now: T0 + 240_000 }), "18K");
 });
 
-// The strip's number holds still while the notices can't be trusted. Fails if a rate shows while
-// the letters are learned or the party list blocks them.
-test("no mesos/hr while learning or blocked", () => {
+// Time the notices can't be trusted isn't read time. Fails if a map gets a mesos rate from time
+// spent learning the letters or under the party list.
+test("no mesos/hr from time learning or blocked", () => {
   for (const notices of ["learning", "blocked"]) {
-    const { sent } = play({ seconds: 120, readers: { notices, waitingMesos: 0 } });
-    assert.equal(summary(sent).mesosPerHour, null, notices);
+    assert.equal(endedMesosRate(play({ seconds: 120, readers: { notices, waitingMesos: 0 } })), "—", notices);
   }
 });
 
@@ -214,9 +219,9 @@ test("a past session's row is its longest map, with that map's rates", () => {
   assert.equal(expRate, "22.7K");
 });
 
-// Old history stays readable, under a divider. Fails if a session from before map tracking gets
-// a map cell or a mesos rate, or the divider is missing.
-test("sessions from before map and mesos tracking sit under a divider", () => {
+// Every past session uses one layout: one from before maps were tracked reads as an unknown map
+// with its own EXP/hr. Fails if it gets a mesos rate, a separate table, or loses its date line.
+test("sessions from before map tracking use the same layout", () => {
   const old = { startedAtMs: T0 - 86_400_000, endedAtMs: T0 - 86_000_000, activeMs: 400_000, expGained: 9_000, expLost: 0, startLevel: 41, endLevel: 41 };
   const { send, sent } = run();
   const saved = { version: 1, history: [old], current: null };
@@ -228,12 +233,12 @@ test("sessions from before map and mesos tracking sit under a divider", () => {
     if (s % 10 === 0) send(exp(230_000 + s * 6, T0 + s * 1000));
   }
   send({ type: "action", action: "end", atMs: T0 + 60_000 });
-  const past = pastSessions(sent);
-  assert.equal(past[0].kind, "table");
-  assert.deepEqual(past[1], { kind: "text", variant: "muted", text: "Before map and mesos tracking" });
-  assert.equal(past[2].kind, "table");
-  assert.equal(typeof past[2].rows[0][0], "string", "a date, not a map");
-  assert.equal(past[2].rows[0][2], "—");
+  const [table, ...rest] = pastSessions(sent);
+  assert.equal(table.rows.length, 2, "one table for both");
+  assert.ok(!rest.some((node) => node.kind === "table" || node.kind === "text"));
+  assert.deepEqual(table.rows[1], ["Unknown map", "81K", "—"]);
+  assert.match(table.details[1][0], /^\w{3}\u00a0\d+ · 6m$/);
+  assert.equal(table.details[1][1], "Lv\u00a041");
 });
 
 // Undo puts the ended session back with the pickups made since. Fails if they're lost.

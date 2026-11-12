@@ -117,13 +117,6 @@ export interface SessionSummary {
   minutesToLevel: number | null;
   /** Time played while capturing, in milliseconds. */
   activeMs: number;
-  /**
-   * Mesos per hour over the time the pickup notices were read; null until mesos are counted, and
-   * while the notices are still being learned or are blocked.
-   *
-   * @experimental May change before the Loot Tracker's first release.
-   */
-  mesosPerHour: number | null;
   /** The session has EXP, or loot without EXP, worth keeping: End is offered. */
   canEnd: boolean;
   /** The session has something to throw away: Reset is offered. */

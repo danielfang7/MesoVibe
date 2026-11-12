@@ -109,7 +109,6 @@ export interface HudSummary {
   level: number | null;
   pctHundredths: number | null;
   minutesToLevel: number | null;
-  mesosPerHour: number | null;
 }
 
 export interface AppInfo {
@@ -224,7 +223,6 @@ export function hudSummary(summary: SessionSummary): HudSummary {
     level: whole(summary.level),
     pctHundredths: whole(summary.pctHundredths),
     minutesToLevel: summary.minutesToLevel,
-    mesosPerHour: summary.mesosPerHour,
   };
 }
 

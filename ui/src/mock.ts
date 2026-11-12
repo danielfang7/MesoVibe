@@ -314,9 +314,7 @@ function namePicture(name: string): GamePicture {
 /** The mini-HUD's stand-in: a steady grind, still learning, blocked, or a screen that stays dark. */
 export function mockHudHost(scenario: string): HudHost {
   const summary: HudSummary | null =
-    scenario === "grind"
-      ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51, mesosPerHour: 21_480 }
-      : null;
+    scenario === "grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51 } : null;
   const started = Date.now();
   const status = (): Status => {
     const base = {

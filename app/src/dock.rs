@@ -65,9 +65,6 @@ pub struct Summary {
     pub level: Option<u32>,
     pub pct_hundredths: Option<u32>,
     pub minutes_to_level: Option<f64>,
-    /// Mesos per hour, once the session has counted mesos; absent from an older panel.
-    #[serde(default)]
-    pub mesos_per_hour: Option<f64>,
 }
 
 /// The latest [`Summary`], for a mini-HUD that has just opened.

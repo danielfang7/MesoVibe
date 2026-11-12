@@ -95,14 +95,14 @@ test("a minute of grinding feeds the strip, and the Session view shows only what
   assert.ok(summary.minutesToLevel > 0);
   assert.deepEqual(
     items(sent).map(([label]) => label),
-    ["Last 5 min", "Time played", "EXP gained", "EXP to go"],
+    ["Last 5 min EXP/hr", "Time played", "EXP gained", "EXP to go"],
     "Level-ups and EXP lost stay hidden at 0",
   );
   const values = Object.fromEntries(items(sent));
   assert.equal(values["Time played"], "1m");
   assert.equal(values["EXP gained"], "378");
   assert.equal(values["EXP to go"], (NEEDED - 230_378).toLocaleString("en-US"));
-  assert.match(values["Last 5 min"], /\/hr$/);
+  assert.match(values["Last 5 min EXP/hr"], /^[\d.]+[KM]?$/);
   assert.deepEqual(thisSession(sent).map((node) => node.kind), ["keyValue"]);
   const view = text(last(sent, "render").view);
   for (const repeat of ["Time to level", "Reset session", "EXP this level needs"]) {
@@ -276,15 +276,14 @@ test("Past sessions shows each session's levels under its date", () => {
   // The last row is a falling range saved before finish() checked level-ups: another character.
   const saved = { version: 1, history: [session(41, 43), session(null, null), session(43, 43), session(120, 35)], current: null };
   send({ type: "start", saved, atMs: 1_800_001_000_000, capture: "no_game" });
-  // Sessions from before map and mesos tracking: time played, then levels, under the date.
-  assert.deepEqual(pastSessions(sent)[0].details, [
-    ["10m", "Lv\u00a041 →\u00a043"],
-    ["10m"],
-    ["10m", "Lv\u00a043"],
-    ["10m", "Lv\u00a035"],
-  ]);
-  // The one ordinary space sits between the date and the time: "Nov 3," above "5:15 PM", never "Nov" above "3,".
-  assert.equal(pastSessions(sent)[0].rows[0][0].split(" ").length, 2);
+  // Under each row's map: the day and time played, then the levels.
+  const details = pastSessions(sent)[0].details;
+  assert.deepEqual(
+    details.map((lines) => lines.slice(1)),
+    [["Lv\u00a041 →\u00a043"], [], ["Lv\u00a043"], ["Lv\u00a035"]],
+  );
+  // The day never splits: "Nov 3" stays whole at the 300px width.
+  assert.match(details[0][0], /^\w{3}\u00a0\d+ · 10m$/);
 });
 
 test("a session left running when the app closed is kept as history", () => {

@@ -470,9 +470,7 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
   await t.test("the mini-HUD shows the rate, time to level and progress, or what's wrong", async () => {
     const page = await openPage(devtools, at("grind", "hud.html"));
     assert.equal(await page.until(`document.querySelector(".hud-rate")?.textContent`, "the rate"), "48.2K");
-    // Mesos/hr under the EXP/hr, as in the strip, then time to level.
-    const hudLines = `[...document.querySelectorAll(".hud-line")].map((l) => l.textContent)`;
-    await page.until(`${hudLines}.join("|") === "21.5K mesos/hr|Lv 42 → 43 in 51 min"`, "mesos/hr and time to level");
+    await page.until(`document.querySelector(".hud-line")?.textContent === "Lv 42 → 43 in 51 min"`, "time to level");
     assert.equal(await page.evaluate(`document.querySelector(".hud-progress .number").textContent`), "64.62%");
     assert.deepEqual(page.errors, []);
     page.close();
