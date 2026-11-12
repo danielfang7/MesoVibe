@@ -3,8 +3,10 @@
 // plugin's components as text, and saves the plugin's data through the host's store.
 import type {
   CaptureState,
+  Cell,
   Event as GameEvent,
   PluginManifest,
+  Readers,
   SessionSummary,
   ToHost,
   ToPlugin,
@@ -13,7 +15,71 @@ import type {
 import type { Confirm } from "@mesovibe/sdk";
 
 import { h } from "./dom.js";
-import type { Host } from "./ipc.js";
+import type { GamePicture, Host } from "./ipc.js";
+
+/**
+ * A name picture's scale, in the surrounding text's em per game pixel. The minimap's capitals are
+ * 9 game pixels tall, so at this scale they stand as tall as the text's capitals beside them.
+ */
+const NAME_EM_PER_PIXEL = 0.08;
+/** Where the minimap lettering's baseline is, in game pixels from the picture's top. */
+const NAME_BASELINE = 10;
+/** How long a name with no picture kept waits before it's asked for again. */
+const ASK_AGAIN_MS = 5_000;
+
+/**
+ * Name pictures by key, asked of the host as views need them. `undefined` while asking, `null`
+ * when the host kept none.
+ */
+export class NamePictures {
+  private readonly kept = new Map<string, { picture: GamePicture | null; askedAt: number }>();
+  private readonly asking = new Set<string>();
+
+  constructor(
+    private readonly host: Pick<Host, "gameText">,
+    private readonly arrived: () => void,
+  ) {}
+
+  get(key: string): GamePicture | null | undefined {
+    return this.kept.get(key)?.picture;
+  }
+
+  /** Asks for the pictures of `keys` not kept yet, and again for those the host had none for. */
+  want(keys: Iterable<string>): void {
+    const now = Date.now();
+    const missing = [...new Set(keys)].filter((key) => {
+      if (this.asking.has(key)) return false;
+      const kept = this.kept.get(key);
+      return kept === undefined || (kept.picture === null && now - kept.askedAt > ASK_AGAIN_MS);
+    });
+    if (missing.length === 0) return;
+    for (const key of missing) this.asking.add(key);
+    void this.host
+      .gameText(missing)
+      .catch(() => ({}) as Record<string, GamePicture>)
+      .then((found) => {
+        for (const key of missing) {
+          this.asking.delete(key);
+          this.kept.set(key, { picture: found[key] ?? null, askedAt: Date.now() });
+        }
+        this.arrived();
+      });
+  }
+}
+
+/** The name-picture keys a view shows. */
+export function gameTextKeys(nodes: ViewNode[]): string[] {
+  const keys: string[] = [];
+  const cell = (c: Cell) => {
+    if (c !== null && typeof c === "object") keys.push(c.gameText);
+  };
+  for (const node of nodes) {
+    if (node.kind === "section" || node.kind === "row") keys.push(...gameTextKeys(node.children));
+    else if (node.kind === "table") node.rows.forEach((row) => row.forEach(cell));
+    else if (node.kind === "keyValue") node.items.forEach(([, v]) => cell(v));
+  }
+  return keys;
+}
 
 export interface PluginListener {
   render(view: ViewNode[]): void;
@@ -33,6 +99,9 @@ export class PluginHost {
   private ticker: number | undefined;
   manifest: PluginManifest | null = null;
   view: ViewNode[] = [];
+  private readers: Readers = { notices: "off", waitingMesos: 0 };
+  /** The pictures the plugin's views name, kept for drawing them. */
+  readonly pictures: NamePictures;
 
   constructor(
     readonly id: string,
@@ -41,7 +110,9 @@ export class PluginHost {
     private readonly host: Host,
     private readonly listener: PluginListener,
     private capture: CaptureState,
-  ) {}
+  ) {
+    this.pictures = new NamePictures(host, () => this.listener.render(this.view));
+  }
 
   async start(): Promise<void> {
     this.stop();
@@ -74,7 +145,7 @@ export class PluginHost {
       this.stop();
       this.listener.crashed(`${this.manifest?.name ?? this.name} stopped responding and was turned off.`);
     };
-    this.post({ type: "start", saved, atMs: Date.now(), capture: this.capture });
+    this.post({ type: "start", saved, atMs: Date.now(), capture: this.capture, readers: this.readers });
     for (const message of waiting) this.post(message);
     this.ticker = window.setInterval(() => this.post({ type: "tick", atMs: Date.now() }), 1000);
   }
@@ -96,6 +167,13 @@ export class PluginHost {
     this.post({ type: "capture", state, atMs: Date.now() });
   }
 
+  /** How the pickup notices are being read; sent on to the plugin when it changes. */
+  setReaders(readers: Readers): void {
+    if (readers.notices === this.readers.notices && readers.waitingMesos === this.readers.waitingMesos) return;
+    this.readers = readers;
+    this.post({ type: "readers", readers, atMs: Date.now() });
+  }
+
   action(action: string): void {
     this.post({ type: "action", action, atMs: Date.now() });
   }
@@ -112,6 +190,7 @@ export class PluginHost {
         break;
       case "render":
         this.view = message.view;
+        this.pictures.want(gameTextKeys(message.view));
         this.listener.render(message.view);
         break;
       case "summary":
@@ -163,25 +242,80 @@ export function confirmDialog(confirm: Confirm, onConfirm: () => void): void {
 }
 
 /** Draws a plugin's components. `act` sends a button's action back to the plugin. */
-export function renderView(nodes: ViewNode[], act: (action: string) => void, path = "v"): Node[] {
-  return nodes.map((node, i) => renderNode(node, act, `${path}.${i}`));
+export function renderView(
+  nodes: ViewNode[],
+  act: (action: string) => void,
+  pictures: Pick<NamePictures, "get"> | null = null,
+  path = "v",
+): Node[] {
+  return nodes.map((node, i) => renderNode(node, act, `${path}.${i}`, pictures));
+}
+
+/**
+ * A name as a picture of the game's lettering, in the text's color (a CSS mask, set through
+ * CSSOM: the CSP allows no inline styles). While its picture loads, an empty box; when none is
+ * kept, "Name not available".
+ */
+export function namePicture(cell: Exclude<Cell, string | null>, pictures: Pick<NamePictures, "get"> | null): Node {
+  const picture = pictures?.get(cell.gameText);
+  const suffix = cell.suffix === undefined ? null : h("span", { class: "game-text-suffix" }, cell.suffix);
+  if (picture === null) {
+    return h(
+      "span",
+      { class: "game-text-missing", attrs: { title: "This name's picture is no longer on this computer. It comes back the next time you see it." } },
+      "Name not available",
+      suffix,
+    );
+  }
+  const box = h("span", {
+    class: "game-text",
+    attrs: { role: "img", "aria-label": cell.label ?? "A name in the game's lettering", "data-game-text": cell.gameText },
+  });
+  if (picture !== undefined) {
+    const set = (name: string, value: string) => {
+      box.style.setProperty(name, value);
+      box.style.setProperty(`-webkit-${name}`, value);
+    };
+    const width = picture.width * NAME_EM_PER_PIXEL;
+    const height = picture.height * NAME_EM_PER_PIXEL;
+    box.style.width = `${width}em`;
+    box.style.height = `${height}em`;
+    // The picture's bottom sits below its letters (descenders, then a margin): lower it so the
+    // letters sit on the text's baseline.
+    box.style.verticalAlign = `${-Math.max(0, picture.height - NAME_BASELINE) * NAME_EM_PER_PIXEL}em`;
+    set("mask-image", `url("${picture.png}")`);
+    set("mask-size", `${width}em ${height}em`);
+    set("mask-repeat", "no-repeat");
+  }
+  return h("span", { class: "game-text-cell" }, box, suffix);
+}
+
+/** A cell's content: its text, "?" for a value not known yet, or a name picture. */
+function cellContent(cell: Cell, pictures: Pick<NamePictures, "get"> | null): Node | string {
+  if (cell !== null && typeof cell === "object") return namePicture(cell, pictures);
+  return value(cell);
 }
 
 function value(text: string | null): string {
   return text ?? "?";
 }
 
-function renderNode(node: ViewNode, act: (action: string) => void, key: string): Node {
+function renderNode(
+  node: ViewNode,
+  act: (action: string) => void,
+  key: string,
+  pictures: Pick<NamePictures, "get"> | null,
+): Node {
   switch (node.kind) {
     case "section":
       return h(
         "section",
         { class: "block" },
         h("h2", { class: "label" }, node.title),
-        ...renderView(node.children, act, key),
+        ...renderView(node.children, act, pictures, key),
       );
     case "row":
-      return h("div", { class: "row" }, ...renderView(node.children, act, key));
+      return h("div", { class: "row" }, ...renderView(node.children, act, pictures, key));
     case "divider":
       return h("hr", { class: "divider" });
     case "stat":
@@ -192,7 +326,7 @@ function renderNode(node: ViewNode, act: (action: string) => void, key: string):
         h("span", { class: "stat-value number", attrs: { title: node.detail } }, value(node.value)),
       );
     case "statRow":
-      return h("div", { class: "stat-row" }, ...node.stats.map((s, i) => renderNode(s, act, `${key}.${i}`)));
+      return h("div", { class: "stat-row" }, ...node.stats.map((s, i) => renderNode(s, act, `${key}.${i}`, pictures)));
     case "progress": {
       const fraction = node.fraction === null ? 0 : Math.min(1, Math.max(0, node.fraction));
       return h(
@@ -232,11 +366,12 @@ function renderNode(node: ViewNode, act: (action: string) => void, key: string):
               {},
               ...row.map((cell, i) => {
                 const detail = i === 0 ? details[r] : null;
+                const lines = detail === null || detail === undefined ? [] : Array.isArray(detail) ? detail : [detail];
                 return h(
                   "td",
                   { class: numeric[i] ? "num number" : "" },
-                  value(cell),
-                  detail ? h("span", { class: "cell-detail" }, detail) : null,
+                  cellContent(cell, pictures),
+                  ...lines.filter((line) => line !== "").map((line) => h("span", { class: "cell-detail" }, line)),
                 );
               }),
             ),
@@ -248,7 +383,10 @@ function renderNode(node: ViewNode, act: (action: string) => void, key: string):
       return h(
         "dl",
         { class: "key-value" },
-        ...node.items.flatMap(([k, v]) => [h("dt", {}, k), h("dd", { class: "number" }, value(v))]),
+        ...node.items.flatMap(([k, v]) => [
+          h("dt", {}, k),
+          h("dd", { class: v !== null && typeof v === "object" ? "" : "number" }, cellContent(v, pictures)),
+        ]),
       );
     case "text":
       return h("p", { class: `text ${node.variant ?? ""}`.trim() }, node.text);

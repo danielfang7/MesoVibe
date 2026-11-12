@@ -95,6 +95,14 @@ export interface Display {
   corner: Corner;
 }
 
+/** A picture of a game name, white with the text as alpha, drawn as a mask in the text color. */
+export interface GamePicture {
+  width: number;
+  height: number;
+  /** `data:image/png;base64,...` */
+  png: string;
+}
+
 /** What the mini-HUD shows of the session: part of the panel's SessionSummary. */
 export interface HudSummary {
   expPerHour: number | null;
@@ -152,6 +160,8 @@ export interface Host {
   openPrivacySettings(): Promise<void>;
   storageGet(plugin: string): Promise<unknown>;
   storageSet(plugin: string, value: unknown): Promise<void>;
+  /** Pictures of game names by key; a key with none kept is left out. */
+  gameText(keys: string[]): Promise<Record<string, GamePicture>>;
   setDisplay(display: Display): Promise<Settings>;
   /** Passes the session strip's summary on to the mini-HUD. */
   shareSummary(summary: SessionSummary | null): Promise<void>;
@@ -189,6 +199,7 @@ const tauri: Host = {
   watch: (on) => invoke<void>("watch_capture", { on }),
   openPrivacySettings: () => invoke<void>("open_privacy_settings"),
   storageGet: (plugin) => invoke<unknown>("plugin_storage_get", { plugin }),
+  gameText: (keys) => invoke<Record<string, GamePicture>>("game_text", { keys }),
   storageSet: (plugin, value) => invoke<void>("plugin_storage_set", { plugin, value }),
   setDisplay: ({ dock, miniHud, corner }) => invoke<Settings>("set_display", { dock, miniHud, corner }),
   shareSummary: (summary) => invoke<void>("share_summary", { summary: summary === null ? null : hudSummary(summary) }),

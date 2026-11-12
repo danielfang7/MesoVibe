@@ -9,7 +9,7 @@ import { darkWatch } from "./dark.js";
 import { append, h, icon, replace } from "./dom.js";
 import { connect } from "./ipc.js";
 import type { AppInfo, ChatChannel, ChatChannels, ChatColors, ChatLine, ChatPosition, Corner, Display, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
-import { PluginHost, confirmDialog, fill, renderView } from "./plugins.js";
+import { PluginHost, confirmDialog, fill, namePicture, renderView } from "./plugins.js";
 
 type ViewName = "session" | "chat" | "sees" | "settings";
 
@@ -273,7 +273,12 @@ function shell(initial: Settings): void {
     { class: "strip", attrs: { "aria-label": "Session", tabindex: "-1" } },
     h("div", { class: "strip-status", attrs: { role: "status", "aria-live": "polite" } }, dot, statusText),
     helpSlot,
-    h("div", { class: "strip-hero" }, h("span", { class: "hero" }, hero, heroUnit), heroEmpty, sessionActions),
+    h(
+      "div",
+      { class: "strip-hero" },
+      h("div", { class: "hero-stack" }, h("span", { class: "hero" }, hero, heroUnit), heroEmpty),
+      sessionActions,
+    ),
     toLevel,
     progressSlot,
     noticeSlot,
@@ -339,8 +344,11 @@ function shell(initial: Settings): void {
    * first gain.
    */
   let trackerHasBar = false;
+  /** Likewise the map: the engine reports it only when it changes. */
+  let trackerHasMap = false;
   const startTracker = () => {
     trackerHasBar = false;
+    trackerHasMap = false;
     void tracker.start();
   };
   startTracker();
@@ -539,7 +547,11 @@ function shell(initial: Settings): void {
       heroBox.hidden = true;
       const capturing = !panel.settings.safeMode && status?.state === "capturing";
       const gained = (summary?.expGained ?? 0) > 0;
-      heroEmpty.textContent = capturing && gained ? "Your rate appears after a few seconds of play." : "";
+      heroEmpty.textContent = summary?.lootOnly
+        ? "Mesos only so far"
+        : capturing && gained
+          ? "Your rate appears after a few seconds of play."
+          : "";
     } else {
       hero.textContent = formatCompact(rate);
       hero.title = `${formatDigits(rate)} EXP per hour`;
@@ -550,9 +562,13 @@ function shell(initial: Settings): void {
         heroBox.classList.add("arrive");
       }
     }
-    // Nothing to end or reset until the session has gained EXP, and nothing while capture is
-    // blocked or the tracker has crashed, when a press could not reach it.
-    sessionActions.hidden = panel.settings.safeMode || blocked || panel.crashed !== null || (summary?.expGained ?? 0) <= 0;
+    // End and Reset as the tracker offers them (nothing to end or reset before a gain or a
+    // pickup), and none while capture is blocked or the tracker has crashed, when a press could
+    // not reach it.
+    resetButton.hidden = !summary?.canReset;
+    endButton.hidden = !summary?.canEnd;
+    sessionActions.hidden =
+      panel.settings.safeMode || blocked || panel.crashed !== null || !(summary?.canReset || summary?.canEnd);
 
     const ago = stale && panel.lastReadAt !== null ? ` · last read ${Math.round(((status?.atMs ?? Date.now()) - panel.lastReadAt) / 1000)}s ago` : "";
     if (summary?.level != null) {
@@ -635,7 +651,7 @@ function shell(initial: Settings): void {
                 ),
               )
             : null,
-          ...(panel.crashed === null ? renderView(tracker.view, (action) => tracker.action(action)) : []),
+          ...(panel.crashed === null ? renderView(tracker.view, (action) => tracker.action(action), tracker.pictures) : []),
         );
         break;
       case "chat":
@@ -828,6 +844,36 @@ function shell(initial: Settings): void {
     );
   }
 
+  /** What What MesoVibe sees says about the pickup notices, in words the player can act on. */
+  function noticesLine(status: Status): string {
+    switch (status.notices) {
+      case "off":
+        return "Not reading: capture is paused.";
+      case "learning":
+        return "Learning the pickup text from your EXP lines.";
+      case "covered":
+        return "Covered for a moment: a few pickups may be missing. Nothing to do.";
+      case "blocked":
+        return "Covered by the party list.";
+      case "not_found":
+        return "Notices not found while EXP went up. Keep the bottom of the game window in view.";
+      case "reading": {
+        const waiting = status.waitingMesos;
+        if (waiting === 0) return "Reading";
+        return `Reading · ${waiting} ${waiting === 1 ? "amount waits" : "amounts wait"} for a digit to be learned`;
+      }
+    }
+  }
+
+  /** The map's name as MesoVibe last read it, or why it can't. */
+  function mapLine(status: Status): Node {
+    if (status.map === null) return h("span", {}, "Looking for the minimap.");
+    const key = status.map.key;
+    if (key === null) return h("span", {}, "Minimap not found. Keep the minimap open and in view.");
+    tracker.pictures.want([key]);
+    return namePicture({ gameText: key, label: "The map's name, as MesoVibe read it" }, tracker.pictures);
+  }
+
   function seesView(): Node[] {
     const status = panel.status;
     const reading = status?.reading === true && !panel.settings.safeMode;
@@ -851,6 +897,8 @@ function shell(initial: Settings): void {
           : h("p", { class: "state empty" }, "No picture yet. It appears while MesoVibe is reading the game."),
         h("p", { class: "text muted" }, "The exact rows MesoVibe reads, at the game's own size. This picture stays on this computer."),
         h("div", { class: "reading-box" }, h("span", { class: "label" }, "EXP bar"), h("span", { class: "number" }, box)),
+        reading && status ? h("div", { class: "reading-box", attrs: { "data-key": "sees-notices" } }, h("span", { class: "label" }, "Pickup notices"), h("span", {}, noticesLine(status))) : null,
+        reading && status ? h("div", { class: "reading-box", attrs: { "data-key": "sees-map" } }, h("span", { class: "label" }, "Map name"), mapLine(status)) : null,
         h(
           "dl",
           { class: "key-value" },
@@ -1088,6 +1136,11 @@ function shell(initial: Settings): void {
     if (status.exp?.confirmed) panel.lastReadAt = status.atMs;
     if (status.state !== "blocked") panel.helpOpen = false;
     tracker.setCapture(captureState(status));
+    tracker.setReaders({ notices: status.notices, waitingMesos: status.waitingMesos });
+    if (!trackerHasMap && status.map !== null) {
+      trackerHasMap = true;
+      tracker.event({ type: "MapChanged", map_key: status.map.key }, status.atMs);
+    }
     const bar = status.exp;
     if (!trackerHasBar && bar?.confirmed) {
       trackerHasBar = true;
@@ -1117,6 +1170,7 @@ function shell(initial: Settings): void {
   });
   void host.onGameEvent((event, atMs) => {
     if (event.type === "ExpChanged") trackerHasBar = true;
+    if (event.type === "MapChanged") trackerHasMap = true;
     tracker.event(event, atMs);
   });
   void host.onSnapshot((png) => {

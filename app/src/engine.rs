@@ -274,6 +274,14 @@ fn tick(
     let placement = tick.window.as_ref().and_then(|w| w.placement.as_ref());
     presence.follow(app, game, placement);
     let at_ms = now_ms();
+    // A settled map's name picture, kept so Past sessions can show it later.
+    if let Some(Some(name)) = &tick.map
+        && let Err(e) =
+            app.state::<crate::game_text::GameText>()
+                .remember(&name.key, &name.picture, at_ms)
+    {
+        eprintln!("Couldn't keep the map's name picture: {e}");
+    }
     for event in &tick.events {
         let _ = app.emit("engine://event", Stamped { at_ms, event });
     }

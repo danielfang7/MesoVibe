@@ -11,7 +11,7 @@
  * if plugins later run isolated in a Web Worker.
  */
 
-import type { Event } from "./generated/events.js";
+import type { Event, NoticeState } from "./generated/events.js";
 
 export type { Event, NoticeState } from "./generated/events.js";
 export { SCHEMA_VERSION } from "./generated/events.js";
@@ -32,6 +32,24 @@ export interface PluginManifest {
 export type CaptureState = "off" | "no_game" | "capturing" | "paused" | "blocked";
 
 // MARK: components. The host renders them as text, never HTML.
+
+/**
+ * A name shown as a picture of the game's own lettering: an item's or map's `item_key` or
+ * `map_key` from an event. The host draws the picture it keeps for that key, in the text's color.
+ * `label` is what screen readers hear; `suffix` is muted text after the picture, like "+2 maps".
+ *
+ * @experimental May change before the Loot Tracker's first release.
+ * @example
+ * { kind: "keyValue", items: [["Map", { gameText: event.map_key, label: "Map first played Nov 10, 9:42 PM" }]] }
+ */
+export interface GameTextCell {
+  gameText: string;
+  label?: string;
+  suffix?: string;
+}
+
+/** What a table cell or key-value value holds: text, nothing yet ("?"), or a name picture. */
+export type Cell = string | null | GameTextCell;
 
 /** One number with its label, like "EXP/hr 1.84M". `value` null shows "?" (never 0). */
 export interface StatNode {
@@ -62,12 +80,15 @@ export type ViewNode =
   | {
       kind: "table";
       columns: string[];
-      rows: (string | null)[][];
+      rows: Cell[][];
       numeric?: boolean[];
-      /** A smaller, muted second line under each row's first cell, by row; null for none. */
-      details?: (string | null)[];
+      /**
+       * Smaller, muted lines under each row's first cell, by row: one line, several, or null for
+       * none.
+       */
+      details?: (string | string[] | null)[];
     }
-  | { kind: "keyValue"; items: [string, string | null][] }
+  | { kind: "keyValue"; items: [string, Cell][] }
   | { kind: "text"; text: string; variant?: Variant }
   | {
       kind: "button";
@@ -96,15 +117,33 @@ export interface SessionSummary {
   minutesToLevel: number | null;
   /** Time played while capturing, in milliseconds. */
   activeMs: number;
+  /** The session has EXP, or loot without EXP, worth keeping: End is offered. */
+  canEnd: boolean;
+  /** The session has something to throw away: Reset is offered. */
+  canReset: boolean;
+  /** The session counted loot but no EXP yet: the strip says "Mesos only so far". */
+  lootOnly: boolean;
+}
+
+/**
+ * How the engine is reading the pickup notices, and how many mesos amounts wait for a digit to be
+ * learned before they're counted.
+ *
+ * @experimental May change before the Loot Tracker's first release.
+ */
+export interface Readers {
+  notices: NoticeState;
+  waitingMesos: number;
 }
 
 // MARK: the protocol between host and plugin
 
 /** Host to plugin. */
 export type ToPlugin =
-  | { type: "start"; saved: unknown; atMs: number; capture: CaptureState }
+  | { type: "start"; saved: unknown; atMs: number; capture: CaptureState; readers: Readers }
   | { type: "event"; event: Event; atMs: number }
   | { type: "capture"; state: CaptureState; atMs: number }
+  | { type: "readers"; readers: Readers; atMs: number }
   | { type: "action"; action: string; atMs: number }
   | { type: "tick"; atMs: number };
 
@@ -134,6 +173,8 @@ export interface PluginContext {
 export interface Handlers {
   onEvent?(event: Event, atMs: number): void;
   onCapture?(state: CaptureState, atMs: number): void;
+  /** The pickup notices' state changed. @experimental */
+  onReaders?(readers: Readers, atMs: number): void;
   onAction?(action: string, atMs: number): void;
   /** Once a second, for clocks and rates. */
   onTick?(atMs: number): void;
@@ -141,7 +182,7 @@ export interface Handlers {
 
 export interface Plugin {
   manifest: PluginManifest;
-  start(context: PluginContext, atMs: number, capture: CaptureState): Handlers;
+  start(context: PluginContext, atMs: number, capture: CaptureState, readers: Readers): Handlers;
 }
 
 /** The parts of a Worker's global scope the SDK uses. */
@@ -167,7 +208,7 @@ export function definePlugin(plugin: Plugin): void {
         setSummary: (summary) => send({ type: "summary", summary }),
         notice: (text, undo) => send(undo === undefined ? { type: "notice", text } : { type: "notice", text, undo }),
       };
-      handlers = plugin.start(context, data.atMs, data.capture);
+      handlers = plugin.start(context, data.atMs, data.capture, data.readers);
       return;
     }
     if (handlers === null) return;
@@ -177,6 +218,9 @@ export function definePlugin(plugin: Plugin): void {
         break;
       case "capture":
         handlers.onCapture?.(data.state, data.atMs);
+        break;
+      case "readers":
+        handlers.onReaders?.(data.readers, data.atMs);
         break;
       case "action":
         handlers.onAction?.(data.action, data.atMs);

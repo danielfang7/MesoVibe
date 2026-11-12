@@ -294,12 +294,18 @@ dl {
   min-height: 44px;
 }
 
-.hero {
+.hero-stack {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.hero {
   display: flex;
   align-items: baseline;
   gap: var(--space-sm);
 }
+
 
 .hero.arrive {
   animation: arrive 400ms ease-out both;
@@ -1139,4 +1145,26 @@ html.hud-page body {
 /* The words take the chat type's color. */
 .side-message .chat-text {
   color: inherit;
+}
+
+/* A game name as a picture of its lettering, in the text's color, about as tall as the text
+   beside it and smoothed when scaled, so it reads like a line of text. */
+/* Inline, so the picture's baseline shift takes effect and it wraps like text. */
+.game-text-cell {
+  display: inline;
+}
+
+.game-text-suffix {
+  margin-left: var(--space-xs);
+}
+
+.game-text {
+  display: inline-block;
+  background: currentColor;
+  max-width: 100%;
+}
+
+.game-text-suffix,
+.game-text-missing {
+  color: var(--text-muted);
 }

@@ -95,14 +95,14 @@ test("a minute of grinding feeds the strip, and the Session view shows only what
   assert.ok(summary.minutesToLevel > 0);
   assert.deepEqual(
     items(sent).map(([label]) => label),
-    ["Last 5 min", "Time played", "EXP gained", "EXP to go"],
+    ["Last 5 min EXP/hr", "Time played", "EXP gained", "EXP to go"],
     "Level-ups and EXP lost stay hidden at 0",
   );
   const values = Object.fromEntries(items(sent));
   assert.equal(values["Time played"], "1m");
   assert.equal(values["EXP gained"], "378");
   assert.equal(values["EXP to go"], (NEEDED - 230_378).toLocaleString("en-US"));
-  assert.match(values["Last 5 min"], /\/hr$/);
+  assert.match(values["Last 5 min EXP/hr"], /^[\d.]+[KM]?$/);
   assert.deepEqual(thisSession(sent).map((node) => node.kind), ["keyValue"]);
   const view = text(last(sent, "render").view);
   for (const repeat of ["Time to level", "Reset session", "EXP this level needs"]) {
@@ -130,7 +130,10 @@ test("End saves the session with a recap, and Undo within ten seconds takes it b
   // The next session waits for its first gain: EXP to go, not a list of zeros or a waiting line.
   assert.deepEqual(thisSession(sent).map((node) => node.kind), ["keyValue"]);
   assert.deepEqual(items(sent), [["EXP to go", (NEEDED - 230_378).toLocaleString("en-US")]]);
-  assert.deepEqual(pastSessions(sent)[0].details, ["Lv\u00a042"]);
+  // Under its map: the day and time played, then its levels.
+  const [lines] = pastSessions(sent)[0].details;
+  assert.match(lines[0], /· 1m$/);
+  assert.equal(lines[1], "Lv\u00a042");
 
   send({ type: "action", action: "undo-end", atMs: now + 5_000 });
   assert.equal(last(sent, "notice").text, "Session restored.");
@@ -166,7 +169,7 @@ test("End's recap leaves out the rate when the session is too short for one", ()
   assert.match(last(sent, "notice").text, /^Saved: 63 EXP in [^(]+\.$/);
   // Past sessions keeps no rate for it either, so a big first gain ended seconds later can't
   // read as "90M/hr".
-  assert.equal(pastSessions(sent)[0].rows[0][3], null);
+  assert.equal(pastSessions(sent)[0].rows[0][1], null);
 });
 
 // Fails if Reset writes the session to history again.
@@ -254,7 +257,7 @@ test("a session that starts on another character after End takes that character'
   assert.ok(last(sent, "summary").summary.expGained > 0);
   assert.ok(!items(sent).some(([label]) => label === "EXP lost"), "a death before the first gain isn't this session's loss");
   send({ type: "action", action: "end", atMs: now + 20_000 });
-  assert.deepEqual(pastSessions(sent)[0].details[0], "Lv\u00a030 →\u00a031");
+  assert.deepEqual(pastSessions(sent)[0].details[0][1], "Lv\u00a030 →\u00a031");
 });
 
 // At the 300px width each first cell breaks only between its parts. Fails if a wrong or blank level
@@ -273,9 +276,14 @@ test("Past sessions shows each session's levels under its date", () => {
   // The last row is a falling range saved before finish() checked level-ups: another character.
   const saved = { version: 1, history: [session(41, 43), session(null, null), session(43, 43), session(120, 35)], current: null };
   send({ type: "start", saved, atMs: 1_800_001_000_000, capture: "no_game" });
-  assert.deepEqual(pastSessions(sent)[0].details, ["Lv\u00a041 →\u00a043", null, "Lv\u00a043", "Lv\u00a035"]);
-  // The one ordinary space sits between the date and the time: "Nov 3," above "5:15 PM", never "Nov" above "3,".
-  assert.equal(pastSessions(sent)[0].rows[0][0].split(" ").length, 2);
+  // Under each row's map: the day and time played, then the levels.
+  const details = pastSessions(sent)[0].details;
+  assert.deepEqual(
+    details.map((lines) => lines.slice(1)),
+    [["Lv\u00a041 →\u00a043"], [], ["Lv\u00a043"], ["Lv\u00a035"]],
+  );
+  // The day never splits: "Nov 3" stays whole at the 300px width.
+  assert.match(details[0][0], /^\w{3}\u00a0\d+ · 10m$/);
 });
 
 test("a session left running when the app closed is kept as history", () => {

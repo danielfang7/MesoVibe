@@ -11,6 +11,7 @@ fn main() {
             "open_privacy_settings",
             "plugin_storage_get",
             "plugin_storage_set",
+            "game_text",
             "set_display",
             "share_summary",
             "hud_summary",

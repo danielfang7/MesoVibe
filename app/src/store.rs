@@ -318,7 +318,9 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
 /// A JSON file's contents: `None` when it doesn't exist, or when its contents can't be understood,
 /// in which case it's set aside. An error when the file can't be opened (another program holds
 /// it, a permission): it may be fine, so the caller mustn't treat it as empty.
-fn try_read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> std::io::Result<Option<T>> {
+pub(crate) fn try_read_json<T: for<'de> Deserialize<'de>>(
+    path: &Path,
+) -> std::io::Result<Option<T>> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
@@ -358,7 +360,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
 }
 
 /// Writes a file whole: to `<name>.part`, then renamed over the old one.
-fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut partial = path.as_os_str().to_owned();
     partial.push(".part");
     let partial = PathBuf::from(partial);

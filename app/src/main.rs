@@ -9,6 +9,7 @@ compile_error!("Release builds must go through `pnpm tauri build`, which embeds 
 mod chat;
 mod dock;
 mod engine;
+mod game_text;
 mod presence;
 mod store;
 mod updater;
@@ -53,6 +54,9 @@ fn main() {
             // MesoVibe reads the game from its first start; Safe mode in Settings turns that off.
             let reading = !settings.safe_mode;
             // Before the engine starts: it reads the display settings every tick.
+            app.manage(game_text::GameText::open(
+                app.path().app_data_dir()?.join("game-text.json"),
+            ));
             app.manage(store);
             app.manage(dock::Latest::default());
             app.manage(chat::ChatLog::default());
@@ -77,6 +81,7 @@ fn main() {
             open_privacy_settings,
             plugin_storage_get,
             plugin_storage_set,
+            game_text,
             set_display,
             share_summary,
             hud_summary,
@@ -203,6 +208,16 @@ fn open_privacy_settings() -> Result<(), String> {
     {
         Err("There's no capture permission to set on this system.".to_string())
     }
+}
+
+/// Pictures of game names by key, for the plugin views' name cells. A key with no picture kept is
+/// left out.
+#[tauri::command]
+fn game_text(
+    keys: Vec<String>,
+    names: State<'_, game_text::GameText>,
+) -> std::collections::BTreeMap<String, game_text::Picture> {
+    names.pictures(&keys)
 }
 
 #[tauri::command]
@@ -351,3 +366,46 @@ fn show_error_box(message: &str) {
 // macOS and Linux keep stderr and the log file; a WebView failure there is rare.
 #[cfg(not(windows))]
 fn show_error_box(_message: &str) {}
+
+#[cfg(test)]
+mod tests {
+    /// The names inside `generate_handler![...]`.
+    fn handlers(main: &str) -> Vec<String> {
+        let start =
+            main.find("generate_handler![").expect("the handler list") + "generate_handler![".len();
+        let end = start + main[start..].find(']').expect("its end");
+        main[start..end]
+            .split(',')
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
+    // A command the windows aren't allowed to call is refused at run time, which no browser test
+    // sees: the panel's tests run against a stand-in host. Fails if a command registered here is
+    // missing from build.rs's list or from every window's capabilities.
+    #[test]
+    fn every_command_is_allowed_for_some_window() {
+        let main = include_str!("main.rs");
+        let build = include_str!("../build.rs");
+        let capabilities = [
+            include_str!("../capabilities/default.json"),
+            include_str!("../capabilities/hud.json"),
+            include_str!("../capabilities/chat.json"),
+        ]
+        .concat();
+        let commands = handlers(main);
+        assert!(commands.len() > 5, "{commands:?}");
+        for command in commands {
+            assert!(
+                build.contains(&format!("\"{command}\"")),
+                "{command} isn't in build.rs"
+            );
+            let allow = format!("\"allow-{}\"", command.replace('_', "-"));
+            assert!(
+                capabilities.contains(&allow),
+                "no window may call {command}"
+            );
+        }
+    }
+}
