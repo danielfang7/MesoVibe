@@ -1092,8 +1092,8 @@ function shell(initial: Settings): void {
                 confirmDialog(
                   {
                     title: "Delete all session history?",
-                    deletes: ["Every past session on this computer: EXP gained, time played and rates."],
-                    keeps: ["The session running now, your settings, and everything outside the Session Tracker."],
+                    deletes: ["Every past session on this computer: EXP gained, time played, rates and mesos, and the All time totals."],
+                    keeps: ["The session running now, your settings, item and map name pictures, and everything outside the Session Tracker."],
                     confirmLabel: "Delete session history",
                   },
                   () => tracker.action("delete-history"),
