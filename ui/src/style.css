@@ -294,16 +294,24 @@ dl {
   min-height: 44px;
 }
 
+.strip-hero[hidden] {
+  display: none;
+}
+
 .hero-stack {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
+/* In the narrowest panel a wide rate ("1.85M") puts "EXP/hr" under the number, so Pause, Reset and
+   End keep their room. */
 .hero {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-sm);
+  column-gap: var(--space-sm);
 }
 
 
@@ -344,7 +352,7 @@ dl {
   font-size: 14px;
 }
 
-/* Reset above End, the same width, quieter than the hero. */
+/* Pause, Reset and End stacked, the same width, quieter than the hero. */
 .strip-actions {
   display: flex;
   flex-direction: column;
@@ -381,9 +389,27 @@ dl {
   display: none;
 }
 
+/* Before the first gain: "126,916 EXP to go" under the bar, the number as loud as the level. */
+.to-go {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  font-size: 14px;
+}
+
+.to-go[hidden] {
+  display: none;
+}
+
+.to-go-unit {
+  color: var(--text-muted);
+}
+
 .strip.dim .number-hero,
 .strip.dim .strip-progress,
-.strip.dim .to-level {
+.strip.dim .to-level,
+.strip.dim .to-go,
+.strip.paused .number-hero {
   color: var(--text-muted);
 }
 
@@ -697,6 +723,59 @@ dl {
 .table .num {
   text-align: right;
   padding-left: var(--space-sm);
+}
+
+/* A two-word number heading ("EXP gained") may wrap in a narrow panel, so the map keeps its room;
+   the headings line up along their last line. */
+.table th.num {
+  white-space: normal;
+  vertical-align: bottom;
+}
+
+.table th {
+  vertical-align: bottom;
+}
+
+/* A row's icon button in the last column, like Past sessions' delete: quiet until pointed at. */
+.table .row-action {
+  width: 1px;
+  padding-left: var(--space-xs);
+  text-align: right;
+}
+
+.row-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--micro) ease-out;
+}
+
+.row-action-button:hover {
+  background: var(--surface-raised);
+  color: var(--danger);
+}
+
+.row-action-button .icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Read by screen readers only. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .divider {

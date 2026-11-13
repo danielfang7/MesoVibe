@@ -7,6 +7,7 @@ import type {
   Event as GameEvent,
   PluginManifest,
   Readers,
+  RowAction,
   SessionSummary,
   ToHost,
   ToPlugin,
@@ -14,7 +15,7 @@ import type {
 } from "@mesovibe/sdk";
 import type { Confirm } from "@mesovibe/sdk";
 
-import { h } from "./dom.js";
+import { h, icon } from "./dom.js";
 import type { GamePicture, Host } from "./ipc.js";
 
 /**
@@ -353,10 +354,40 @@ function renderNode(
     case "table": {
       const numeric = node.numeric ?? [];
       const details = node.details ?? [];
+      const rowActions = node.rowActions;
+      /** The row's icon button in a last column, when the table has any. */
+      const actionCell = (action: RowAction | null | undefined) =>
+        rowActions === undefined
+          ? null
+          : h(
+              "td",
+              { class: "row-action" },
+              action === null || action === undefined
+                ? null
+                : h(
+                    "button",
+                    {
+                      class: "row-action-button",
+                      // Keyed by its action, not its place: once its row is gone, nothing else takes its focus.
+                      attrs: { type: "button", "aria-label": action.label, title: action.label, "data-key": `row-action:${action.action}` },
+                      on: { click: () => act(action.action) },
+                    },
+                    icon(action.icon),
+                  ),
+            );
       return h(
         "table",
         { class: "table" },
-        h("thead", {}, h("tr", {}, ...node.columns.map((c, i) => h("th", { class: numeric[i] ? "num" : "" }, c)))),
+        h(
+          "thead",
+          {},
+          h(
+            "tr",
+            {},
+            ...node.columns.map((c, i) => h("th", { class: numeric[i] ? "num" : "" }, c)),
+            rowActions === undefined ? null : h("th", { class: "row-action" }, h("span", { class: "visually-hidden" }, "Actions")),
+          ),
+        ),
         h(
           "tbody",
           {},
@@ -374,6 +405,7 @@ function renderNode(
                   ...lines.filter((line) => line !== "").map((line) => h("span", { class: "cell-detail" }, line)),
                 );
               }),
+              actionCell(rowActions?.[r]),
             ),
           ),
         ),

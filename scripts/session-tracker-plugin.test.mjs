@@ -127,9 +127,10 @@ test("End saves the session with a recap, and Undo within ten seconds takes it b
   assert.match(notice.text, /^Saved: 378 EXP in 1m \(.+\/hr\)\.$/);
   assert.equal(last(sent, "summary").summary.expGained, 0);
   assert.equal(last(sent, "save").data.history.length, 1);
-  // The next session waits for its first gain: EXP to go, not a list of zeros or a waiting line.
-  assert.deepEqual(thisSession(sent).map((node) => node.kind), ["keyValue"]);
-  assert.deepEqual(items(sent), [["EXP to go", (NEEDED - 230_378).toLocaleString("en-US")]]);
+  // The next session waits for its first gain: the strip has the EXP to go, so This session has
+  // nothing to show, not a list of zeros or a waiting line.
+  assert.equal(section(sent, "This session"), undefined);
+  assert.equal(last(sent, "summary").summary.expToGo, NEEDED - 230_378);
   // Under its map: the day and time played, then its levels.
   const [lines] = pastSessions(sent)[0].details;
   assert.match(lines[0], /· 1m$/);
@@ -168,8 +169,8 @@ test("End's recap leaves out the rate when the session is too short for one", ()
   send({ type: "action", action: "end", atMs: t0 + 7_000 });
   assert.match(last(sent, "notice").text, /^Saved: 63 EXP in [^(]+\.$/);
   // Past sessions keeps no rate for it either, so a big first gain ended seconds later can't
-  // read as "90M/hr".
-  assert.equal(pastSessions(sent)[0].rows[0][1], null);
+  // read as "90M/hr"; its EXP gained still shows.
+  assert.deepEqual(pastSessions(sent)[0].rows[0].slice(1), ["63", null]);
 });
 
 // Fails if Reset writes the session to history again.
@@ -204,6 +205,98 @@ test("deleting history removes the saved sessions and keeps the running one", ()
   const saved = last(sent, "save").data;
   assert.equal(saved.history.length, 0);
   assert.notEqual(saved.current, null);
+});
+
+// One past session goes with one click, with Undo like End. Fails if the wrong row goes, the
+// running session is touched, Undo doesn't bring the row back, or a late Undo is silent.
+test("a past session's delete button removes it, and Undo within ten seconds brings it back", () => {
+  const { send, sent, now } = grind();
+  send({ type: "action", action: "end", atMs: now });
+  for (let k = 1; k <= 3; k++) send(exp(230_378 + k * 63, now + 60_000 + k * 1000));
+  send({ type: "action", action: "end", atMs: now + 70_000 });
+  const before = last(sent, "save").data.history.map((past) => past.startedAtMs);
+  assert.equal(before.length, 2);
+  const table = pastSessions(sent)[0];
+  assert.deepEqual(table.columns, ["Map", "EXP gained", "EXP/hr"]);
+  // Each row has its own delete, named for when its session started.
+  assert.equal(table.rowActions.length, 2);
+  const [newer, older] = table.rowActions;
+  assert.equal(newer.icon, "delete");
+  assert.match(older.label, /^Delete the session from /);
+  assert.notEqual(newer.action, older.action);
+
+  send(exp(231_000, now + 75_000));
+  const running = last(sent, "summary").summary.expGained;
+  send({ type: "action", action: older.action, atMs: now + 76_000 });
+  assert.deepEqual(last(sent, "notice"), { type: "notice", text: "Session deleted.", undo: "undo-delete" });
+  assert.deepEqual(last(sent, "save").data.history.map((past) => past.startedAtMs), [before[0]], "only the older one goes");
+  assert.equal(pastSessions(sent)[0].rows.length, 1);
+  assert.equal(last(sent, "summary").summary.expGained, running, "the running session carries on");
+
+  send({ type: "action", action: "undo-delete", atMs: now + 80_000 });
+  assert.equal(last(sent, "notice").text, "Session restored.");
+  assert.deepEqual(last(sent, "save").data.history.map((past) => past.startedAtMs), before);
+  assert.equal(last(sent, "summary").summary.expGained, running);
+
+  // Too late: the Undo window has closed.
+  send({ type: "action", action: newer.action, atMs: now + 81_000 });
+  send({ type: "tick", atMs: now + 95_000 });
+  send({ type: "action", action: "undo-delete", atMs: now + 95_000 });
+  assert.equal(last(sent, "notice").text, "Too late to undo: the session is deleted.");
+  assert.deepEqual(last(sent, "save").data.history.map((past) => past.startedAtMs), [before[1]]);
+  // A delete for a session that's already gone does nothing.
+  const notices = sent.filter((m) => m.type === "notice").length;
+  send({ type: "action", action: newer.action, atMs: now + 96_000 });
+  assert.equal(sent.filter((m) => m.type === "notice").length, notices);
+});
+
+// Pause stops the session counting until Resume, while the strip's bar keeps following the game.
+// Fails if time or a gain made while paused counts, or Resume counts the paused gains.
+test("Pause stops time and EXP, and Resume counts only what's gained after it", () => {
+  const { send, sent, now } = grind();
+  const summary = () => last(sent, "summary").summary;
+  assert.equal(summary().canPause, true);
+  assert.equal(summary().paused, false);
+  send({ type: "action", action: "pause", atMs: now });
+  assert.equal(summary().paused, true);
+  const { expGained, activeMs } = summary();
+  for (let s = 1; s <= 30; s++) {
+    send({ type: "tick", atMs: now + s * 1000 });
+    if (s % 10 === 0) send(exp(230_378 + s * 10, now + s * 1000));
+  }
+  assert.equal(summary().expGained, expGained, "gains while paused don't count");
+  assert.equal(summary().activeMs, activeMs, "nor does the time");
+  assert.equal(summary().pctHundredths, Math.round((230_678 * 10_000) / NEEDED), "the bar still follows the game");
+
+  send({ type: "action", action: "resume", atMs: now + 31_000 });
+  assert.equal(summary().paused, false);
+  send({ type: "tick", atMs: now + 32_000 });
+  send(exp(230_741, now + 32_000));
+  assert.equal(summary().expGained, expGained + 63, "only the gain after Resume");
+  assert.equal(summary().activeMs, activeMs + 1_000);
+});
+
+// Fails if Pause is offered before the session starts, End or Reset leave the next session paused,
+// or a level-up while paused loses the session's start level.
+test("Pause waits for the first gain, a level-up while paused keeps the levels, and End starts unpaused", () => {
+  const { send, sent } = run();
+  const t0 = 1_800_000_000_000;
+  send({ type: "start", saved: null, atMs: t0, capture: "capturing" });
+  send(exp(230_000, t0));
+  assert.equal(last(sent, "summary").summary.canPause, false, "nothing to pause yet");
+  send({ type: "action", action: "pause", atMs: t0 + 1_000 });
+  assert.equal(last(sent, "summary").summary.paused, false);
+
+  const played = grind();
+  played.send({ type: "action", action: "pause", atMs: played.now });
+  played.send({
+    type: "event",
+    atMs: played.now + 5_000,
+    event: { type: "ExpChanged", level: 43, exp: 50, pct_hundredths: 1, needed: NEEDED },
+  });
+  played.send({ type: "action", action: "end", atMs: played.now + 6_000 });
+  assert.equal(last(played.sent, "summary").summary.paused, false, "the next session isn't paused");
+  assert.equal(pastSessions(played.sent)[0].details[0][1], "Lv\u00a042 →\u00a043");
 });
 
 // Fails if the 30 s throttle returns for EXP changes, or every gain writes.

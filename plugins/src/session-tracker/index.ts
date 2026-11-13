@@ -1,12 +1,13 @@
 /**
  * Session Tracker: EXP/hr for the session and the last 5 minutes, time to
  * level, the map and the mesos picked up, and a history of past sessions kept on this computer. It
- * feeds the session strip and draws the Session view. End saves the session to Past sessions and Reset
- * throws it away, each one click with Undo; deleting history asks first.
+ * feeds the session strip and draws the Session view. Pause stops the session counting until
+ * Resume. End saves the session to Past sessions, Reset throws it away and a past session's delete
+ * button removes it, each one click with Undo; deleting all history asks first.
  */
 
 import { definePlugin, formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";
-import type { CaptureState, Cell, Readers, SessionSummary, ViewNode } from "@mesovibe/sdk";
+import type { CaptureState, Cell, Readers, RowAction, SessionSummary, ViewNode } from "@mesovibe/sdk";
 import {
   addExp,
   addPickup,
@@ -23,6 +24,7 @@ import {
 import type { LootFields, MapEntry } from "./loot.js";
 import {
   advance,
+  compare,
   finish,
   MIN_RATE_MS,
   minutesToLevel,
@@ -33,8 +35,14 @@ import {
 } from "./session.js";
 import type { PastSession, SessionState } from "./session.js";
 
-/** How long End and Reset can be undone. */
+/** How long End, Reset and deleting a past session can be undone. */
 const UNDO_MS = 10_000;
+/** What a press of Undo after its ten seconds says. */
+const TOO_LATE = {
+  "undo-end": "Too late to undo: it's saved in Past sessions.",
+  "undo-reset": "Too late to undo the reset.",
+  "undo-delete": "Too late to undo: the session is deleted.",
+};
 /** How often the running session is saved while nothing changes, so closing MesoVibe loses little. */
 const SAVE_EVERY_MS = 30_000;
 /** The most often an EXP change saves the session: at most this much play is missing after a close. */
@@ -53,8 +61,11 @@ const SHOWN_MORE = 50;
 /** After this long still learning the pickup text, the line says what helps. */
 const LEARNING_LONG_MS = 5 * 60_000;
 
-/** A session as kept, running or past: its EXP and, since loot tracking, its loot by map. */
-type Session = SessionState & LootFields;
+/**
+ * A session as kept, running or past: its EXP and, since loot tracking, its loot by map. `paused`:
+ * the player paused it, so no time, EXP or loot counts until Resume.
+ */
+type Session = SessionState & LootFields & { paused?: true };
 type Past = PastSession & LootFields;
 
 /** What sessions dropped past MAX_HISTORY add to All time, so it never forgets them. */
@@ -70,9 +81,9 @@ interface Saved {
   allTime?: AllTime;
 }
 
-/** What Undo puts back: the session and history before End or Reset. */
+/** What Undo puts back: the session and history before End, Reset or deleting a past session. */
 interface Undo {
-  kind: "end" | "reset";
+  kind: "end" | "reset" | "delete";
   session: Session;
   history: Past[];
   allTime: AllTime;
@@ -125,10 +136,13 @@ function summary(session: Session, atMs: number): SessionSummary {
     level: last?.level ?? null,
     pctHundredths: last?.pctHundredths ?? null,
     minutesToLevel: minutesToLevel(session),
+    expToGo: toGo(session),
     activeMs: session.activeMs,
     canEnd: canEnd(session, atMs),
     canReset: session.expGained > 0 || (session.held?.mesos ?? 0) > 0,
     lootOnly: session.expGained <= 0 && (session.held?.mesos ?? 0) > 0,
+    paused: session.paused === true,
+    canPause: session.expGained > 0 || session.paused === true,
   };
 }
 
@@ -272,16 +286,6 @@ function noticeLines(session: Session, notices: Notices): ViewNode[] {
   } else if (readers.notices === "blocked") {
     lines.push({ kind: "partial", text: "Pickups aren't read in a party yet: the party list covers the notices." });
   }
-  if (readers.waitingMesos > 0) {
-    lines.push({
-      kind: "text",
-      variant: "muted",
-      text:
-        readers.waitingMesos === 1
-          ? "1 amount is still being read; it's added once its digits are known."
-          : `${readers.waitingMesos} amounts still being read; they're added once their digits are known.`,
-    });
-  }
   if (session.shapesWrong) {
     lines.push({ kind: "partial", text: "Some mesos amounts may be wrong: a digit was misread and is no longer used." });
   } else if (session.missed && readers.notices !== "blocked") {
@@ -290,32 +294,40 @@ function noticeLines(session: Session, notices: Notices): ViewNode[] {
   return lines;
 }
 
-/** A Past sessions row: [cells, detail lines]. */
-function pastRow(past: Past, first: Map<string, number>): [Cell[], string[]] {
+/** The action that deletes one past session, by when it started. */
+const DELETE_SESSION = "delete-session:";
+
+/**
+ * A Past sessions row: [cells, detail lines, its delete button]. Mesos/hr is still counted and saved
+ * with each session, but not shown yet.
+ */
+function pastRow(past: Past, first: Map<string, number>): [Cell[], string[], RowAction] {
   const lines = [dayAndTime(past), levels(past)].filter((line): line is string => line !== null);
-  const sessionRate = past.activeMs >= MIN_RATE_MS ? formatCompact((past.expGained * 3_600_000) / past.activeMs) : null;
+  const gained = formatCompact(past.expGained);
+  const remove: RowAction = {
+    icon: "delete",
+    label: `Delete the session from ${when(past.startedAtMs)}`,
+    action: `${DELETE_SESSION}${past.startedAtMs}`,
+  };
   const main = longest(past.maps ?? []);
-  // No map's name read, or a session from before maps were tracked: its own EXP/hr, no mesos.
-  if (main === null) return [[mapCell(null, first), sessionRate, "—"], lines];
+  // No map's name read, or a session from before maps were tracked: its own EXP/hr.
+  if (main === null) {
+    const rate = past.activeMs >= MIN_RATE_MS ? formatCompact((past.expGained * 3_600_000) / past.activeMs) : null;
+    return [[mapCell(null, first), gained, rate], lines, remove];
+  }
   const others = (past.maps?.length ?? 1) - 1;
   const suffix = others === 0 ? undefined : `+${others} map${others === 1 ? "" : "s"}`;
-  // The row is named for one map, so its rates are that map's own.
-  const rates = mapRates(main, MIN_RATE_MS);
-  return [
-    [
-      mapCell(main.k, first, suffix),
-      rates.exp === null ? null : formatCompact(rates.exp),
-      rates.mesos === null ? "—" : formatCompact(rates.mesos),
-    ],
-    lines,
-  ];
+  // The row is named for one map, so its rate is that map's own; EXP gained is the whole session's,
+  // over the time played under it.
+  const rate = mapRates(main, MIN_RATE_MS).exp;
+  return [[mapCell(main.k, first, suffix), gained, rate === null ? null : formatCompact(rate)], lines, remove];
 }
 
 /**
  * The Session view. "This session" holds only what the strip above it doesn't show:
  * no EXP/hr, level progress or time to level, which the strip already has. Before the
- * first gain while the game is being read, the strip shows the level and its bar, so nothing here
- * waits on the first gain, and with nothing else to show the section is left out.
+ * first gain the strip shows the level, its bar and the EXP to go, so nothing here waits on the
+ * first gain, and with nothing else to show the section is left out.
  */
 function view(
   session: Session,
@@ -330,16 +342,15 @@ function view(
   const reading = capture === "capturing";
   const first = firstPlayed(history, session);
   const mesos = totalMesos(session);
-  const partial = session.missed === true || notices.readers.waitingMesos > 0;
+  const partial = session.missed === true;
   const mapRow: [string, Cell][] = map === undefined ? [] : [["Map", mapCell(map, first)]];
   const mesosRow: [string, Cell][] = mesos > 0 ? [["Mesos", mesosText(mesos, partial, false)]] : [];
   if (session.last === null) {
     if (!reading) current.push({ kind: "loading", text: "Waiting for the game. Your session starts with your first EXP gain." });
   } else if (session.expGained <= 0) {
-    // At startup and after End or Reset: no list of zeros.
+    // At startup and after End or Reset: no list of zeros, and the EXP to go is in the strip.
     if (!reading) current.push({ kind: "empty", text: "Your session numbers appear after your first gain." });
     const items: [string, Cell][] = [...(mesos > 0 ? mapRow : []), ...mesosRow];
-    if (left !== null) items.push(["EXP to go", formatDigits(left)]);
     if (items.length > 0) current.push({ kind: "keyValue", items });
   } else {
     const recent = recentRate(session);
@@ -360,10 +371,11 @@ function view(
   const rows = history.slice(0, showMore ? SHOWN_MORE : SHOWN_HISTORY).map((s) => pastRow(s, first));
   const table: ViewNode = {
     kind: "table",
-    columns: ["Map", "EXP/hr", "Mesos/hr"],
+    columns: ["Map", "EXP gained", "EXP/hr"],
     numeric: [false, true, true],
     rows: rows.map(([cells]) => cells),
     details: rows.map(([, lines]) => lines),
+    rowActions: rows.map(([, , remove]) => remove),
   };
   const more: ViewNode[] =
     history.length > SHOWN_HISTORY
@@ -444,7 +456,7 @@ definePlugin({
     /** Moves the session's clock, giving the time played to the map the player is on. */
     const tick = (atMs: number) => {
       const before = session.activeMs;
-      advance(session, atMs, capture === "capturing");
+      advance(session, atMs, capture === "capturing" && session.paused !== true);
       addTime(session, map, session.activeMs - before, reads(readers.notices), session.last?.level ?? null);
     };
     persist(startedAtMs, leftOver !== null ? 0 : SAVE_EVERY_MS);
@@ -453,7 +465,15 @@ definePlugin({
     return {
       onEvent(event, atMs) {
         tick(atMs);
-        if (event.type === "ExpChanged") {
+        if (event.type === "ExpChanged" && session.paused) {
+          // Paused, the bar is still followed: the strip's level stays true, and Resume counts only
+          // what's gained after it. A level-up still counts, so the session's levels add up.
+          const reading = { level: event.level, exp: event.exp, pctHundredths: event.pct_hundredths, needed: event.needed };
+          const change = compare(session.last, reading);
+          if (change.kind === "gain" && change.levelUp) session.levelUps += 1;
+          session.last = reading;
+          show(atMs);
+        } else if (event.type === "ExpChanged") {
           const firstGain = session.expGained <= 0;
           const before = session.last;
           const gainedBefore = session.expGained;
@@ -476,7 +496,11 @@ definePlugin({
         } else if (event.type === "MapChanged") {
           map = event.map_key;
           show(atMs);
-        } else if (event.type === "MesosGained" || event.type === "PartyBonus" || event.type === "NoticesMissed") {
+        } else if (
+          // Pickups made while paused aren't the session's.
+          !session.paused &&
+          (event.type === "MesosGained" || event.type === "PartyBonus" || event.type === "NoticesMissed")
+        ) {
           addPickup(session, event, map, session.expGained > 0, reads(readers.notices), atMs, session.last?.level ?? null);
           unsaved = true;
           persist(atMs, EXP_SAVE_EVERY_MS);
@@ -522,20 +546,47 @@ definePlugin({
             persist(atMs, 0);
             context.notice("Session reset.", "undo-reset");
           }
-        } else if (action === "undo-end" || action === "undo-reset") {
+        } else if (action === "pause") {
+          // The clock above ran up to the press; from here nothing counts until Resume.
+          if (session.expGained > 0 && session.paused !== true) {
+            session.paused = true;
+            persist(atMs, 0);
+          }
+        } else if (action === "resume") {
+          if (session.paused) {
+            delete session.paused;
+            persist(atMs, 0);
+          }
+        } else if (action.startsWith(DELETE_SESSION)) {
+          // One past session, by when it started: one click, with Undo.
+          const startedAtMs = Number(action.slice(DELETE_SESSION.length));
+          const at = history.findIndex((past) => past.startedAtMs === startedAtMs);
+          if (at !== -1) {
+            remember("delete", atMs);
+            history = history.filter((_, i) => i !== at);
+            persist(atMs, 0);
+            context.notice("Session deleted.", "undo-delete");
+          }
+        } else if (action === "undo-end" || action === "undo-reset" || action === "undo-delete") {
           if (undo !== null && action === `undo-${undo.kind}` && atMs <= undo.until) {
-            // Pickups made since End or Reset belong to the session put back.
-            const since = session;
-            ({ session, history, allTime } = undo);
-            mergeLoot(session, since);
+            if (undo.kind === "delete") {
+              // Only the history: the running session carries on. End, Reset or another delete
+              // since would have replaced this Undo, so the history is as it was left.
+              history = undo.history;
+            } else {
+              // Pickups made since End or Reset belong to the session put back.
+              const since = session;
+              ({ session, history, allTime } = undo);
+              mergeLoot(session, since);
+              session.lastAtMs = atMs;
+            }
             undo = null;
-            session.lastAtMs = atMs;
             persist(atMs, 0);
             context.notice("Session restored.");
           } else if (undo === null || atMs > undo.until) {
             // The panel's Undo can outlive the window by a tick; say so rather than do nothing.
             undo = null;
-            context.notice(action === "undo-end" ? "Too late to undo: it's saved in Past sessions." : "Too late to undo the reset.");
+            context.notice(TOO_LATE[action]);
           }
         } else if (action === "toggle-history") {
           showMore = !showMore;
