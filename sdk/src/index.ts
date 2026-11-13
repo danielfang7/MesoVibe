@@ -70,6 +70,17 @@ export interface Confirm {
   confirmLabel: string;
 }
 
+/**
+ * An icon button at the right end of a table row, like Past sessions' delete. Its label names the
+ * row ("Delete the session from Nov 10, 5:15 PM"): screen readers read it and the pointer shows it.
+ */
+export interface RowAction {
+  icon: "delete";
+  label: string;
+  /** Sent back to the plugin as an action when pressed. */
+  action: string;
+}
+
 export type ViewNode =
   | { kind: "section"; title: string; children: ViewNode[] }
   | { kind: "row"; children: ViewNode[] }
@@ -87,6 +98,8 @@ export type ViewNode =
        * none.
        */
       details?: (string | string[] | null)[];
+      /** An icon button at the end of each row, by row, or null for none. */
+      rowActions?: (RowAction | null)[];
     }
   | { kind: "keyValue"; items: [string, Cell][] }
   | { kind: "text"; text: string; variant?: Variant }
@@ -115,6 +128,8 @@ export interface SessionSummary {
   pctHundredths: number | null;
   /** Minutes to the next level at the session rate, the same rate as `expPerHour`; null when unknown. */
   minutesToLevel: number | null;
+  /** EXP left to the next level; null when the level's size isn't known. */
+  expToGo: number | null;
   /** Time played while capturing, in milliseconds. */
   activeMs: number;
   /** The session has EXP, or loot without EXP, worth keeping: End is offered. */
@@ -123,6 +138,10 @@ export interface SessionSummary {
   canReset: boolean;
   /** The session counted loot but no EXP yet: the strip says "Mesos only so far". */
   lootOnly: boolean;
+  /** The player paused the session: no time, EXP or loot counts until Resume. */
+  paused: boolean;
+  /** Pause is offered (Resume, while paused): the session has started. */
+  canPause: boolean;
 }
 
 /**

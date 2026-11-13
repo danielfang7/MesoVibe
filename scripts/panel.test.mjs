@@ -298,8 +298,8 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await page.until(`!${actions}.hidden`, "Reset and End after the first gain");
     assert.deepEqual(
       await page.evaluate(`[...${actions}.querySelectorAll("button")].map((b) => b.dataset.key)`),
-      ["strip-reset", "strip-end"],
-      "End below Reset",
+      ["strip-pause", "strip-reset", "strip-end"],
+      "Pause, then Reset, then End",
     );
     // The Session view repeats nothing the strip shows.
     const view = await page.evaluate(`document.querySelector(".view").innerText`);
@@ -349,16 +349,74 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
-  // Before the first gain the strip shows the level and its bar, with no rate and no words in its
-  // place. The game sends no EXP change here, so this fails if the tracker only learns the bar
-  // from a change it may have missed.
-  await t.test("before the first gain the strip shows the level and its bar, without a rate", async () => {
+  // Before the first gain the strip shows the level, its bar and the EXP to go under it, with no
+  // rate and no empty row pushing them down from the status. The game sends no EXP change here, so
+  // this fails if the tracker only learns the bar from a change it may have missed.
+  await t.test("before the first gain the strip shows the level, its bar and the EXP to go, without a rate", async () => {
     const page = await openPage(devtools, at("idle"));
     await page.until(`document.querySelector(".status-text")?.textContent === "Reading game"`, "reading");
     assert.equal(await page.until(`document.querySelector(".to-level")?.textContent || null`, "the level"), "Lv 42");
     await page.until(`document.querySelector('.strip-progress [role="progressbar"]')`, "the level's bar");
     assert.equal(await page.evaluate(`document.querySelector(".hero").hidden`), true, "no rate yet");
     assert.equal(await page.evaluate(`document.querySelector(".hero-empty").textContent`), "");
+    assert.equal(await page.evaluate(`document.querySelector(".strip-hero").hidden`), true, "no empty rate row");
+    const gap = await page.evaluate(
+      `document.querySelector(".to-level").getBoundingClientRect().top - document.querySelector(".strip-status").getBoundingClientRect().bottom`,
+    );
+    assert.ok(gap <= 16, `the level sits ${gap}px under the status`);
+    const toGo = await page.until(`document.querySelector(".to-go:not([hidden])")?.textContent`, "the EXP to go");
+    assert.equal(toGo, `${(356_916 - 230_000).toLocaleString("en-US")}EXP to go`);
+    const order = await page.evaluate(`[...document.querySelector(".strip").children].map((c) => c.className).filter((c) => /to-level|strip-progress|to-go/.test(c))`);
+    assert.deepEqual(order, ["to-level", "strip-progress", "to-go"], "under the bar");
+    assert.doesNotMatch(await page.evaluate(`document.querySelector(".view").innerText`), /EXP to go/, "said once");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // Pause and Resume are one button that keeps the keyboard focus. Fails if the host and plugin
+  // action names drift, the strip doesn't say it's paused, or gains keep counting while paused.
+  await t.test("Pause turns into Resume, and the session stops counting until it's pressed", async () => {
+    const page = await openPage(devtools, at("grind"));
+    const pause = `document.querySelector('[data-key="strip-pause"]')`;
+    await page.until(`!${pause}.hidden && ${pause}.textContent === "Pause"`, "Pause after the first gain");
+    await page.evaluate(`${pause}.focus(); ${pause}.click()`);
+    await page.until(`${pause}.textContent === "Resume"`, "Resume");
+    assert.equal(await page.evaluate(`document.activeElement === ${pause}`), true, "focus stays on the button");
+    assert.equal(await page.until(`document.querySelector(".hero-empty")?.textContent || null`, "the paused line"), "Session paused");
+    // The stand-in gains EXP every two seconds; none of it counts while paused.
+    const gained = `[...document.querySelectorAll(".view dt")].find((dt) => dt.textContent === "EXP gained")?.nextElementSibling.textContent`;
+    const before = await page.until(gained, "EXP gained");
+    await new Promise((resolve) => setTimeout(resolve, 4_500));
+    assert.equal(await page.evaluate(gained), before, "no gains while paused");
+    await page.evaluate(`${pause}.click()`);
+    await page.until(`${pause}.textContent === "Pause"`, "Pause again");
+    await page.until(`${gained} !== ${JSON.stringify(before)}`, "gains count again");
+    assert.notEqual(await page.evaluate(`document.querySelector(".hero-empty").textContent`), "Session paused");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // A past session goes with one click on its bin, with Undo like End. Fails if the button has no
+  // name, focus is lost with its row instead of moving to Undo, or Undo doesn't bring the row back.
+  await t.test("a past session's delete button removes its row, with Undo", async () => {
+    const page = await openPage(devtools, at("grind"));
+    await page.until(`!document.querySelector(".strip-actions").hidden`, "End after the first gain");
+    await page.evaluate(`document.querySelector('[data-key="strip-end"]').click()`);
+    const bin = `document.querySelector(".view .row-action-button")`;
+    const label = await page.until(`${bin}?.getAttribute("aria-label")`, "the delete button");
+    assert.match(label, /^Delete the session from /);
+    assert.deepEqual(
+      await page.evaluate(`[...document.querySelector(".view .table thead tr").cells].map((c) => c.textContent)`),
+      ["Map", "EXP gained", "EXP/hr", "Actions"],
+    );
+    // The delete's notice takes the place of End's, and its Undo takes the focus.
+    await page.evaluate(`${bin}.focus(); ${bin}.click()`);
+    await page.until(`document.querySelector(".notice")?.textContent.includes("Session deleted.")`, "the delete notice");
+    assert.equal(await page.until(`document.activeElement?.dataset?.key`, "focus on Undo"), "notice-undo");
+    await page.until(`document.querySelector(".view .table") === null`, "the row gone");
+    assert.ok(await page.click("Undo"));
+    await page.until(`document.querySelector(".notice")?.textContent.includes("Session restored.")`, "the undo");
+    await page.until(`${bin}?.getAttribute("aria-label") === ${JSON.stringify(label)}`, "the row back");
     assert.deepEqual(page.errors, []);
     page.close();
   });
@@ -489,6 +547,11 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.deepEqual(page.errors, []);
     page.close();
 
+    // The bar is read but nothing is gained yet: the card asks for the gain that starts the rate.
+    const idle = await openPage(devtools, at("idle", "hud.html"));
+    await idle.until(`document.querySelector(".hud-note")?.textContent === "Earn more EXP to start"`, "waiting for a gain");
+    assert.deepEqual(idle.errors, []);
+    idle.close();
     const learning = await openPage(devtools, at("learning", "hud.html"));
     await learning.until(`document.querySelector(".hud-note")?.textContent === "Learning your EXP bar…"`, "learning");
     learning.close();

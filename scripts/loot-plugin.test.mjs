@@ -1,6 +1,7 @@
 // The Session Tracker's loot as the host runs it: mesos and time by map, a map's mesos/hr, the
 // lines about reading pickups, and Past sessions rows named for a map. Bundled from source with the SDK and
-// driven only through the SDK's messages, like session-tracker-plugin.test.mjs.
+// driven only through the SDK's messages, like session-tracker-plugin.test.mjs. Past sessions
+// doesn't show mesos/hr yet, so its tests read the saved session through the loot arithmetic.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -23,6 +24,23 @@ const bundle = (
     logLevel: "silent",
   })
 ).outputFiles[0].text;
+
+/** The loot arithmetic (loot.ts), as the plugin bundles it. */
+const loot = await import(
+  `data:text/javascript;base64,${Buffer.from(
+    (
+      await esbuild.build({
+        entryPoints: [join(REPO, "plugins/src/session-tracker/loot.ts")],
+        bundle: true,
+        write: false,
+        format: "esm",
+        platform: "neutral",
+        target: "es2022",
+        logLevel: "silent",
+      })
+    ).outputFiles[0].text,
+  ).toString("base64")}`
+);
 
 function run() {
   const sent = [];
@@ -74,10 +92,14 @@ function play({ seconds = 120, readers = READING, key = "aaaa" } = {}) {
   return { ...plugin, now: T0 + seconds * 1000 };
 }
 
-/** Ends the session and returns its Past sessions row's Mesos/hr. */
+/** A saved session's mesos/hr on the map its row is named for, or null when there's too little reading. */
+const savedMesosRate = (past) => loot.mapRates(loot.longest(past.maps), 60_000).mesos;
+
+/** Ends the session and returns its mesos/hr as saved, rounded to the mesos. */
 function endedMesosRate(plugin) {
   plugin.send({ type: "action", action: "end", atMs: plugin.now });
-  return pastSessions(plugin.sent)[0].rows[0][2];
+  const rate = savedMesosRate(last(plugin.sent, "save").data.history[0]);
+  return rate === null ? null : Math.round(rate);
 }
 
 // A map's mesos/hr is the mesos counted over the time the notices were read. Fails if mesos go
@@ -95,8 +117,8 @@ test("mesos count toward the map, and its mesos/hr", () => {
     for (const m of running.maps) assert.ok(m.l <= m.p, "read time never passes play time");
   }
   // 12 pickups of 50 over two minutes of reading: 300 mesos a minute.
-  assert.equal(endedMesosRate(played), "18K");
-  assert.equal(endedMesosRate(play({ seconds: 50 })), "—", "under a minute of reading: no rate");
+  assert.equal(endedMesosRate(played), 18_000);
+  assert.equal(endedMesosRate(play({ seconds: 50 })), null, "under a minute of reading: no rate");
 });
 
 // Covered notices are out of the rate both ways: their time and their mesos. Fails if mesos read
@@ -120,14 +142,14 @@ test("time with the notices covered changes neither side of a map's mesos/hr", (
   // The total has every amount read.
   assert.equal(items(plugin.sent).Mesos, (12 * 50 + 12 * 500).toLocaleString("en-US"));
   // Read for two minutes at 300 a minute: the covered 500s don't count, nor do their minutes.
-  assert.equal(endedMesosRate({ ...plugin, now: T0 + 240_000 }), "18K");
+  assert.equal(endedMesosRate({ ...plugin, now: T0 + 240_000 }), 18_000);
 });
 
 // Time the notices can't be trusted isn't read time. Fails if a map gets a mesos rate from time
 // spent learning the letters or under the party list.
 test("no mesos/hr from time learning or blocked", () => {
   for (const notices of ["learning", "blocked"]) {
-    assert.equal(endedMesosRate(play({ seconds: 120, readers: { notices, waitingMesos: 0 } })), "—", notices);
+    assert.equal(endedMesosRate(play({ seconds: 120, readers: { notices, waitingMesos: 0 } })), null, notices);
   }
 });
 
@@ -174,8 +196,10 @@ test("loot before the first kill is held, then joins or is dropped", () => {
   assert.equal(items(late.sent).Mesos, undefined, "dropped after five minutes");
 });
 
-// What the notices are doing shows under This session. Fails if a state passes silently.
-test("learning, waiting, missed and wrong-digit lines", () => {
+// What the notices are doing shows under This session; amounts still being read don't, since
+// they're added once their digits are known. Fails if a state passes silently, or the waiting
+// line or its "+" comes back.
+test("learning, missed and wrong-digit lines, and none for amounts still being read", () => {
   const learning = play({ seconds: 20, readers: { notices: "learning", waitingMesos: 0 } });
   assert.deepEqual(lines(learning.sent), ["Learning the pickup text. Mesos show after a few kills."]);
   learning.send({ type: "tick", atMs: learning.now + 5 * 60_000 });
@@ -183,8 +207,8 @@ test("learning, waiting, missed and wrong-digit lines", () => {
 
   const { send, sent, now } = play({ seconds: 20 });
   send({ type: "readers", readers: { notices: "reading", waitingMesos: 2 }, atMs: now });
-  assert.deepEqual(lines(sent), ["2 amounts still being read; they're added once their digits are known."]);
-  assert.equal(items(sent).Mesos, "100+", "at least, while amounts wait");
+  assert.deepEqual(lines(sent), []);
+  assert.equal(items(sent).Mesos, "100");
   send({ type: "readers", readers: READING, atMs: now + 1_000 });
   send(missed("not_learned", now + 2_000));
   assert.deepEqual(lines(sent), [], "an amount waiting for a digit isn't missed");
@@ -198,8 +222,9 @@ test("learning, waiting, missed and wrong-digit lines", () => {
   assert.deepEqual(lines(party.sent), ["Pickups aren't read in a party yet: the party list covers the notices."]);
 });
 
-// Past sessions rows are named for the map played longest, with that map's own rates. Fails if
-// the row shows the wrong map, misses "+N maps", or mixes another map's rates in.
+// Past sessions rows are named for the map played longest, with the session's EXP gained and that
+// map's own rates. Fails if the row shows the wrong map, misses "+N maps", mixes another map's
+// rates in, or shows mesos/hr before it's ready.
 test("a past session's row is its longest map, with that map's rates", () => {
   const { send, sent, now } = play({ seconds: 120 });
   send(map("bbbb", now));
@@ -210,17 +235,20 @@ test("a past session's row is its longest map, with that map's rates", () => {
   send({ type: "action", action: "end", atMs: now + 30_000 });
   assert.match(last(sent, "notice").text, /^Saved: [\d,]+ EXP and 600 mesos in /);
   const table = pastSessions(sent)[0];
-  assert.deepEqual(table.columns, ["Map", "EXP/hr", "Mesos/hr"]);
-  const [cell, expRate, mesosRate] = table.rows[0];
+  assert.deepEqual(table.columns, ["Map", "EXP gained", "EXP/hr"]);
+  const [cell, gained, expRate] = table.rows[0];
   assert.equal(cell.gameText, "aaaa");
   assert.equal(cell.suffix, "+1 map");
-  assert.equal(mesosRate, "18K");
+  // The whole session: 12 gains of 63 on aaaa, then 3,000 on bbbb.
+  assert.equal(gained, "3.76K");
   // Map aaaa's own EXP/hr: 12 gains of 63 in two minutes.
   assert.equal(expRate, "22.7K");
+  // Mesos/hr is still kept with the session, for aaaa alone.
+  assert.equal(Math.round(savedMesosRate(last(sent, "save").data.history[0])), 18_000);
 });
 
 // Every past session uses one layout: one from before maps were tracked reads as an unknown map
-// with its own EXP/hr. Fails if it gets a mesos rate, a separate table, or loses its date line.
+// with its own EXP gained and EXP/hr. Fails if it gets a separate table or loses its date line.
 test("sessions from before map tracking use the same layout", () => {
   const old = { startedAtMs: T0 - 86_400_000, endedAtMs: T0 - 86_000_000, activeMs: 400_000, expGained: 9_000, expLost: 0, startLevel: 41, endLevel: 41 };
   const { send, sent } = run();
@@ -236,9 +264,21 @@ test("sessions from before map tracking use the same layout", () => {
   const [table, ...rest] = pastSessions(sent);
   assert.equal(table.rows.length, 2, "one table for both");
   assert.ok(!rest.some((node) => node.kind === "table" || node.kind === "text"));
-  assert.deepEqual(table.rows[1], ["Unknown map", "81K", "—"]);
+  assert.deepEqual(table.rows[1], ["Unknown map", "9K", "81K"]);
   assert.match(table.details[1][0], /^\w{3}\u00a0\d+ · 6m$/);
   assert.equal(table.details[1][1], "Lv\u00a041");
+});
+
+// Pickups made while the session is paused aren't the session's. Fails if they count, or Resume
+// stops pickups counting again.
+test("pickups don't count while paused", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  send({ type: "action", action: "pause", atMs: now });
+  send(mesos(500, now + 1_000));
+  assert.equal(items(sent).Mesos, "100");
+  send({ type: "action", action: "resume", atMs: now + 2_000 });
+  send(mesos(70, now + 3_000));
+  assert.equal(items(sent).Mesos, "170");
 });
 
 // Undo puts the ended session back with the pickups made since. Fails if they're lost.

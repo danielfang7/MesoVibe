@@ -328,6 +328,7 @@ function namePicture(name: string): GamePicture {
 /**
  * The mini-HUD's stand-in: a steady grind, still learning, blocked, a screen that stays dark, or
  * Full Screen at a size MesoVibe can't read (`fullscreen-grind`: after a session's rate came in).
+ * Any other scenario, like `idle`, reads the bar before the first gain.
  */
 export function mockHudHost(scenario: string): HudHost {
   const summary: HudSummary | null =

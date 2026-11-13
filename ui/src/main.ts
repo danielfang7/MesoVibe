@@ -225,6 +225,14 @@ function shell(initial: Settings): void {
     focusUndo = { undo: `undo-${action}`, until: Date.now() + FOCUS_UNDO_MS };
     tracker.action(action);
   };
+  /**
+   * A button in the Session view. A past session's delete takes its own button away with its row,
+   * so focus goes on to the Undo its notice brings, as after End.
+   */
+  const viewAction = (action: string) => {
+    if (action.startsWith("delete-session:")) focusUndo = { undo: "undo-delete", until: Date.now() + FOCUS_UNDO_MS };
+    tracker.action(action);
+  };
   /** What the strip last drew in its help row and notice, so a repaint with nothing new keeps them. */
   let paintedHelp = "";
   let paintedNotice: Panel["notice"] | undefined;
@@ -268,25 +276,36 @@ function shell(initial: Settings): void {
     icon("end"),
     "End",
   );
-  const sessionActions = h("div", { class: "strip-actions" }, resetButton, endButton);
+  const pauseButton = h("button", {
+    class: "icon-button",
+    attrs: { type: "button", "data-key": "strip-pause" },
+    on: { click: () => tracker.action(panel.summary?.paused ? "resume" : "pause") },
+  });
+  /** What the Pause button last said, so a repaint with nothing new leaves it alone. */
+  let paintedPaused: boolean | null = null;
+  const sessionActions = h("div", { class: "strip-actions" }, pauseButton, resetButton, endButton);
   const toLevel = h("p", { class: "to-level" });
   const progressSlot = h("div", { class: "strip-progress" });
+  const toGoNumber = h("span", { class: "number" });
+  const toGo = h("p", { class: "to-go" }, toGoNumber, h("span", { class: "to-go-unit" }, "EXP to go"));
   const noticeSlot = h("div", { class: "notice", attrs: { role: "status", "aria-live": "polite" } });
   const updateSlot = h("div", { class: "notice", attrs: { role: "status", "aria-live": "polite", "data-key": "strip-update" } });
   const helpSlot = h("div", { class: "help" });
+  const heroRow = h(
+    "div",
+    { class: "strip-hero" },
+    h("div", { class: "hero-stack" }, h("span", { class: "hero" }, hero, heroUnit), heroEmpty),
+    sessionActions,
+  );
   const strip = h(
     "header",
     { class: "strip", attrs: { "aria-label": "Session", tabindex: "-1" } },
     h("div", { class: "strip-status", attrs: { role: "status", "aria-live": "polite" } }, dot, statusText),
     helpSlot,
-    h(
-      "div",
-      { class: "strip-hero" },
-      h("div", { class: "hero-stack" }, h("span", { class: "hero" }, hero, heroUnit), heroEmpty),
-      sessionActions,
-    ),
+    heroRow,
     toLevel,
     progressSlot,
+    toGo,
     noticeSlot,
     updateSlot,
   );
@@ -547,22 +566,27 @@ function shell(initial: Settings): void {
     const stale = panel.lastReadAt !== null && (status?.atMs ?? Date.now()) - panel.lastReadAt > STALE_MS;
     strip.classList.toggle("dim", stale);
     const heroBox = hero.parentElement as HTMLElement;
+    const paused = summary?.paused === true;
+    // A paused session's rate stands still: it's dimmed, with the words under it.
+    strip.classList.toggle("paused", paused);
     if (rate === null) {
       // Before the first gain the strip shows only the level and its bar; the rate takes its place
       // once there's EXP to measure.
       heroBox.hidden = true;
       const capturing = !panel.settings.safeMode && status?.state === "capturing";
       const gained = (summary?.expGained ?? 0) > 0;
-      heroEmpty.textContent = summary?.lootOnly
-        ? "Mesos only so far"
-        : capturing && gained
-          ? "Your rate appears after a few seconds of play."
-          : "";
+      heroEmpty.textContent = paused
+        ? "Session paused"
+        : summary?.lootOnly
+          ? "Mesos only so far"
+          : capturing && gained
+            ? "Your rate appears after a few seconds of play."
+            : "";
     } else {
       hero.textContent = formatCompact(rate);
       hero.title = `${formatDigits(rate)} EXP per hour`;
       heroBox.hidden = false;
-      heroEmpty.textContent = "";
+      heroEmpty.textContent = paused ? "Session paused" : "";
       if (!panel.rateShown) {
         panel.rateShown = true;
         heroBox.classList.add("arrive");
@@ -573,8 +597,23 @@ function shell(initial: Settings): void {
     // not reach it.
     resetButton.hidden = !summary?.canReset;
     endButton.hidden = !summary?.canEnd;
+    pauseButton.hidden = !summary?.canPause;
+    if (paused !== paintedPaused) {
+      // The same button, so keyboard focus stays on it from Pause to Resume and back.
+      paintedPaused = paused;
+      pauseButton.replaceChildren(icon(paused ? "resume" : "pause"), paused ? "Resume" : "Pause");
+      pauseButton.title = paused
+        ? "Resume the session: time, EXP and mesos count again"
+        : "Pause the session: time, EXP and mesos don't count until you resume";
+    }
     sessionActions.hidden =
-      panel.settings.safeMode || blocked || panel.crashed !== null || !(summary?.canReset || summary?.canEnd);
+      panel.settings.safeMode ||
+      blocked ||
+      panel.crashed !== null ||
+      !(summary?.canReset || summary?.canEnd || summary?.canPause);
+    // With no rate, no line in its place and no End or Reset, the row would only push the level
+    // and its bar away from the status.
+    heroRow.hidden = heroBox.hidden && heroEmpty.textContent === "" && sessionActions.hidden;
 
     const ago = stale && panel.lastReadAt !== null ? ` · last read ${Math.round(((status?.atMs ?? Date.now()) - panel.lastReadAt) / 1000)}s ago` : "";
     if (summary?.level != null) {
@@ -607,6 +646,11 @@ function shell(initial: Settings): void {
     } else {
       replace(progressSlot);
     }
+    // Before the first gain there's no time to level yet, so the bar has the EXP still to go under
+    // it; after, the Session view lists it with the session's other numbers.
+    const left = summary?.expToGo ?? null;
+    toGo.hidden = left === null || (summary?.expGained ?? 0) > 0;
+    toGoNumber.textContent = left === null ? "" : formatDigits(left);
 
     const notice = panel.notice;
     const undoHadFocus = noticeSlot.contains(document.activeElement);
@@ -657,7 +701,7 @@ function shell(initial: Settings): void {
                 ),
               )
             : null,
-          ...(panel.crashed === null ? renderView(tracker.view, (action) => tracker.action(action), tracker.pictures) : []),
+          ...(panel.crashed === null ? renderView(tracker.view, viewAction, tracker.pictures) : []),
         );
         break;
       case "chat":

@@ -80,7 +80,7 @@ function paint(hud: Hud): void {
       { class: "hud-top" },
       h("span", { class: `dot ${issue?.tone ?? "live"}`, attrs: { "aria-hidden": "true" } }),
       rate === null
-        ? h("span", { class: "hud-note" }, issue?.text ?? "Earn EXP to start")
+        ? h("span", { class: "hud-note" }, issue?.text ?? "Earn more EXP to start")
         : h(
             "span",
             { class: "hud-rate-box", attrs: { title: `${formatDigits(rate)} EXP per hour` } },

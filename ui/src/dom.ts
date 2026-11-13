@@ -48,7 +48,7 @@ export function replace(parent: Element, ...children: Child[]): void {
 }
 
 /** A small line icon, drawn with SVG elements (no markup strings). */
-export function icon(name: "session" | "chat" | "sees" | "settings" | "reset" | "end"): SVGSVGElement {
+export function icon(name: "session" | "chat" | "sees" | "settings" | "reset" | "end" | "delete" | "pause" | "resume"): SVGSVGElement {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
@@ -78,6 +78,11 @@ export function icon(name: "session" | "chat" | "sees" | "settings" | "reset" | 
     reset: [["path", { d: "M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4" }]],
     // A flag on a pole: finish and keep (End).
     end: [["path", { d: "M6 21V4M6 4h11l-2.5 4L17 12H6" }]],
+    // Two bars, and a play triangle: pause and resume the session.
+    pause: [["path", { d: "M9 5v14M15 5v14" }]],
+    resume: [["path", { d: "M8 5l11 7-11 7z" }]],
+    // A bin with its lid: delete one row.
+    delete: [["path", { d: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6" }]],
   };
   for (const [tag, attrs] of shapes[name]) {
     const shape = document.createElementNS(ns, tag);
