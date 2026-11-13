@@ -121,24 +121,24 @@
       </section>
 
       <section class="feature" aria-labelledby="loot-title">
-        <div class="panel mock-loot" role="img" aria-label="An example of past sessions, map by map. Ant Tunnel I, played Nov 10 for 1 hour 12 minutes: 1.24M EXP and 52.1K mesos per hour. Ant Tunnel II and one more map, Nov 9 for 48 minutes: 1.31M EXP and 47.8K mesos per hour. Sleepy Dungeon IV, Nov 8 for 35 minutes: 980K EXP and 39.5K mesos per hour.">
+        <div class="panel mock-loot" role="img" aria-label="An example of past sessions, map by map. Ant Tunnel I, played Nov 10 for 1 hour 12 minutes: 1.49M EXP gained, 1.24M EXP per hour. Ant Tunnel II and one more map, Nov 9 for 48 minutes: 1.05M EXP gained, 1.31M EXP per hour. Sleepy Dungeon IV, Nov 8 for 35 minutes: 572K EXP gained, 980K EXP per hour.">
           <p class="panel-label">Past sessions</p>
           <table class="past">
             <thead>
-              <tr><th>Map</th><th>EXP/hr</th><th>Mesos/hr</th></tr>
+              <tr><th>Map</th><th>EXP gained</th><th>EXP/hr</th></tr>
             </thead>
             <tbody>
-              <tr><td>Ant Tunnel I<span class="when">Nov 10 · 1h 12m</span></td><td>1.24M</td><td>52.1K</td></tr>
-              <tr><td>Ant Tunnel II <span class="more">+1 map</span><span class="when">Nov 9 · 48m</span></td><td>1.31M</td><td>47.8K</td></tr>
-              <tr><td>Sleepy Dungeon IV<span class="when">Nov 8 · 35m</span></td><td>980K</td><td>39.5K</td></tr>
+              <tr><td>Ant Tunnel I<span class="when">Nov 10 · 1h 12m</span></td><td>1.49M</td><td>1.24M</td></tr>
+              <tr><td>Ant Tunnel II <span class="more">+1 map</span><span class="when">Nov 9 · 48m</span></td><td>1.05M</td><td>1.31M</td></tr>
+              <tr><td>Sleepy Dungeon IV<span class="when">Nov 8 · 35m</span></td><td>572K</td><td>980K</td></tr>
             </tbody>
           </table>
         </div>
         <div class="feature-text">
           <h2 id="loot-title">Track your mesos</h2>
-          <p>MesoVibe reads the pickup notices at the bottom right of the game and adds up the mesos you pick up. Each session remembers the map you played, so you can see which map pays best in EXP and mesos per hour.</p>
+          <p>MesoVibe reads the pickup notices at the bottom right of the game and adds up the mesos you pick up. Each session remembers the map you played, so you can see which map pays best in EXP per hour.</p>
           <ul class="points">
-            <li>A map's mesos per hour counts only the time the notices could be read, so a monster standing over them doesn't lower it.</li>
+            <li>Mesos per hour for each map is coming soon.</li>
             <li>In a party, the game's party list covers the notices, so mesos aren't counted there yet.</li>
             <li>Items you pick up are coming next.</li>
           </ul>
@@ -223,6 +223,25 @@
           <div class="answer">
             <p>Yes, quietly, so it can open when the game does. "Open with MapleStory Classic" starts out on: MesoVibe waits as a small icon by the clock (in the menu bar on a Mac) and appears when the game opens. While it waits, it only checks every couple of seconds for the game, which costs next to nothing.</p>
             <p>Turn that off in Settings, and MesoVibe runs only when you open it.</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="faq-group">
+        <h3>Game settings</h3>
+        <details id="game-settings">
+          <summary><span>Which game sizes and screen modes work?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
+          <div class="answer">
+            <p>Windowed is the surest way to play with MesoVibe. You pick the size and the mode in the game's Options &gt; Graphics.</p>
+            <ul class="points">
+              <li>Windowed at any size: works on Windows and Mac.</li>
+              <li>Full Screen at 1366×768: works on Windows and Mac.</li>
+              <li>Full Screen at 1280×720 or 1024×768: works on a Mac. Not yet tested on Windows.</li>
+              <li>Full Screen at 800×600: not yet tested.</li>
+            </ul>
+            <p>On a Mac, only EXP tracking has been tested in Full Screen so far.</p>
+            <p>Pick your size and screen mode before you open MesoVibe. If you switch while it's running, EXP can stop counting: quit MesoVibe and open it again. If MesoVibe can't read the game at all, its card over the game says so.</p>
+            <p>MesoVibe reads the game at its default UI Size.</p>
           </div>
         </details>
       </div>
