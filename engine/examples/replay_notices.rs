@@ -100,7 +100,10 @@ fn found(name: &ItemName, tab: Option<Tab>) -> String {
     let sell = found
         .sell()
         .map_or("no single NPC price".into(), |s| format!("sells for {s}"));
-    format!("{} ({which}, {sell})", found.name)
+    let name = found
+        .name
+        .unwrap_or_else(|| "(names start differently)".into());
+    format!("{name} ({which}, {sell})")
 }
 
 fn describe(notice: &Notice) -> String {
@@ -291,12 +294,10 @@ fn main() -> ExitCode {
                                 totals.late_lines += 1;
                             }
                             Notice::Item { name, count, tab } => {
-                                let entry = totals.items.entry(name.key.clone()).or_insert((
-                                    name.text.clone(),
-                                    found(name, *tab),
-                                    0,
-                                    0,
-                                ));
+                                let entry = totals.items.entry(name.key.clone()).or_default();
+                                // The latest read: the reader may know more letters by now.
+                                entry.0 = name.text.clone();
+                                entry.1 = found(name, *tab);
                                 entry.2 += 1;
                                 entry.3 += u64::from(*count);
                             }

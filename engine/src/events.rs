@@ -50,12 +50,14 @@ pub enum Event {
     /// not its letters are known yet: it's a key for the name's picture, not the name. `tab` is the
     /// inventory tab it went to, when its letters are known.
     ///
-    /// `name` is the item's name as text, found in the game data from the letters read so far, or
-    /// `null` when no item fits. When several fit (the game cut a long name short, or has two items
-    /// of that name), it's the name they share or the start of it, then "…". `item_id` is the
-    /// item's ID when exactly one item fits, and `sell` the mesos an NPC shop pays for one when
-    /// every item that fits sells for the same. A speck over a letter can give one item a second
-    /// `item_key`; its `item_id` stays the same.
+    /// `name` is the item's name as text, found in the game data from the letters read so far.
+    /// When several items fit (the game cut a long name short, has two items of that name, or the
+    /// letters read so far fit more than one), it's the name they share or the start of it, then
+    /// "…". `item_id` is the item's ID when exactly one item fits, counting the items two touching
+    /// letters or a split letter could also make the name, and `sell` the mesos an NPC shop pays
+    /// for one when every item that fits sells for the same. All three are `null` when no item
+    /// fits; `name` alone is `null` when the items that fit start differently. A speck over a
+    /// letter can give one item a second `item_key`; its `item_id` stays the same.
     ItemGained {
         item_key: String,
         count: u32,

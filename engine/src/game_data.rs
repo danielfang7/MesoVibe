@@ -58,8 +58,8 @@ pub struct ItemMatch {
     /// has more than one item of that name, or when the letters read so far fit more than one.
     pub items: Vec<&'static Item>,
     /// The name to show: the items' name when they share it, or else the start every one of their
-    /// names shares, then "…".
-    pub name: String,
+    /// names shares, then "…". `None` when their names start differently.
+    pub name: Option<String>,
 }
 
 impl ItemMatch {
@@ -92,7 +92,11 @@ impl ItemMatch {
 /// When the name ends in "...", the game cut it short, so every longer name that starts with the
 /// rest fits.
 ///
-/// `None` when no item fits, or the items that fit share no start of a name to show.
+/// Two touching letters read as one piece, and a letter a speck splits reads as two, so the name
+/// may be a letter longer or shorter than read. Once some item fits, every item those misreads
+/// fit joins the match too: a single item is named only when no misread could be another one.
+///
+/// `None` when no item fits.
 pub fn name_item(letters: &[NameLetter], tab: Option<Tab>) -> Option<ItemMatch> {
     let cut = letters.len() > 3
         && letters[letters.len() - 3..]
@@ -106,21 +110,68 @@ pub fn name_item(letters: &[NameLetter], tab: Option<Tab>) -> Option<ItemMatch> 
     if read.is_empty() {
         return None;
     }
-    let items: Vec<&'static Item> = items()
-        .iter()
-        .filter(|item| tab.is_none_or(|tab| item.tab == tab))
-        .filter(|item| fits(read, cut, item.name))
-        .collect();
-    let name = shared_name(&items)?;
-    Some(ItemMatch { items, name })
+    let in_tab = || {
+        items()
+            .iter()
+            .filter(move |item| tab.is_none_or(|tab| item.tab == tab))
+    };
+    let mut found: Vec<&'static Item> =
+        in_tab().filter(|item| fits(read, cut, item.name)).collect();
+    if found.is_empty() {
+        return None;
+    }
+    for misread in misreads(read) {
+        for item in in_tab().filter(|item| fits(&misread, cut, item.name)) {
+            if !found.iter().any(|f| f.id == item.id) {
+                found.push(item);
+            }
+        }
+    }
+    found.sort_by_key(|item| item.id);
+    Some(ItemMatch {
+        name: shared_name(&found),
+        items: found,
+    })
+}
+
+/// A letter of a misread that stands for any letter: see [`misreads`].
+const ANY_SHAPE: u16 = u16::MAX;
+
+/// The other ways the reader could have cut the same name: one unknown piece that was two
+/// touching letters, or two unknown pieces in a row that were one letter split in two. A known
+/// letter's piece was cut right, as its shape matched.
+fn misreads(read: &[NameLetter]) -> impl Iterator<Item = Vec<NameLetter>> + '_ {
+    let any = NameLetter {
+        known: None,
+        shape: ANY_SHAPE,
+    };
+    let unknown = |i: usize| read[i].known.is_none();
+    let touching = (0..read.len()).filter(move |&i| unknown(i)).map(move |i| {
+        let mut misread = read.to_vec();
+        misread.splice(i..=i, [any, any]);
+        misread
+    });
+    let split = (1..read.len())
+        .filter(move |&i| unknown(i - 1) && unknown(i))
+        .map(move |i| {
+            let mut misread = read.to_vec();
+            misread.splice(i - 1..=i, [any]);
+            misread
+        });
+    touching.chain(split)
 }
 
 /// Whether `name` fits the letters read, by [`name_item`]'s rules.
 fn fits(read: &[NameLetter], cut: bool, name: &str) -> bool {
     let mut chars = name.chars().filter(|c| *c != ' ');
-    // The letter each of the read name's shapes stands for, once a place has shown it. Shapes are
-    // numbered in the order they first appear, so a read of n letters has fewer than n.
-    let mut shapes: Vec<Option<char>> = vec![None; read.len()];
+    // The letter each of the read name's shapes stands for, once a place has shown it.
+    let shape_count = read
+        .iter()
+        .filter(|l| l.shape != ANY_SHAPE)
+        .map(|l| usize::from(l.shape) + 1)
+        .max()
+        .unwrap_or(0);
+    let mut shapes: Vec<Option<char>> = vec![None; shape_count];
     for letter in read {
         let Some(c) = chars.next() else {
             return false;
@@ -128,10 +179,10 @@ fn fits(read: &[NameLetter], cut: bool, name: &str) -> bool {
         if letter.known.is_some_and(|known| known != c) {
             return false;
         }
-        let Some(shape) = shapes.get_mut(usize::from(letter.shape)) else {
-            return false;
-        };
-        if *shape.get_or_insert(c) != c {
+        if letter.shape == ANY_SHAPE {
+            continue;
+        }
+        if *shapes[usize::from(letter.shape)].get_or_insert(c) != c {
             return false;
         }
     }
@@ -331,8 +382,8 @@ mod tests {
         ] {
             let found = found(name, tab).unwrap();
             assert_eq!(
-                (found.id(), found.name.as_str(), found.sell()),
-                (Some(id), name, Some(sell))
+                (found.id(), found.name.as_deref(), found.sell()),
+                (Some(id), Some(name), Some(sell))
             );
         }
     }
@@ -343,7 +394,7 @@ mod tests {
     fn a_name_the_game_cut_short_fits_the_names_it_starts() {
         let medicine = found("Medicine With...", Tab::Etc).unwrap();
         assert_eq!(medicine.id(), Some(4000039));
-        assert_eq!(medicine.name, "Medicine With Weird Vibes");
+        assert_eq!(medicine.name.as_deref(), Some("Medicine With Weird Vibes"));
 
         let scroll = found("Hat Accuracy Sc...", Tab::Use).unwrap();
         assert_eq!(
@@ -352,7 +403,7 @@ mod tests {
             "Lesser, Intermediate, Greater, Chaos"
         );
         assert_eq!(scroll.id(), None);
-        assert_eq!(scroll.name, "Hat Accuracy Scroll:…");
+        assert_eq!(scroll.name.as_deref(), Some("Hat Accuracy Scroll:…"));
         assert_eq!(scroll.sell(), Some(1), "all four sell for 1");
     }
 
@@ -384,7 +435,7 @@ mod tests {
                 Box::leak(Box::new(x.clone())),
                 Box::leak(Box::new(y.clone())),
             ],
-            name: String::new(),
+            name: None,
         };
         assert_eq!(pair(&a, &b).sell(), None, "prices differ");
         assert_eq!(pair(&a, &c).sell(), None, "one has no price");
@@ -399,8 +450,8 @@ mod tests {
         let potion = found("Red Potion", Tab::Use).unwrap();
         assert_eq!(potion.items.len(), 2);
         assert_eq!(
-            (potion.id(), potion.name.as_str(), potion.sell()),
-            (None, "Red Potion", Some(5))
+            (potion.id(), potion.name.as_deref(), potion.sell()),
+            (None, Some("Red Potion"), Some(5))
         );
     }
 
@@ -438,6 +489,46 @@ mod tests {
         // A whole name too short for the item, and a cut one with nothing past what was shown.
         assert_eq!(found("Snail Shel", Tab::Etc), None);
         assert_eq!(found("Snail Shell...", Tab::Etc), None);
+    }
+
+    // Two touching letters read as one piece can make a name fit another item exactly: Red
+    // Bandana with n and d touching fits Red Katana. Fails if that wrong item is named as certain,
+    // with its price 36 times the real one, or if a letter split in two could do the same.
+    #[test]
+    fn a_misread_letter_doesnt_name_the_wrong_item() {
+        let mut letters = read("Red Bandana", PHRASES);
+        let n = letters.iter().position(|l| l.known == Some('n')).unwrap();
+        letters.splice(
+            n..=n + 1,
+            [NameLetter {
+                known: None,
+                shape: 20,
+            }],
+        );
+        let bandana = name_item(&letters, Some(Tab::Equip)).unwrap();
+        let ids: Vec<u32> = bandana.items.iter().map(|i| i.id).collect();
+        assert!(ids.contains(&1302018) && ids.contains(&1002012), "{ids:?}");
+        assert_eq!((bandana.id(), bandana.sell()), (None, None));
+
+        // Read right, Red Willow fits only itself, but its two l's as one split letter would be
+        // Red Diros.
+        let willow = found("Red Willow", Tab::Equip).unwrap();
+        let names: Vec<&str> = willow.items.iter().map(|i| i.name).collect();
+        assert!(
+            names.contains(&"Red Willow") && names.contains(&"Red Diros"),
+            "{names:?}"
+        );
+        assert_eq!(willow.id(), None);
+    }
+
+    // Items whose names start differently still make a match, so a plugin can tell them from an
+    // item the data doesn't have. Fails if they come back as no match.
+    #[test]
+    fn items_with_different_names_still_match() {
+        let stars = found("Ilbi Throwing Stars", Tab::Use).unwrap();
+        assert!(stars.items.len() > 1, "{:?}", stars.items);
+        assert!(stars.items.iter().any(|i| i.id == 2070006));
+        assert_eq!((stars.id(), stars.name.as_deref()), (None, None));
     }
 
     // A damaged file is an error, not a quietly shorter list.

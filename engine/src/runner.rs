@@ -413,7 +413,7 @@ fn notice_events(reading: &Result<NoticeReading, NoticeUnreadable>) -> Vec<Event
                 tab: *tab,
                 item_id: found.as_ref().and_then(|f| f.id()),
                 sell: found.as_ref().and_then(|f| f.sell()),
-                name: found.map(|f| f.name),
+                name: found.and_then(|f| f.name),
             })
         }
         Notice::PartyBonus(amount) => Some(Event::PartyBonus { amount: *amount }),
