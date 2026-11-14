@@ -20,15 +20,17 @@
 //! keeps between launches.
 //!
 //! Mesos amounts with a digit not learned yet are kept and counted once their digits are known;
-//! the totals say how many were read late and how many are still waiting.
+//! the totals say how many were read late and how many are still waiting. Each item name is shown
+//! with the item the game data finds for it.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
+use mesovibe_engine::game_data;
 use mesovibe_engine::recognizers::exp_bar::{ExpBarReader, ExpReading, Unreadable};
-use mesovibe_engine::recognizers::notices::{Missed, Notice, NoticeReader};
+use mesovibe_engine::recognizers::notices::{ItemName, Missed, Notice, NoticeReader, Tab};
 
 #[path = "common/capture_run.rs"]
 mod capture_run;
@@ -85,6 +87,25 @@ fn shape_mark(shaped: bool) -> &'static str {
     if shaped { " (shape)" } else { "" }
 }
 
+/// The item the game data finds for a name: its name, its ID when only one item fits, and what an
+/// NPC shop pays for one.
+fn found(name: &ItemName, tab: Option<Tab>) -> String {
+    let Some(found) = game_data::name_item(&name.letters, tab) else {
+        return "no item fits".into();
+    };
+    let which = match found.id() {
+        Some(id) => format!("#{id}"),
+        None => format!("{} items", found.items.len()),
+    };
+    let sell = found
+        .sell()
+        .map_or("no single NPC price".into(), |s| format!("sells for {s}"));
+    let name = found
+        .name
+        .unwrap_or_else(|| "(names start differently)".into());
+    format!("{name} ({which}, {sell})")
+}
+
 fn describe(notice: &Notice) -> String {
     match notice {
         Notice::Exp(n) => format!("EXP +{n}"),
@@ -94,8 +115,13 @@ fn describe(notice: &Notice) -> String {
             format!("mesos +{amount} (late){}", shape_mark(*shaped))
         }
         Notice::Item { name, count, tab } => {
-            let tab = tab.map_or("?".into(), |t| t.name().to_string());
-            format!("\"{}\" x{count} ({tab}) [{}]", name.text, &name.key[..6])
+            let tab_name = tab.map_or("?".into(), |t| t.name().to_string());
+            format!(
+                "\"{}\" x{count} ({tab_name}) [{}] = {}",
+                name.text,
+                &name.key[..6],
+                found(name, *tab)
+            )
         }
         Notice::Other => "other".into(),
     }
@@ -114,8 +140,8 @@ struct Totals {
     late_mesos: u64,
     late_lines: usize,
     party_bonus: u64,
-    /// Item key: (text, pickups, count).
-    items: BTreeMap<String, (String, usize, u64)>,
+    /// Item key: (text, the item found, pickups, count).
+    items: BTreeMap<String, (String, String, usize, u64)>,
     other: usize,
     /// Confirmed frames whose EXP lines couldn't be compared: the HUD wasn't read in them.
     unchecked_frames: usize,
@@ -267,14 +293,13 @@ fn main() -> ExitCode {
                                 totals.late_mesos += n;
                                 totals.late_lines += 1;
                             }
-                            Notice::Item { name, count, .. } => {
-                                let entry = totals.items.entry(name.key.clone()).or_insert((
-                                    name.text.clone(),
-                                    0,
-                                    0,
-                                ));
-                                entry.1 += 1;
-                                entry.2 += u64::from(*count);
+                            Notice::Item { name, count, tab } => {
+                                let entry = totals.items.entry(name.key.clone()).or_default();
+                                // The latest read: the reader may know more letters by now.
+                                entry.0 = name.text.clone();
+                                entry.1 = found(name, *tab);
+                                entry.2 += 1;
+                                entry.3 += u64::from(*count);
                             }
                             Notice::Other => totals.other += 1,
                         }
@@ -333,9 +358,9 @@ fn main() -> ExitCode {
             .filter(char::is_ascii_digit)
             .collect();
         println!("  digits known: {digits}");
-        for (key, (text, picks, count)) in &totals.items {
+        for (key, (text, found, picks, count)) in &totals.items {
             println!(
-                "  item \"{text}\" [{}]: {picks} pickups, {count} in all",
+                "  item \"{text}\" [{}] = {found}: {picks} pickups, {count} in all",
                 &key[..6]
             );
         }

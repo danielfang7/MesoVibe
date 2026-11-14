@@ -1,0 +1,336 @@
+id	region	name
+1	Maple Road	Mushroom Town - West Entrance
+10	Maple Road	Mushroom Town
+20	Maple Road	Mushroom Town
+21	Maple Road	Mushroom Town Townstreet
+30	Maple Road	East Entrance to Mushroom Town
+40	Maple Road	Snail Hunting Ground I
+41	Maple Road	Snail Hunting Ground II
+42	Maple Road	Snail Hunting Ground III
+50	Maple Road	A Split Road
+60	Maple Road	Southperry
+61	Maple Road	Southperry Armor Store
+1000	Rainbow Street	The Field West of Amherst
+1001	Rainbow Street	In a Small Forest
+1002	Rainbow Street	Dangerous Forest
+1003	Rainbow Street	Mushroom Garden
+1004	Rainbow Street	Snail Garden
+1005	Rainbow Street	Hunting Ground Middle of the Forest I
+1006	Rainbow Street	Hunting Ground Middle of the Forest II
+1010	Rainbow Street	Amherst
+1011	Rainbow Street	Amherst Weapon Store
+1012	Rainbow Street	Amherst Townstreet
+1013	Rainbow Street	Amherst Department Store
+1014	Rainbow Street	Snail Field of Flowers
+1020	Rainbow Street	The Field East of Amherst
+1021	Rainbow Street	Tomato Field
+10000000	Victoria Road	Lith Harbor
+10000001	Victoria Road	Lith Harbor Armor Shop
+10000002	Victoria Road	Lith Harbor Department Store
+10000003	Victoria Road	Lith Harbor Weapon Shop
+10000010	Victoria Road	Right Around Lith Harbor
+10000011	Victoria Road	Thicket Around the Beach I
+10000012	Victoria Road	Thicket Around the Beach II
+10000013	Victoria Road	Thicket Around the Beach III
+10000020	Victoria Road	3-Way Road-Split
+10000021	Hidden Street	The Pig Beach
+10000022	Hidden Street	Beach Hunting Ground
+10001000	Victoria Road	Henesys
+10001001	Victoria Road	Henesys Townstreet
+10001002	Hidden Street	An Empty House
+10001003	Hidden Street	Pig Park
+10001004	Hidden Street	Pig Park II
+10001005	Hidden Street	Someone Else's House
+10001006	Hidden Street	The Resting Spot, Pig Park
+10001007	Victoria Road	Henesys Town Hall
+10001008	Yellow Mushroom House	Victoria Road
+10001010	Victoria Road	Henesys Hunting Ground I
+10001011	Victoria Road	Henesys Hunting Ground II
+10001012	Victoria Road	Henesys Hunting Ground III
+10001020	Victoria Road	A Hill West of Henesys 
+10001021	Hidden Street	Mushroom Garden
+10001030	Victoria Road	Forest West of Henesys
+10001040	Victoria Road	Henesys Market
+10001041	Victoria Road	Henesys Weapon Store
+10001042	Victoria Road	Henesys Department Store
+10001043	Victoria Road	Henesys Plastic Surgery
+10001044	Victoria Road	Henesys Hair Salon
+10001045	Victoria Road	Henesys Skin-Care
+10001050	Victoria Road	Henesys Park
+10001051	Victoria Road	Bowman Instructional School
+10001052	Victoria Road	Pet-Walking Road
+10001060	Victoria Road	The Hill East of Henesys
+10001070	Victoria Road	The Rain-Forest East of Henesys
+10001080	Victoria Road	The Forest East of Henesys
+10001081	Hidden Street	The Blue Mushroom Forest
+10001082	Hidden Street	Utah's Pig Farm
+10001090	Warning Street	The Road to the Dungeon
+10001100	Warning Street	Henesys Dungeon Entrance
+10001101	Hidden Street	The Breathing Rock
+10001102	Victoria Road	The Entrance of Golem's Temple
+10001103	Victoria Road	Golem's Temple I
+10001104	Victoria Road	Golem's Temple II
+10001105	Victoria Road	Golem's Temple III
+10001106	Victoria Road	Golem's Temple IV
+10002000	Victoria Road	Ellinia
+10002001	Victoria Road	Ellinia Weapon Store
+10002002	Victoria Road	Ellinia Department Store
+10002003	Victoria Road	Magic Library
+10002004	Hidden Street	Marr's Forest
+10002005	Hidden Street	The Circulation Desk
+10002010	Victoria Road	The Field South of Ellinia
+10002020	Victoria Road	The Forest of Wisdom
+10002021	Hidden Street	Monkey Forest I
+10002022	Victoria Road	Tree Dungeon, Monkey Forest I
+10002023	Victoria Road	Monkey Forest II
+10002024	Hidden Street	Tree Dungeon, Monkey Forest II
+10002025	Hidden Street	The Forest of Evil I
+10002026	Hidden Street	The Forest of Evil II
+10002027	Hidden Street	Downstairs at the Forest
+10002030	Victoria Road	The Forest South of Ellinia
+10002031	Victoria Road	Dungeon, Southern Forest I
+10002032	Victoria Road	Dungeon, Southern Forest II
+10002033	Victoria Road	Dungeon, Southern Forest III
+10002034	Victoria Road	Dungeon, Southern Forest IV
+10002040	Hidden Street	The Forest of Patience <Step 1>
+10002041	Hidden Street	The Forest of Patience <Step 2>
+10002042	Hidden Street	The Forest of Patience <Step 3>
+10002043	Hidden Street	The Forest of Patience <Step 4>
+10002044	Hidden Street	The Forest of Patience <Step 5>
+10002050	Victoria Road	The Field Up North of Ellinia
+10002060	Victoria Road	The Tree That Grew I
+10002061	Victoria Road	The Tree That Grew II
+10002062	Victoria Road	The Tree That Grew III
+10002070	Victoria Road	The Forest North of Ellinia
+10002071	Victoria Road	The Tree Tunnel At the Forest Up North
+10002072	Victoria Road	Tree Dungeon, Forest Up North I
+10002073	Victoria Road	Tree Dungeon, Forest Up North II
+10002074	Victoria Road	Tree Dungeon, Forest Up North III
+10002075	Victoria Road	Tree Dungeon, Forest Up North IV
+10002076	Victoria Road	Tree Dungeon, Forest Up North V
+10002080	Victoria Road	Tree Dungeon, Forest Up North VI
+10002081	Victoria Road	Tree Dungeon, Forest Up North VII
+10002082	Victoria Road	Tree Dungeon, Forest Up North VIII
+10002083	Victoria Road	Tree Dungeon, Forest Up North IX
+10002090	Victoria Road	Ellinia Station
+10002091	Victoria Road	Before Takeoff <To Orbis>
+10003000	Victoria Road	Kerning City
+10003001	Victoria Road	Kerning City Self-Defence Item Store
+10003002	Victoria Road	Kerning City Pharmacy
+10003003	Victoria Road	Thieves' Hideout
+10003004	Victoria Road	Niora Hospital
+10003005	Victoria Road	Kerning City Hair Salon
+10003006	Victoria Road	Kerning City Repair Shop
+10003007	Victoria Road	Kerning City Civic Center
+10003008	Victoria Road	Backalley Semi-Basement
+10003010	Victoria Road	Kerning City Construction Site
+10003011	Hidden Street	Caution Falling Down
+10003020	Victoria Road	L Forest I
+10003030	Victoria Road	L Forest II
+10003040	Victoria Road	L Forest III
+10003050	Victoria Road	Kerning City Middle Forest I
+10003051	Victoria Road	Kerning City Middle Forest II
+10003052	Victoria Road	Kerning City Middle Forest III
+10003060	Victoria Road	Subway Ticketing Booth
+10003061	Kerning City Subway	Line 1 <Area 1>
+10003062	Kerning City Subway	Transfer Area
+10003063	Kerning City Subway	Line 1 <Area 2>
+10003064	Kerning City Subway	Line 1 <Area 3>
+10003065	Kerning City Subway	Line 1 <Area 4>
+10003066	Kerning City Subway	Line 2 <Area 1>
+10003067	Kerning City Subway	Line 2 <Area 2>
+10003068	Kerning City Subway	Line 2 <Area 3>
+10003070	Victoria Road	Sunset Sky
+10003080	Victoria Road	Construction Site North of Kerning City
+10003081	Hidden Street	Northern Top of Construction Site
+10003090	Warning Street	The Swamp of Despair I
+10003091	Warning Street	The Swamp of Despair II
+10003092	Warning Street	The Swamp of Despair III
+10003093	Warning Street	Dangerous Croko I
+10003094	Warning Street	Dangerous Croko II
+10003095	Hidden Street	Monkey Swamp I
+10003096	Hidden Street	Monkey Swamp II
+10003097	Hidden Street	Monkey Swamp III
+10003098	Hidden Street	The Hermit's Cabin
+10003100	Line 3 Construction Site	B1 <Area 1>
+10003101	Line 3 Construction Site	B1 <Area 2>
+10003102	Line 3 Construction Site	B1 <Subway Depot>
+10003103	Line 3 Construction Site	B2 <Area 1>
+10003104	Line 3 Construction Site	B2 <Area 2>
+10003105	Line 3 Construction Site	B2 <Subway Depot>
+10003106	Line 3 Construction Site	B3 <Area 1>
+10003107	Line 3 Construction Site	B3 <Area 2>
+10003108	Line 3 Construction Site	B3 <Area 3>
+10003109	Line 3 Construction Site	B3 <Subway Depot>
+10003110	Hidden Street	The Murky Swamp I
+10003111	Hidden Street	The Murky Swamp II
+10003112	Hidden Street	Cabin of the Forsaken
+10004000	Victoria Road	Perion
+10004001	Victoria Road	Perion Weapon Store
+10004002	Victoria Road	Perion Department Store
+10004003	Victoria Road	Warriors' Sanctuary
+10004010	Victoria Road	West Street Corner of Perion
+10004020	Victoria Road	West Rocky Mountain I
+10004021	Victoria Road	West Rocky Mountain II
+10004022	Victoria Road	West Rocky Mountain III
+10004023	Victoria Road	West Rocky Mountain IV
+10004030	Victoria Road	West Domain of Perion
+10004040	Victoria Road	Perion Street Corner
+10004041	Hidden Street	Land of Wild Boar
+10004042	Hidden Street	Over the Wall
+10004050	Victoria Road	East Rocky Mountain I
+10004051	Victoria Road	East Rocky Mountain II
+10004052	Victoria Road	East Rocky Mountain III
+10004053	Victoria Road	East Rocky Mountain IV
+10004054	Victoria Road	East Rocky Mountain V
+10004055	Victoria Road	East Rocky Mountain VI
+10004056	Victoria Road	East Rocky Mountain VII
+10004057	Victoria Road	Parched Land
+10004060	Victoria Road	Rocky Road I
+10004070	Victoria Road	Rocky Road II
+10004080	Victoria Road	Rocky Road III
+10004090	Victoria Road	East Domain of Perion
+10004091	Hidden Street	The Land of Wild Boar II
+10004100	Warning Street	Deep Valley I
+10004101	Hidden Street	Dangerous Valley
+10004102	Hidden Street	Dangerous Valley II
+10004110	Warning Street	Deep Valley II
+10004111	Warning Street	The Burnt Land I
+10004112	Warning Street	The Burnt Land II
+10004113	Warning Street	The Burnt Land III
+10004114	Warning Street	The Burnt Land IV
+10004115	Warning Street	The Burnt Land V
+10004120	Warning Street	Deep Valley III
+10004121	Warning Street	Perion Dungeon Entrance
+10004130	Victoria Road	Excavation Site I
+10004131	Victoria Road	Excavation Site II
+10004132	Victoria Road	Excavation Site III
+10004133	Victoria Road	Excavation Site <Camp>
+10004134	Victoria Road	Remains <Tomb> I
+10004135	Victoria Road	Remains <Tomb> II
+10004136	Victoria Road	Remains <Tomb> III
+10004137	Victoria Road	Remains <Tomb> IV
+10004138	Victoria Road	Remains <Cliff>
+10004140	Victoria Road	Camp 1
+10004141	Victoria Road	Camp 2
+10004142	Victoria Road	Camp 3
+10005000	Dungeon	Sleepywood
+10005001	Dungeon	Sleepywood Hotel
+10005002	Dungeon	Regular Sauna
+10005003	Dungeon	VIP Sauna
+10005010	Dungeon	Swampy Land in a Deep Forest
+10005011	Dungeon	Hunting Ground in the Deep Forest I
+10005012	Dungeon	Hunting Ground in the Deep Forest II
+10005020	Dungeon	Deep Forest
+10005030	Dungeon	Damp Tree-Forest
+10005031	Dungeon	Damp Forest
+10005040	Hidden Street	The Deep Forest of Patience <Step 1>
+10005041	Hidden Street	The Deep Forest of Patience <Step 2>
+10005042	Hidden Street	The Deep Forest of Patience <Step 3>
+10005043	Hidden Street	The Deep Forest of Patience <Step 4>
+10005044	Hidden Street	The Deep Forest of Patience <Step 5>
+10005045	Hidden Street	The Deep Forest of Patience <Step 6>
+10005046	Hidden Street	The Deep Forest of Patience <Step 7>
+10005050	Dungeon	Sleepy Dungeon I
+10005051	Dungeon	Sleepy Dungeon II
+10005052	Dungeon	Sleepy Dungeon III
+10005053	Dungeon	Sleepy Dungeon IV
+10005054	Dungeon	Sleepy Dungeon V
+10005060	Dungeon	Ant Tunnel I
+10005061	Dungeon	Ant Tunnel II
+10005062	Dungeon	Ant Tunnel III
+10005063	Dungeon	Ant Tunnel IV
+10005064	Dungeon	Dark Cave
+10005065	Dungeon	Dangerous Steam
+10005066	Dungeon	Deep Ant Tunnel I
+10005067	Dungeon	Deep Ant Tunnel II
+10005070	Dungeon	Ant Tunnel Park
+10005071	Dungeon	The Cave of Evil Eye I
+10005072	Dungeon	The Cave of Evil Eye II
+10005073	Dungeon	The Cave of Evil Eye III
+10005074	Dungeon	The Cave of Evil Eye IV
+10005075	Dungeon	Drake Hunting Ground
+10005076	Dungeon	The Tunnel That Lost Light I
+10005077	Dungeon	The Tunnel That Lost Light II
+10005078	Dungeon	The Grave of Mushmom
+10005080	Dungeon	Another Entrance
+10005090	Dungeon	Drake's Meal Table
+10005091	Dungeon	Wild Kargo's Area
+10005100	Dungeon	Another Path
+10005101	Dungeon	Sanctuary Entrance I
+10005102	Dungeon	Sanctuary Entrance II
+10005103	Dungeon	Sanctuary Entrance III
+10005104	Dungeon	Sanctuary Entrance IV
+10005105	Dungeon	The Cursed Sanctuary
+10007000	Florina Road	Florina Beach
+10007010	Florina Road	A Look-Out Shed Around the Beach
+10007020	Florina Road	Lorang Lorang
+10007021	Hidden Street	Lorang Lorang Lorang
+10007030	Florina Road	Lorang and Clang
+10007031	Florina Road	Clang and Lorang
+10007040	Florina Road	Hot Sand
+80000000	Hidden Street	1st Accompaniment <1st Stage>
+80000100	Hidden Street	1st Accompaniment <2nd Stage>
+80000200	Hidden Street	1st Accompaniment <3rd Stage>
+80000300	Hidden Street	1st Accompaniment <4th stage>
+80000400	Hidden Street	1st Accompaniment <Last Stage>
+80000500	Hidden Street	1st Accompaniment <Bonus>
+80000600	Hidden Street	1st Accompaniment <Exit>
+80001000	Hidden Street	Ant Tunnel For Bowman
+80001100	Hidden Street	Magician's Tree Dungeon
+80001200	Hidden Street	Thief's Construction Site
+80001300	Hidden Street	Warrior's Rocky Mountain
+80002000	Hidden Street	Free Market Entrance
+80002001	Hidden Street	Free Market <1>
+80002002	Hidden Street	Free Market <2>
+80002003	Hidden Street	Free Market <3>
+80002004	Hidden Street	Free Market <4>
+80002005	Hidden Street	Free Market <5>
+80002006	Hidden Street	Free Market <6>
+80002007	Hidden Street	Free Market <7>
+80002008	Hidden Street	Free Market <8>
+80002009	Hidden Street	Free Market <9>
+80002010	Hidden Street	Free Market <10>
+80002011	Hidden Street	Free Market <11>
+80002012	Hidden Street	Free Market <12>
+80002013	Hidden Street	Free Market <13>
+80002014	Hidden Street	Free Market <14>
+80002015	Hidden Street	Free Market <15>
+80002016	Hidden Street	Free Market <16>
+80002017	Hidden Street	Free Market <17>
+80002018	Hidden Street	Free Market <18>
+80002019	Hidden Street	Free Market <19>
+80002020	Hidden Street	Free Market <20>
+80003000	Hidden Street	Primrose Hill
+80003100	Hidden Street	Shortcut
+80003200	Hidden Street	Pig Town
+80003300	Hidden Street	Back to Town
+80003400	Hidden Street	Shortcut
+88000000	Victoria Road	Yellow Mushroom House
+88001000	Victoria Road	Backalley Semi-Basement
+89000000	Truth Booth	Truth Booth
+90000000	Hidden Street	Maple Hill
+90040000	Hidden Street	Physical Fitness Test <Waiting Room>
+90040001	Hidden Street	Physical Fitness Test <Level 1>
+90040002	Hidden Street	Physical Fitness Test <Level 2>
+90040003	Hidden Street	Physical Fitness Test <Level 3>
+90040004	Hidden Street	Physical Fitness Test <Level 4>
+90040010	Hidden Street	Physical Fitness Test <Easy Waiting Room>
+90040011	Hidden Street	Physical Fitness Test <Easy Level 1>
+90040012	Hidden Street	Physical Fitness Test <Easy Level 2>
+90040013	Hidden Street	Physical Fitness Test <Easy Level 3>
+90040020	Hidden Street	Physical Fitness Test <Normal Waiting Room>
+90040021	Hidden Street	Physical Fitness Test <Normal Level 1>
+90040022	Hidden Street	Physical Fitness Test <Normal Level 2>
+90040023	Hidden Street	Physical Fitness Test <Normal Level 3>
+90040101	Hidden Street	Up and Up <Level 1>
+90040102	Hidden Street	Up and Up <Level 2>
+90040103	Hidden Street	Up and Up <Level 3>
+90040200	Hidden Street	Coconut Harvest
+90040201	Hidden Street	Coconut Harvest
+90040202	Hidden Street	Coconut Harvest
+90040203	Hidden Street	G* Coconut Season
+90050000	Hidden Street	Leaving the Event
+90050001	Hidden Street	Receiving the Reward For the Event
+900000000	Hidden Street	The Manager's Room
+900000003	Hidden Street	White Room

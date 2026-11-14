@@ -29,6 +29,7 @@ use std::time::Instant;
 
 use crate::capture::{Backend, CaptureError, CaptureSignal, CaptureState, GameWindow, Grab};
 use crate::events::Event;
+use crate::game_data;
 use crate::letterbox;
 use crate::notice_health::{NoticeHealth, NoticeState};
 use crate::recognizers::chat::{self, ChatReader, ChatReading, ChatUnreadable};
@@ -404,11 +405,17 @@ fn notice_events(reading: &Result<NoticeReading, NoticeUnreadable>) -> Vec<Event
             late: true,
             shaped: *shaped,
         }),
-        Notice::Item { name, count, tab } => Some(Event::ItemGained {
-            item_key: name.key.clone(),
-            count: *count,
-            tab: *tab,
-        }),
+        Notice::Item { name, count, tab } => {
+            let found = game_data::name_item(&name.letters, *tab);
+            Some(Event::ItemGained {
+                item_key: name.key.clone(),
+                count: *count,
+                tab: *tab,
+                item_id: found.as_ref().and_then(|f| f.id()),
+                sell: found.as_ref().and_then(|f| f.sell()),
+                name: found.and_then(|f| f.name),
+            })
+        }
         Notice::PartyBonus(amount) => Some(Event::PartyBonus { amount: *amount }),
         // EXP comes from the EXP bar.
         Notice::Exp(_) | Notice::Other => None,
@@ -829,10 +836,18 @@ mod tests {
         runner.backend_mut().canvas =
             Some(lit(game.next(&[(&item("Red Potion", 2, "Use"), WHITE)], 0)));
         let events = pickups(runner.tick().events);
+        // The game has two items named Red Potion, so the name and price come without one ID.
         assert!(
             matches!(
                 events.as_slice(),
-                [Event::ItemGained { item_key, count: 2, tab: Some(Tab::Use) }] if item_key.len() == 16
+                [Event::ItemGained {
+                    item_key,
+                    count: 2,
+                    tab: Some(Tab::Use),
+                    item_id: None,
+                    name: Some(name),
+                    sell: Some(5),
+                }] if item_key.len() == 16 && name == "Red Potion"
             ),
             "{events:?}"
         );
@@ -929,6 +944,51 @@ mod tests {
                 amount: 12,
                 late: false,
                 shaped: false
+            }]
+        );
+    }
+
+    // A pickup whose name fits no item in the game data still counts, with no name, ID or price.
+    // Fails if an unknown item is dropped or gets a made-up name.
+    #[test]
+    fn an_item_no_game_data_fits_has_no_name() {
+        use crate::recognizers::NamePicture;
+        use crate::recognizers::notices::{ItemName, NameLetter};
+        let letters = "Zzqx"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| NameLetter {
+                known: Some(c),
+                shape: i as u16,
+            })
+            .collect();
+        let reading = NoticeReading {
+            notices: vec![Notice::Item {
+                name: ItemName {
+                    key: "0000000000000000".into(),
+                    text: "Zzqx".into(),
+                    picture: NamePicture {
+                        width: 0,
+                        height: 0,
+                        coverage: Vec::new(),
+                    },
+                    letters,
+                },
+                count: 3,
+                tab: Some(Tab::Etc),
+            }],
+            missed: None,
+            confirmed: true,
+        };
+        assert_eq!(
+            notice_events(&Ok(reading)),
+            [Event::ItemGained {
+                item_key: "0000000000000000".into(),
+                count: 3,
+                tab: Some(Tab::Etc),
+                item_id: None,
+                name: None,
+                sell: None,
             }]
         );
     }
