@@ -904,7 +904,7 @@ function shell(initial: Settings): void {
       case "covered":
         return "Covered for a moment: a few pickups may be missing. Nothing to do.";
       case "blocked":
-        return "Covered by the party list.";
+        return "Covered often, or by a party list.";
       case "not_found":
         return "Notices not found while EXP went up. Keep the bottom of the game window in view.";
       case "reading": {
