@@ -6,6 +6,7 @@ import type {
   Cell,
   Event as GameEvent,
   PluginManifest,
+  PluginPage,
   Readers,
   RowAction,
   SessionSummary,
@@ -83,7 +84,8 @@ export function gameTextKeys(nodes: ViewNode[]): string[] {
 }
 
 export interface PluginListener {
-  render(view: ViewNode[]): void;
+  /** A view changed: the main view (`undefined`), one page, or `null` for all (pictures arrived). */
+  render(page: PluginPage | undefined | null): void;
   summary(summary: SessionSummary | null): void;
   notice(text: string, undo?: string): void;
   crashed(message: string): void;
@@ -100,6 +102,8 @@ export class PluginHost {
   private ticker: number | undefined;
   manifest: PluginManifest | null = null;
   view: ViewNode[] = [];
+  /** The plugin's other pages, as it last drew them. */
+  readonly pages: Partial<Record<PluginPage, ViewNode[]>> = {};
   private readers: Readers = { notices: "off", waitingMesos: 0 };
   /** The pictures the plugin's views name, kept for drawing them. */
   readonly pictures: NamePictures;
@@ -112,7 +116,7 @@ export class PluginHost {
     private readonly listener: PluginListener,
     private capture: CaptureState,
   ) {
-    this.pictures = new NamePictures(host, () => this.listener.render(this.view));
+    this.pictures = new NamePictures(host, () => this.listener.render(null));
   }
 
   async start(): Promise<void> {
@@ -190,9 +194,10 @@ export class PluginHost {
         this.manifest = message.manifest;
         break;
       case "render":
-        this.view = message.view;
+        if (message.page === undefined) this.view = message.view;
+        else this.pages[message.page] = message.view;
         this.pictures.want(gameTextKeys(message.view));
-        this.listener.render(message.view);
+        this.listener.render(message.page);
         break;
       case "summary":
         this.listener.summary(message.summary);

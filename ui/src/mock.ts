@@ -332,7 +332,7 @@ function namePicture(name: string): GamePicture {
  */
 export function mockHudHost(scenario: string): HudHost {
   const summary: HudSummary | null =
-    scenario === "grind" || scenario === "fullscreen-grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51 } : null;
+    scenario === "grind" || scenario === "fullscreen-grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51, lootPerHour: null } : null;
   const started = Date.now();
   const status = (): Status => {
     const base = {

@@ -35,9 +35,10 @@ use crate::store::Store;
 pub const PANEL: &str = "panel";
 /// The mini-HUD window's label (capabilities/hud.json).
 pub const HUD: &str = "hud";
-/// The mini-HUD window, in logical pixels: the 200px card with room for its shadow.
+/// The mini-HUD window, in logical pixels: the 200px card with room for its shadow, and four
+/// rows (EXP/hr, loot/hr, time to level, progress).
 pub const HUD_WIDTH: f64 = 216.0;
-pub const HUD_HEIGHT: f64 = 100.0;
+pub const HUD_HEIGHT: f64 = 124.0;
 /// The chat overlay window's label (capabilities/chat.json).
 pub const CHAT: &str = "chat";
 /// Chat lines the overlay has room for above the game's chat box.
@@ -65,6 +66,9 @@ pub struct Summary {
     pub level: Option<u32>,
     pub pct_hundredths: Option<u32>,
     pub minutes_to_level: Option<f64>,
+    /// Mesos and the NPC value of items per hour, once loot is counted; absent from an older panel.
+    #[serde(default)]
+    pub loot_per_hour: Option<f64>,
 }
 
 /// The latest [`Summary`], for a mini-HUD that has just opened.
@@ -1086,5 +1090,34 @@ mod tests {
             !fills_display(&whole(1900, 0, 2560, 1440), &[MAC, second]),
             "across two displays"
         );
+    }
+
+    // The panel's loot/hr reaches the mini-HUD under the same `lootPerHour` key, and an older
+    // panel's summary without it still reads. Fails if the host drops or renames the field.
+    #[test]
+    fn the_summary_carries_loot_per_hour_to_the_mini_hud() {
+        let from_panel = serde_json::json!({
+            "expPerHour": 48210.0,
+            "level": 42,
+            "pctHundredths": 6462,
+            "minutesToLevel": 51.0,
+            "lootPerHour": 21480.0,
+        });
+        let summary: Summary = serde_json::from_value(from_panel.clone()).unwrap();
+        assert_eq!(summary.loot_per_hour, Some(21480.0));
+        let latest = Latest::default();
+        latest.set(Some(summary));
+        let to_hud = serde_json::to_value(latest.get()).unwrap();
+        assert_eq!(to_hud, from_panel);
+
+        let older: Summary = serde_json::from_value(serde_json::json!({
+            "expPerHour": 48210.0,
+            "level": 42,
+            "pctHundredths": 6462,
+            "minutesToLevel": 51.0,
+        }))
+        .unwrap();
+        assert_eq!(older.loot_per_hour, None);
+        assert_eq!(older.level, Some(42));
     }
 }

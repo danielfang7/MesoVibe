@@ -136,6 +136,7 @@ function summary(session: Session, atMs: number): SessionSummary {
     level: last?.level ?? null,
     pctHundredths: last?.pctHundredths ?? null,
     minutesToLevel: minutesToLevel(session),
+    lootPerHour: null,
     expToGo: toGo(session),
     activeMs: session.activeMs,
     canEnd: canEnd(session, atMs),
