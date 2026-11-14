@@ -21,7 +21,7 @@ MesoVibe is not affiliated with or endorsed by Nexon. MapleStory is a trademark 
 
 ## Project layout
 
-- [engine](engine/) - screen capture and the recognizers that read the game's EXP bar, chat, pickup notices and map name
+- [engine](engine/) - screen capture and the recognizers that read the game's EXP bar, chat, pickup notices and map name, plus the bundled item and map data in [engine/data](engine/data/)
 - [app](app/) - the Tauri desktop app: windows, tray, settings, session storage and updates
 - [ui](ui/) - the panel, the mini-HUD and the chat overlay
 - [sdk](sdk/) - the plugin API, `@mesovibe/sdk`
@@ -45,6 +45,10 @@ pnpm tauri dev
 ### License
 
 MesoVibe is licensed under the BSD 2-clause license. See [LICENSE](LICENSE).
+
+### Game data
+
+Item and map names, inventory tabs and NPC sell prices come from [OSMS Data Explorer](https://osmsdataexplorer.com), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). MesoVibe ships a trimmed copy in [engine/data](engine/data/), so it never downloads game data while you play. MapleStory names and other game content are © Nexon.
 
 ## Contribute and develop
 

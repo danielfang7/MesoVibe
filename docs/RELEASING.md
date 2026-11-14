@@ -75,7 +75,9 @@ Prerequisites: the Apple credentials file (`~/.mesovibe/apple.env` or `MESOVIBE_
 `scripts/release-macos.sh`), the update key and its password, `gh` signed in, and a Windows machine
 with Rust, Node 24, pnpm and the Visual Studio C++ build tools.
 
-1. **Bump the version** in Cargo.toml (`[workspace.package]`) and merge it to `main`.
+1. **Bump the version** in Cargo.toml (`[workspace.package]`) and merge it to `main`. If the game
+   was patched since the last release, first run `node scripts/game-data.mjs` and commit the item
+   and map data it refreshes in the same change.
 2. **Mac:** `scripts/release-macos.sh`. It asks for the update key's
    password, builds, signs and notarizes the app, the DMG and the update package, and checks the
    app inside the update package too.
