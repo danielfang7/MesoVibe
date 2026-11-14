@@ -216,6 +216,19 @@ pub struct ItemName {
     /// The name as far as its letters are known, `?` for each letter that isn't.
     pub text: String,
     pub picture: NamePicture,
+    /// The name's letters, without its spaces: what game data needs to find the item even while
+    /// most of its letters aren't known.
+    pub letters: Vec<NameLetter>,
+}
+
+/// One letter of an item's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NameLetter {
+    /// The letter, when the reader has learned its shape.
+    pub known: Option<char>,
+    /// Which of the name's shapes it is, counting from 0 in the order they first appear: letters
+    /// drawn exactly alike share a number, so they're surely the same letter.
+    pub shape: u16,
 }
 
 /// Why lines may have been missed. In events it's the reason's snake_case name ("not_learned").
@@ -1761,6 +1774,8 @@ impl NoticeReader {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         let mut text = String::new();
         let mut last_end = None;
+        let mut shapes: Vec<&Glyph> = Vec::new();
+        let mut letters = Vec::with_capacity(pieces.len());
         for piece in pieces {
             for &b in piece.glyph.encode().as_bytes().iter().chain(b";") {
                 hash ^= u64::from(b);
@@ -1769,13 +1784,26 @@ impl NoticeReader {
             if last_end.is_some_and(|end| piece.x - end >= SPACE) {
                 text.push(' ');
             }
-            text.push(self.atlas.name(&piece.glyph).unwrap_or('?'));
+            let known = self.atlas.name(&piece.glyph);
+            text.push(known.unwrap_or('?'));
             last_end = Some(piece.x + piece.glyph.width());
+            let shape = shapes
+                .iter()
+                .position(|g| **g == piece.glyph)
+                .unwrap_or_else(|| {
+                    shapes.push(&piece.glyph);
+                    shapes.len() - 1
+                });
+            letters.push(NameLetter {
+                known,
+                shape: u16::try_from(shape).unwrap_or(u16::MAX),
+            });
         }
         ItemName {
             key: format!("{hash:016x}"),
             text,
             picture: picture_of(pieces),
+            letters,
         }
     }
 
@@ -2419,6 +2447,31 @@ mod tests {
         };
         assert_eq!(name.picture.height, LINE_ROWS);
         assert!(name.picture.coverage.contains(&255));
+    }
+
+    // Game data finds an item from which letters are drawn alike, so each letter must carry its
+    // shape's number. Fails if two drawings of one letter get two numbers, or a space gets one.
+    #[test]
+    fn an_item_s_letters_say_which_are_drawn_alike() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        let readings = run(
+            &mut game,
+            &mut reader,
+            vec![one(&item("Snail Shell", 1, "Etc"), 0), (Vec::new(), 0)],
+        );
+        let Notice::Item { name, .. } = &notices(&readings)[0] else {
+            panic!("an item");
+        };
+        let shapes: Vec<u16> = name.letters.iter().map(|l| l.shape).collect();
+        // S n a i l S h e l l: both S and all three l share a shape.
+        assert_eq!(shapes, [0, 1, 2, 3, 4, 0, 5, 6, 4, 4]);
+        let known: String = name
+            .letters
+            .iter()
+            .map(|l| l.known.unwrap_or('?'))
+            .collect();
+        assert_eq!(known, name.text.replace(' ', ""));
     }
 
     // Guards the honesty rules: a new line that can't be seen, a digit never learned, and EXP
