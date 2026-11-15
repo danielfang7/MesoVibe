@@ -65,7 +65,9 @@ const mesos = (amount, atMs, more = {}) => event({ type: "MesosGained", amount, 
 const map = (key, atMs) => event({ type: "MapChanged", map_key: key }, atMs);
 const missed = (reason, atMs) => event({ type: "NoticesMissed", reason }, atMs);
 
-const section = (sent, title) => last(sent, "render").view.find((node) => node.title === title);
+/** A section of the last view drawn: the Session view, or with `page` that page ("loot"). */
+const section = (sent, title, page) =>
+  sent.filter((m) => m.type === "render" && m.page === page).at(-1).view.find((node) => node.title === title);
 const thisSession = (sent) => section(sent, "This session")?.children ?? [];
 const items = (sent) => Object.fromEntries(thisSession(sent).find((n) => n.kind === "keyValue")?.items ?? []);
 const pastSessions = (sent) => section(sent, "Past sessions").children;
@@ -281,14 +283,24 @@ test("pickups don't count while paused", () => {
   assert.equal(items(sent).Mesos, "170");
 });
 
-// Undo puts the ended session back with the pickups made since. Fails if they're lost.
+// Undo puts the ended session back with the pickups made since, mesos and items. Fails if they're
+// lost, or the items from before End and after it don't add up.
 test("Undo after End keeps pickups made in its window", () => {
   const { send, sent, now } = play({ seconds: 60 });
+  send(item("Tablecloth", now, { item_id: 4000028, sell: 34 }));
   send({ type: "action", action: "end", atMs: now });
   send(exp(230_400, now + 2_000));
   send(mesos(70, now + 3_000));
+  send(item("Tablecloth", now + 3_500, { item_id: 4000028, sell: 34 }));
+  send(item("Leather", now + 4_000, { item_id: 4000049, sell: 10 }));
   send({ type: "action", action: "undo-end", atMs: now + 5_000 });
   assert.equal(items(sent).Mesos, "370");
+  assert.deepEqual(itemTable(sent), [
+    [
+      ["Tablecloth", "×2", "68"],
+      ["Leather", "×1", "10"],
+    ],
+  ]);
 });
 
 // A bad value in a save must never stop the tracker. Fails if a malformed map entry throws, or
@@ -312,9 +324,9 @@ test("a malformed map entry in a save is dropped, the session kept", () => {
   assert.equal(row[0].suffix, undefined, "the bad entries are gone");
 });
 
-// Sessions past the 500 kept go into All time, never lost. Fails if a dropped session's mesos
-// vanish from the save.
-test("a session past the 500 kept adds its mesos to All time", () => {
+// Sessions past the 500 kept go into All time, never lost. Fails if a dropped session's mesos or
+// items vanish from the save, or All time stops listing those items after a restart.
+test("a session past the 500 kept adds its mesos and items to All time", () => {
   const session = (i) => ({
     startedAtMs: T0 - (i + 1) * 3_600_000,
     endedAtMs: T0 - (i + 1) * 3_600_000 + 600_000,
@@ -323,12 +335,14 @@ test("a session past the 500 kept adds its mesos to All time", () => {
     expLost: 0,
     startLevel: 42,
     endLevel: 42,
-    maps: [{ k: "aaaa", p: 600_000, x: 100, m: 7, r: 7, l: 600_000, s: 42, e: 42 }],
+    // Only the oldest, the one End pushes out, picked up items.
+    maps: [{ k: "aaaa", p: 600_000, x: 100, m: 7, r: 7, l: 600_000, s: 42, e: 42, ...(i === 499 ? { i: [{ k: "#4000028", c: 3 }] } : {}) }],
   });
   const history = Array.from({ length: 500 }, (_, i) => session(i));
+  const catalog = { "#4000028": { n: "Tablecloth", t: "Etc", v: 34 } };
   const { send, sent, now } = (() => {
     const plugin = run();
-    plugin.send({ type: "start", saved: { version: 1, history, current: null }, atMs: T0, capture: "capturing", readers: READING });
+    plugin.send({ type: "start", saved: { version: 1, history, current: null, catalog }, atMs: T0, capture: "capturing", readers: READING });
     plugin.send(map("aaaa", T0));
     plugin.send(exp(230_000, T0));
     for (let s = 1; s <= 20; s++) {
@@ -340,5 +354,411 @@ test("a session past the 500 kept adds its mesos to All time", () => {
   send({ type: "action", action: "end", atMs: now });
   const saved = last(sent, "save").data;
   assert.equal(saved.history.length, 500);
-  assert.deepEqual(saved.allTime, { mesos: 7, playedMs: 600_000 });
+  assert.deepEqual(saved.allTime, { mesos: 7, playedMs: 600_000, items: [{ k: "#4000028", c: 3 }] });
+  assert.deepEqual(itemTable(sent, "All time", "loot"), [[["Tablecloth", "×3", "102"]]]);
+  const again = run();
+  again.send({ type: "start", saved, atMs: now + 10_000, capture: "capturing", readers: READING });
+  assert.deepEqual(itemTable(again.sent, "All time", "loot"), [[["Tablecloth", "×3", "102"]]]);
+});
+
+const item = (name, atMs, more = {}) =>
+  event(
+    {
+      type: "ItemGained",
+      item_key: "0000000000000000",
+      count: 1,
+      tab: "Etc",
+      item_id: name === null ? null : 4_000_000 + name.length,
+      name,
+      sell: name === null ? null : 10,
+      ...more,
+    },
+    atMs,
+  );
+const itemTable = (sent, title = "Items", page) =>
+  section(sent, title, page)?.children.filter((n) => n.kind === "table").map((t) => t.rows.map((r) => r.slice(0, 3)));
+/** The Loot tab's All time figures, by label. */
+const allTimeFigures = (sent) => Object.fromEntries(section(sent, "All time", "loot").children.find((n) => n.kind === "keyValue")?.items ?? []);
+
+// Items picked up count on the map with their NPC value, and loot/hr is mesos plus that value over
+// the read time: the Items section's headline, and in the Loot tab's All time. Fails if items go
+// unseen, their value is wrong, or the rate leaves them out.
+test("items count with their NPC value, in Item value and loot/hr", () => {
+  const { send, sent, now } = play({ seconds: 120 });
+  send(item("Tablecloth", now, { item_id: 4000028, sell: 34, count: 3 }));
+  send(item("Jr. Necki Skin", now + 1, { item_id: 4000018, sell: 21 }));
+  send(item("Tablecloth", now + 2, { item_id: 4000028, sell: 34 }));
+  assert.equal(items(sent)["Item value"], "157");
+  assert.deepEqual(itemTable(sent), [
+    [
+      ["Tablecloth", "×4", "136"],
+      ["Jr. Necki Skin", "×1", "21"],
+    ],
+  ]);
+  // 600 mesos and 157 of items over two minutes of reading.
+  assert.equal(Math.round(summary(sent).lootPerHour), Math.round(((600 + 157) * 3_600_000) / 120_000));
+  assert.deepEqual(section(sent, "Items").children[0], {
+    kind: "stat",
+    label: "Loot/hr",
+    value: "22.7K",
+    detail: "22,710 mesos and NPC item value per hour",
+  });
+  assert.equal(items(sent)["Loot/hr"], undefined, "Items has it; This session doesn't repeat it");
+  assert.equal(section(sent, "All time"), undefined, "All time is in the Loot tab");
+  assert.equal(allTimeFigures(sent)["Item value"], "157");
+  assert.equal(allTimeFigures(sent)["Loot/hr"], "22.7K");
+});
+
+// No loot rate while the pickup text is still learned. Fails if a rate shows before pickups count.
+test("no loot/hr while learning the pickup text", () => {
+  const { sent } = play({ seconds: 120, readers: { notices: "learning", waitingMesos: 0 } });
+  assert.equal(summary(sent).lootPerHour, null);
+});
+
+// Names no item fits, in any tab, are one "Unread items" row with no value, below every named item
+// however many more of them there are, and Item value says it's at least what's shown. Fails if
+// unread pickups vanish, split by tab, rise above named items or get a made-up value.
+test("names no item fits are one unread row at the bottom, with no value", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  send(item(null, now, { tab: "Use", count: 2 }));
+  send(item(null, now + 1, { tab: "Etc", count: 3 }));
+  send(item("Tablecloth", now + 2, { item_id: 4000028, sell: 34 }));
+  assert.deepEqual(itemTable(sent), [
+    [
+      ["Tablecloth", "×1", "34"],
+      ["Unread items", "×5", null],
+    ],
+  ]);
+  const table = section(sent, "Items").children.find((n) => n.kind === "table");
+  assert.deepEqual(table.details, [null, null]);
+  assert.equal(items(sent)["Item value"], "34+");
+  // A named item's tab shows under its name unless it's Etc; the unread row never gets one, even
+  // with Use pickups in it. Fails if a Use item loses its tab, or Etc or unread rows gain one.
+  send(item("Red Potion", now + 3, { item_id: 2000000, sell: 25, tab: "Use" }));
+  const withUse = section(sent, "Items").children.find((n) => n.kind === "table");
+  assert.deepEqual(withUse.rows.map((r) => r[0]), ["Tablecloth", "Red Potion", "Unread items"]);
+  assert.deepEqual(withUse.details, [null, "Use", null]);
+});
+
+// The unread row stays when a long list shows only its first 8. Fails if "Show all" hides it.
+test("the unread row shows under a list cut to 8", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  for (let i = 0; i < 10; i++) send(item(`Item ${i}`, now + i, { item_id: 4_100_000 + i, count: i + 2 }));
+  send(item(null, now + 20));
+  const [rows] = itemTable(sent);
+  assert.equal(rows.length, 9);
+  assert.deepEqual(rows.at(-1), ["Unread items", "×1", null]);
+  assert.equal(section(sent, "Items").children.find((n) => n.kind === "button").label, "Show all 10 items");
+});
+
+// Before a minute of pickups is read, Items says its loot/hr is coming rather than leaving a gap.
+// Fails if the line is missing, or shows while the pickup text is still being learned.
+test("Items says loot/hr comes after a minute of pickups", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  send(item("Tablecloth", now, { item_id: 4000028, sell: 34 }));
+  assert.deepEqual(section(sent, "Items").children[0], { kind: "empty", text: "Loot/hr shows after a minute of pickups." });
+  send({ type: "readers", readers: { notices: "learning", waitingMesos: 0 }, atMs: now + 1 });
+  assert.equal(section(sent, "Items").children[0].kind, "table");
+});
+
+// Missed pickups are said under the items they may be missing from, not in This session. Fails if
+// the line moves back, or goes missing.
+test("the missing-pickups line is at the bottom of Items", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  send(item("Tablecloth", now, { item_id: 4000028, sell: 34 }));
+  send(missed("unaligned", now + 1));
+  const missing = "Some pickups may be missing: MesoVibe couldn't read every notice.";
+  assert.equal(section(sent, "Items").children.at(-1).text, missing);
+  assert.ok(!lines(sent).includes(missing));
+});
+
+// With items from two maps, each map's items list under its name, in the order played. Fails if
+// they're mixed into one list, or one map's items land under the other.
+test("items group by map when they came from two maps", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  send(item("Tablecloth", now, { item_id: 4000028, sell: 34 }));
+  send(map("bbbb", now + 1));
+  send(item("Leather", now + 2, { item_id: 4000049, sell: 10 }));
+  const children = section(sent, "Items").children;
+  assert.deepEqual(children.filter((n) => n.kind === "keyValue").map((n) => n.items[0][1].gameText), ["aaaa", "bbbb"]);
+  assert.deepEqual(itemTable(sent), [[["Tablecloth", "×1", "34"]], [["Leather", "×1", "10"]]]);
+});
+
+// A list shows the 8 picked up most, then "Show all N items" until pressed. Fails if the list grows
+// past 8 unasked, or the button doesn't show the rest.
+test("an item list shows 8 until Show all", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  for (let i = 0; i < 10; i++) send(item(`Item ${i}`, now + i, { item_id: 4_100_000 + i, count: i + 1 }));
+  assert.equal(itemTable(sent)[0].length, 8);
+  assert.equal(itemTable(sent)[0][0][0], "Item 9", "the most picked up first");
+  const button = section(sent, "Items").children.find((n) => n.kind === "button");
+  assert.equal(button.label, "Show all 10 items");
+  send({ type: "action", action: button.action, atMs: now + 20 });
+  assert.equal(itemTable(sent)[0].length, 10);
+  // Pressed again, "Show fewer" cuts the list back to 8. Fails if the list can't be shortened.
+  assert.equal(section(sent, "Items").children.find((n) => n.kind === "button").label, "Show fewer");
+  send({ type: "action", action: button.action, atMs: now + 21 });
+  assert.equal(itemTable(sent)[0].length, 8);
+  assert.equal(section(sent, "Items").children.find((n) => n.kind === "button").label, "Show all 10 items");
+  // End and Reset start every list collapsed, here All time's in the Loot tab, which outlives both.
+  // Fails if a list opened in one session stays open in the next.
+  const allTimeButton = () => section(sent, "All time", "loot").children.find((n) => n.kind === "button");
+  const allTimeRows = () => itemTable(sent, "All time", "loot")[0].length;
+  send({ type: "action", action: allTimeButton().action, atMs: now + 22 });
+  assert.equal(allTimeRows(), 10);
+  send({ type: "action", action: "end", atMs: now + 23 });
+  assert.equal(last(sent, "save").data.history.length, 1, "ended");
+  assert.equal(allTimeRows(), 8);
+  assert.equal(allTimeButton().label, "Show all 10 items");
+  send(exp(231_000, now + 30_000));
+  send(exp(231_100, now + 40_000));
+  send({ type: "action", action: allTimeButton().action, atMs: now + 41_000 });
+  assert.equal(allTimeRows(), 10);
+  send({ type: "action", action: "reset", atMs: now + 42_000 });
+  assert.equal(last(sent, "notice").text, "Session reset.");
+  assert.equal(allTimeRows(), 8);
+});
+
+// Items picked up before the first kill wait with the held mesos and join on the same map. Fails if
+// they're lost or counted on another map.
+test("items before the first kill are held and join the session", () => {
+  const plugin = run();
+  plugin.send({ type: "start", saved: null, atMs: T0, capture: "capturing", readers: READING });
+  plugin.send(map("aaaa", T0));
+  plugin.send(exp(230_000, T0));
+  plugin.send(item("Tablecloth", T0 + 1_000, { item_id: 4000028, sell: 34 }));
+  plugin.send(exp(230_100, T0 + 10_000));
+  assert.deepEqual(itemTable(plugin.sent), [[["Tablecloth", "×1", "34"]]]);
+});
+
+// Items alone, with no mesos and no kill, are loot like mesos: Reset is offered at once, End after
+// five minutes, and End keeps them as a session of their own. Fails if items-only loot can't be
+// ended or reset, or End saves the session without its items.
+test("items picked up without a kill can be reset, and ended after five minutes", () => {
+  const { send, sent } = run();
+  send({ type: "start", saved: null, atMs: T0, capture: "capturing", readers: READING });
+  send(map("aaaa", T0));
+  send(exp(230_000, T0));
+  send(item("Tablecloth", T0 + 1_000, { item_id: 4000028, sell: 34, count: 2 }));
+  assert.equal(summary(sent).canReset, true);
+  assert.equal(summary(sent).canEnd, false, "not worth saving yet");
+  send({ type: "tick", atMs: T0 + 301_000 });
+  assert.equal(summary(sent).canEnd, true);
+  send({ type: "action", action: "end", atMs: T0 + 301_000 });
+  assert.equal(last(sent, "notice").text, "Saved: 2 items.");
+  const [past] = last(sent, "save").data.history;
+  assert.deepEqual(past.maps[0].i, [{ k: "#4000028", c: 2 }]);
+  const table = section(sent, "Past sessions", "loot").children.find((n) => n.kind === "table");
+  assert.deepEqual(table.rows[0].slice(1), ["68", null]);
+});
+
+// Before the first kill nothing is read toward loot/hr, so Items doesn't promise it in a minute.
+// Fails if the line shows for held items and waits there for good.
+test("held items before the first kill don't promise loot/hr", () => {
+  const { send, sent } = run();
+  send({ type: "start", saved: null, atMs: T0, capture: "capturing", readers: READING });
+  send(map("aaaa", T0));
+  send(exp(230_000, T0));
+  send(item("Tablecloth", T0 + 1_000, { item_id: 4000028, sell: 34 }));
+  assert.equal(section(sent, "Items").children[0].kind, "table");
+});
+
+// Items picked up while the notices are covered aren't read time, so they stay out of loot/hr; the
+// item value Undo brings back counts toward it again. Fails if covered pickups raise the rate, or
+// Undo after End loses the value counted toward it.
+test("loot/hr leaves out covered pickups, and Undo keeps item value in it", () => {
+  const { send, sent, now } = play({ seconds: 120 });
+  // The clock moves a few milliseconds between readings, so rates compare within 0.1%.
+  const near = (a, b) => assert.ok(Math.abs(a - b) <= b / 1000, `${a} vs ${b}`);
+  const before = summary(sent).lootPerHour;
+  send({ type: "readers", readers: { notices: "blocked", waitingMesos: 0 }, atMs: now });
+  send(item("Tablecloth", now + 1, { item_id: 4000028, sell: 34_000 }));
+  send({ type: "readers", readers: READING, atMs: now + 2 });
+  near(summary(sent).lootPerHour, before);
+  send(item("Tablecloth", now + 3, { item_id: 4000028, sell: 34_000 }));
+  const withItem = summary(sent).lootPerHour;
+  assert.ok(withItem > before + 1_000_000, `${withItem}`);
+  send({ type: "action", action: "end", atMs: now + 4 });
+  send({ type: "action", action: "undo-end", atMs: now + 5 });
+  near(summary(sent).lootPerHour, withItem);
+});
+
+// A count misread as 0 is a pickup lost to a misread: it must not make loot to keep or end, and
+// the session says some pickups may be missing. Fails if a ×0 item offers End or Reset, shows in
+// the Items table, or passes silently.
+test("a pickup read as ×0 counts as missed, not as loot", () => {
+  const { send, sent } = run();
+  send({ type: "start", saved: null, atMs: T0, capture: "capturing", readers: READING });
+  send(map("aaaa", T0));
+  send(exp(230_000, T0));
+  send(item("Tablecloth", T0 + 1_000, { item_id: 4000028, sell: 34, count: 0 }));
+  send({ type: "tick", atMs: T0 + 301_000 });
+  assert.equal(summary(sent).canReset, false);
+  assert.equal(summary(sent).canEnd, false);
+  assert.equal(section(sent, "Items"), undefined);
+  const playing = play({ seconds: 20 });
+  playing.send(item("Tablecloth", playing.now, { item_id: 4000028, sell: 34, count: 0 }));
+  assert.ok(lines(playing.sent).includes("Some pickups may be missing: MesoVibe couldn't read every notice."));
+});
+
+// With mesos alone, Items still heads with the session's loot/hr: it shows nowhere else in the
+// panel (the Loot tab's is All time). Fails if a mesos-only session's rate disappears.
+test("mesos alone still head Items with the session's loot/hr", () => {
+  const { sent } = play({ seconds: 120 });
+  assert.ok(summary(sent).lootPerHour > 0);
+  assert.deepEqual(section(sent, "Items").children.map((n) => n.kind), ["stat"]);
+});
+
+// A price once known stays when a later pickup of the same name comes without one (its tab wasn't
+// read, so it could be items in other tabs that sell for less or more). Fails if a past session's
+// Item value drops to nothing after such a pickup.
+test("a later pickup without a price keeps the known price", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  send(item("Blue Potion", now, { item_id: null, sell: 22, count: 2 }));
+  send({ type: "action", action: "end", atMs: now + 1 });
+  const lootGained = () => section(sent, "Past sessions", "loot").children.find((n) => n.kind === "table").rows[0][1];
+  const before = lootGained();
+  send(exp(230_100, now + 2_000));
+  send(exp(230_200, now + 3_000));
+  send(item("Blue Potion", now + 4_000, { item_id: null, sell: null }));
+  assert.equal(allTimeFigures(sent)["Item value"], "66");
+  assert.equal(lootGained(), before);
+});
+
+// A save edited by hand, or damaged, can hold item keys no pickup makes ("constructor",
+// "__proto__"): they're dropped, so nothing reads a value off the object's prototype. Fails if
+// such a key shows as a row or prices anything.
+test("item keys a pickup can't make are dropped from a save", () => {
+  const past = {
+    startedAtMs: T0 - 600_000,
+    endedAtMs: T0 - 300_000,
+    activeMs: 60_000,
+    expGained: 300,
+    expLost: 0,
+    startLevel: 42,
+    endLevel: 42,
+    maps: [{ k: "aaaa", p: 60_000, x: 300, m: 50, r: 50, l: 60_000, s: 42, e: 42, i: [{ k: "constructor", c: 2 }, { k: "#1", c: 1 }] }],
+  };
+  const catalog = JSON.parse('{"#1": {"n": "Snail Shell", "t": "Etc", "v": 1}, "__proto__": {"n": "x", "t": "Etc", "v": 9}}');
+  const { send, sent } = run();
+  send({ type: "start", saved: { version: 1, history: [past], current: null, catalog }, atMs: T0, capture: "capturing", readers: READING });
+  assert.deepEqual(itemTable(sent, "All time", "loot"), [[["Snail Shell", "×1", "1"]]]);
+  assert.equal(allTimeFigures(sent)["Item value"], "1");
+});
+
+// A pickup no single item fits is counted under its tab with every other unread pickup there, so
+// it can't carry a price, even when the items it might be all sell for the same. Fails if one such
+// pickup prices every unread pickup of the tab.
+test("unread pickups never take a price", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  for (let i = 0; i < 10; i++) send(item(null, now + i, { tab: "Etc", sell: null }));
+  send(item(null, now + 20, { tab: "Etc", sell: 5_000 }));
+  assert.deepEqual(itemTable(sent), [[["Unread items", "×11", null]]]);
+  assert.equal(items(sent)["Item value"], "0+");
+});
+
+// All time adds up every session's items and mesos, and survives a restart from the save. Fails if
+// a saved session's items, or the names kept for them, are lost.
+test("All time lists items from every session, from the save", () => {
+  const { send, sent, now } = play({ seconds: 60 });
+  send(item("Tablecloth", now, { item_id: 4000028, sell: 34, count: 2 }));
+  send({ type: "action", action: "end", atMs: now + 1 });
+  const saved = last(sent, "save").data;
+  assert.deepEqual(saved.catalog["#4000028"], { n: "Tablecloth", t: "Etc", v: 34 });
+  const again = run();
+  again.send({ type: "start", saved, atMs: now + 10_000, capture: "capturing", readers: READING });
+  const allTime = allTimeFigures(again.sent);
+  assert.equal(allTime.Mesos, "300");
+  assert.equal(allTime["Item value"], "68");
+  assert.deepEqual(itemTable(again.sent, "All time", "loot"), [[["Tablecloth", "×2", "68"]]]);
+});
+
+// The Loot tab lists each past session's loot like Past sessions: its map, mesos plus item value,
+// and loot/hr over the time pickups were read. Fails if a session's items are left out of its loot,
+// or a session from before loot tracking gets a row of zeros.
+test("the Loot tab lists past sessions' loot and loot/hr", () => {
+  const { send, sent, now } = play({ seconds: 120 });
+  send(item("Tablecloth", now, { item_id: 4000028, sell: 34, count: 2 }));
+  send({ type: "action", action: "end", atMs: now + 1 });
+  const before = { startedAtMs: T0 - 900_000, endedAtMs: T0 - 600_000, activeMs: 300_000, expGained: 900, expLost: 0, startLevel: 41, endLevel: 41 };
+  const saved = last(sent, "save").data;
+  const again = run();
+  again.send({ type: "start", saved: { ...saved, history: [...saved.history, before] }, atMs: now + 10_000, capture: "capturing", readers: READING });
+  const table = section(again.sent, "Past sessions", "loot").children.find((n) => n.kind === "table");
+  assert.deepEqual(table.columns, ["Map", "Loot gained", "Loot/hr"]);
+  // 600 mesos and 68 of Tablecloth over two minutes of reading.
+  assert.deepEqual(table.rows, [[{ gameText: "aaaa", label: table.rows[0][0].label }, "668", "20K"]]);
+  assert.equal(table.details[0].length, 2, "its day and play time, and its level");
+});
+
+// The Loot tab's Past sessions says where sessions come from until one has loot, and has its own
+// "Show more" past 20, apart from the Session view's. Fails if the empty line is missing, the
+// button doesn't show more or turn into "Show fewer", or one toggle moves the other list.
+test("the Loot tab's Past sessions is empty before loot tracking, and has its own Show more", () => {
+  const before = { startedAtMs: T0 - 900_000, endedAtMs: T0 - 600_000, activeMs: 300_000, expGained: 900, expLost: 0, startLevel: 41, endLevel: 41 };
+  const fresh = run();
+  fresh.send({ type: "start", saved: { version: 1, history: [before], current: null }, atMs: T0, capture: "capturing", readers: READING });
+  assert.equal(pastSessions(fresh.sent)[0].kind, "table", "the Session view lists it");
+  assert.deepEqual(section(fresh.sent, "Past sessions", "loot").children, [
+    { kind: "empty", text: "Sessions show up here when you end them or close MesoVibe." },
+  ]);
+
+  const tracked = (i) => ({
+    startedAtMs: T0 - (i + 1) * 3_600_000,
+    endedAtMs: T0 - (i + 1) * 3_600_000 + 600_000,
+    activeMs: 600_000,
+    expGained: 100,
+    expLost: 0,
+    startLevel: 42,
+    endLevel: 42,
+    maps: [{ k: "aaaa", p: 600_000, x: 100, m: 7, r: 7, l: 600_000, s: 42, e: 42 }],
+  });
+  const { send, sent } = run();
+  send({ type: "start", saved: { version: 1, history: Array.from({ length: 25 }, (_, i) => tracked(i)), current: null }, atMs: T0, capture: "capturing", readers: READING });
+  const lootPast = () => section(sent, "Past sessions", "loot").children;
+  const lootRows = () => lootPast().find((n) => n.kind === "table").rows.length;
+  const lootButton = () => lootPast().find((n) => n.kind === "button");
+  const sessionRows = () => pastSessions(sent).find((n) => n.kind === "table").rows.length;
+  const sessionButton = () => pastSessions(sent).find((n) => n.action === "toggle-history");
+  assert.equal(lootRows(), 20);
+  assert.deepEqual([lootButton().label, lootButton().action], ["Show more", "toggle-loot-history"]);
+  send({ type: "action", action: "toggle-loot-history", atMs: T0 + 1_000 });
+  assert.equal(lootRows(), 25);
+  assert.equal(lootButton().label, "Show fewer");
+  assert.equal(sessionRows(), 20, "the Session view's list stays as it was");
+  assert.equal(sessionButton().label, "Show more");
+  send({ type: "action", action: "toggle-history", atMs: T0 + 2_000 });
+  assert.equal(sessionRows(), 25);
+  assert.equal(lootRows(), 25, "the Loot tab's list stays as it was");
+  send({ type: "action", action: "toggle-loot-history", atMs: T0 + 3_000 });
+  assert.equal(lootRows(), 20);
+  assert.equal(lootButton().label, "Show more");
+  assert.equal(sessionRows(), 25);
+});
+
+// Items picked up while paused aren't the session's. Fails if they count.
+test("items don't count while paused", () => {
+  const { send, sent, now } = play({ seconds: 20 });
+  send({ type: "action", action: "pause", atMs: now });
+  send(item("Tablecloth", now + 1_000, { item_id: 4000028, sell: 34 }));
+  assert.equal(section(sent, "Items"), undefined);
+});
+
+// A bad item entry or catalog value in a save must never stop the tracker. Fails if it throws or
+// the good entries go with it.
+test("malformed items and catalog entries in a save are dropped", () => {
+  const past = {
+    startedAtMs: T0 - 600_000,
+    endedAtMs: T0 - 300_000,
+    activeMs: 60_000,
+    expGained: 300,
+    expLost: 0,
+    startLevel: 42,
+    endLevel: 42,
+    maps: [{ k: "aaaa", p: 60_000, x: 300, m: 50, r: 50, l: 60_000, s: 42, e: 42, i: [{ k: "#1", c: 2 }, { k: 5, c: 1 }, { k: "#2", c: -1 }] }],
+  };
+  const catalog = { "#1": { n: "Snail Shell", t: "Etc", v: 1 }, "#2": { n: 7 } };
+  const { send, sent } = run();
+  send({ type: "start", saved: { version: 1, history: [past], current: null, catalog }, atMs: T0, capture: "capturing", readers: READING });
+  assert.deepEqual(itemTable(sent, "All time", "loot"), [[["Snail Shell", "×2", "2"]]]);
 });

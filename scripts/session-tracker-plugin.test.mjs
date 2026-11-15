@@ -60,8 +60,9 @@ function grind() {
   return { ...plugin, t0, now: t0 + 60_000 };
 }
 
-/** A section of the last view drawn, by its title. */
-const section = (sent, title) => last(sent, "render").view.find((node) => node.title === title);
+/** The last Session view drawn (not the Loot tab's page), and one of its sections by title. */
+const sessionView = (sent) => sent.filter((m) => m.type === "render" && m.page === undefined).at(-1).view;
+const section = (sent, title) => sessionView(sent).find((node) => node.title === title);
 /** The "This session" section's children (none when it's left out), and its label and value pairs. */
 const thisSession = (sent) => section(sent, "This session")?.children ?? [];
 const items = (sent) => thisSession(sent).find((node) => node.kind === "keyValue")?.items ?? [];
@@ -74,7 +75,7 @@ test("the plugin introduces itself, and before the first gain adds nothing to th
   assert.deepEqual(sent[0], { type: "ready", manifest: { id: "session-tracker", name: "Session Tracker" } });
   send({ type: "start", saved: null, atMs: 1_000, capture: "capturing" });
   assert.equal(section(sent, "This session"), undefined, "nothing to show yet");
-  assert.doesNotMatch(text(last(sent, "render").view), /first gain/);
+  assert.doesNotMatch(text(sessionView(sent)), /first gain/);
   assert.equal(last(sent, "summary").summary.expPerHour, null);
   send({ type: "capture", state: "no_game", atMs: 2_000 });
   send({ type: "tick", atMs: 3_000 });
@@ -104,7 +105,7 @@ test("a minute of grinding feeds the strip, and the Session view shows only what
   assert.equal(values["EXP to go"], (NEEDED - 230_378).toLocaleString("en-US"));
   assert.match(values["Last 5 min EXP/hr"], /^[\d.]+[KM]?$/);
   assert.deepEqual(thisSession(sent).map((node) => node.kind), ["keyValue"]);
-  const view = text(last(sent, "render").view);
+  const view = text(sessionView(sent));
   for (const repeat of ["Time to level", "Reset session", "EXP this level needs"]) {
     assert.doesNotMatch(view, new RegExp(repeat));
   }
@@ -388,7 +389,7 @@ test("a session left running when the app closed is kept as history", () => {
   const history = last(sent, "save").data.history;
   assert.equal(history.length, 1);
   assert.equal(history[0].expGained, 378);
-  assert.match(text(last(sent, "render").view), /Waiting for the game/);
+  assert.match(text(sessionView(sent)), /Waiting for the game/);
 });
 
 test("time doesn't count while capture is paused", () => {

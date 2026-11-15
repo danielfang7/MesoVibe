@@ -195,7 +195,9 @@ export class PluginHost {
         break;
       case "render":
         if (message.page === undefined) this.view = message.view;
-        else this.pages[message.page] = message.view;
+        // Only a page the panel has a tab for: the name comes from the plugin.
+        else if (message.page === "loot") this.pages.loot = message.view;
+        else break;
         this.pictures.want(gameTextKeys(message.view));
         this.listener.render(message.page);
         break;

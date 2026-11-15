@@ -614,23 +614,48 @@ dl {
   gap: var(--space-sm);
 }
 
+/* On its own, a stat is its section's headline: the figure as big as the strip's rate, with its
+   label after it like the strip's "EXP/hr", or under it when the panel is too narrow for both. */
 .stat {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-sm);
   min-width: 0;
 }
 
 .stat-label {
-  font-size: 13px;
+  order: 1;
+  font-size: 14px;
   color: var(--text-muted);
 }
 
 .stat-value {
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* In a row of stats, each is a smaller figure under its label. */
+.stat-row .stat {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.stat-row .stat-label {
+  order: 0;
+  font-size: 13px;
+}
+
+.stat-row .stat-value {
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: normal;
+  line-height: inherit;
 }
 
 .stat.accent .stat-value {

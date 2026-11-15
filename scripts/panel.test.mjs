@@ -222,6 +222,21 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     const mesos = `[...document.querySelectorAll(".view dt")].find((d) => d.textContent === "Mesos")?.nextElementSibling?.textContent`;
     assert.match(await page.until(mesos, "the Mesos row"), /^[\d,]+\+?$/);
 
+    // Items picked up list by name with their count and NPC value. Fails if the Items table is
+    // missing once items are picked up.
+    const itemRows = `[...document.querySelectorAll(".view table")].find((t) => t.querySelector("th")?.textContent === "Item")?.querySelectorAll("tbody tr").length`;
+    assert.ok((await page.until(itemRows, "the Items table")) > 0);
+
+    // The Loot tab opens on All time. Fails if its rail item doesn't show the tracker's Loot page.
+    await page.evaluate(`document.querySelector('[aria-label="Loot"]').click()`);
+    const allTime = `[...document.querySelectorAll(".view h2, .view h3")].some((h) => h.textContent === "All time")`;
+    await page.until(allTime, "the Loot tab's All time");
+    assert.ok((await page.until(itemRows, "All time's items")) > 0);
+    // The Loot tab keeps up while it's open. Fails if pickups made with it open only show once the
+    // tab is opened again.
+    const opened = await page.until(mesos, "All time's mesos");
+    await page.until(`((m) => m !== undefined && m !== ${JSON.stringify(opened)})(${mesos})`, "All time's mesos rising with the Loot tab open");
+
     // What MesoVibe sees says how the notices are read and shows the map's name as read. Fails if
     // either row is missing or the map row has no picture.
     await page.evaluate(`document.querySelector('[aria-label="What MesoVibe sees"]').click()`);
@@ -245,6 +260,28 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate("window.__mockStorage.saves"), 0, "nothing saved over it");
     await page.evaluate(`document.querySelector('[data-key="restart"]').click()`);
     await page.until(`!document.querySelector(".view .state.error") && window.__mockStorage.reads === 2`, "the tracker after Restart");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // The Loot tab belongs to the same tracker, so when it has stopped the tab shows the same reason
+  // and Restart. Fails if the Loot tab is blank or stale instead, or its Restart doesn't bring the
+  // Loot page back.
+  await t.test("the Loot tab shows the stopped tracker's reason and Restart too", async () => {
+    const page = await openPage(devtools, at("unreadable"));
+    const alert = `document.querySelector(".view .state.error")?.textContent`;
+    const reason = await page.until(alert, "the read error");
+    // Marks the Session view's copy, so the one checked below is the Loot tab's own.
+    await page.evaluate(`document.querySelector(".view .state.error").dataset.session = "yes"`);
+    await page.evaluate(`document.querySelector('[aria-label="Loot"]').click()`);
+    assert.equal(await page.evaluate(`document.querySelector('[aria-label="Loot"]').getAttribute("aria-current")`), "page");
+    assert.equal(await page.until(alert, "the read error on the Loot tab"), reason);
+    assert.equal(await page.evaluate(`document.querySelector(".view .state.error").dataset.session`), undefined, "drawn by the Loot tab");
+    assert.equal(await page.evaluate(`document.querySelector('.view [data-key="restart"]')?.textContent`), "Restart");
+    assert.equal(await page.evaluate("window.__mockStorage.saves"), 0, "nothing saved over it");
+    await page.evaluate(`document.querySelector('.view [data-key="restart"]').click()`);
+    const allTime = `[...document.querySelectorAll(".view h2, .view h3")].some((h) => h.textContent === "All time")`;
+    await page.until(`!document.querySelector(".view .state.error") && ${allTime} && window.__mockStorage.reads === 2`, "the Loot page after Restart");
     assert.deepEqual(page.errors, []);
     page.close();
   });
@@ -542,7 +579,9 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
   await t.test("the mini-HUD shows the rate, time to level and progress, or what's wrong", async () => {
     const page = await openPage(devtools, at("grind", "hud.html"));
     assert.equal(await page.until(`document.querySelector(".hud-rate")?.textContent`, "the rate"), "48.2K");
-    await page.until(`document.querySelector(".hud-line")?.textContent === "Lv 42 → 43 in 51 min"`, "time to level");
+    // Loot/hr on its own row under EXP/hr, then time to level.
+    const hudLines = `[...document.querySelectorAll(".hud-line")].map((l) => l.textContent)`;
+    await page.until(`${hudLines}.join("|") === "21.5K loot/hr|Lv 42 → 43 in 51 min"`, "loot/hr and time to level");
     assert.equal(await page.evaluate(`document.querySelector(".hud-progress .number").textContent`), "64.62%");
     assert.deepEqual(page.errors, []);
     page.close();
@@ -586,6 +625,24 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await mid.evaluate(`document.querySelector(".hud-progress")`), null, "the hint takes the progress row");
     assert.deepEqual(mid.errors, []);
     mid.close();
+    // At the mini-HUD window's own size (app/src/dock.rs) the loot/hr line still leaves every row
+    // readable. Fails if a row is pushed out of the card, or a line is squeezed shorter than its text.
+    const dock = readFileSync(join(REPO, "app", "src", "dock.rs"), "utf8");
+    const [hudWidth, hudHeight] = ["HUD_WIDTH", "HUD_HEIGHT"].map((name) => Number(new RegExp(`const ${name}: f64 = ([\\d.]+);`).exec(dock)[1]));
+    const small = await openPage(devtools, at("grind", "hud.html"));
+    await small.resize(hudWidth, hudHeight);
+    await small.until(`document.querySelector(".hud-loot") && window.innerHeight === ${hudHeight}`, "loot/hr at the mini-HUD's size");
+    const cut = `(() => {
+      const card = document.querySelector(".hud").getBoundingClientRect();
+      return [...document.querySelectorAll(".hud > *")]
+        .filter((row) => {
+          const r = row.getBoundingClientRect();
+          return r.top < card.top || r.bottom > card.bottom || r.height < parseFloat(getComputedStyle(row).fontSize);
+        })
+        .map((row) => row.className);
+    })()`;
+    assert.deepEqual(await small.evaluate(cut), []);
+    small.close();
   });
 
   // A chat line as the host hands it over (app/src/chat.rs), with a one-pixel picture: these tests
@@ -665,11 +722,12 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
   });
 
   // Fails if Settings and What MesoVibe sees swap back, or a view goes missing from the rail.
-  await t.test("the rail lists Session and Chat, then Settings, then What MesoVibe sees", async () => {
+  await t.test("the rail lists Session, Loot and Chat, then Settings, then What MesoVibe sees", async () => {
     const page = await openPage(devtools, at("grind"));
     await page.until(`document.querySelector(".rail")`, "the rail");
     assert.deepEqual(await page.evaluate(`[...document.querySelectorAll(".rail-item")].map((b) => b.getAttribute("title"))`), [
       "Session",
+      "Loot",
       "Chat",
       "Settings",
       "What MesoVibe sees",

@@ -51,7 +51,11 @@ export interface GameTextCell {
 /** What a table cell or key-value value holds: text, nothing yet ("?"), or a name picture. */
 export type Cell = string | null | GameTextCell;
 
-/** One number with its label, like "EXP/hr 1.84M". `value` null shows "?" (never 0). */
+/**
+ * One number with its label, like "EXP/hr 1.84M". `value` null shows "?" (never 0). On its own it's
+ * a section's headline figure, drawn large with its label after it; in a `statRow`, a smaller one
+ * under its label.
+ */
 export interface StatNode {
   kind: "stat";
   label: string;
@@ -143,7 +147,7 @@ export interface SessionSummary {
   canEnd: boolean;
   /** The session has something to throw away: Reset is offered. */
   canReset: boolean;
-  /** The session counted loot but no EXP yet: the strip says "Mesos only so far". */
+  /** The session counted loot but no EXP yet: the strip says "Pickups only so far". */
   lootOnly: boolean;
   /** The player paused the session: no time, EXP or loot counts until Resume. */
   paused: boolean;
