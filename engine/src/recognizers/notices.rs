@@ -1598,8 +1598,11 @@ impl NoticeReader {
 
     /// Checks letters kept from an earlier session against a line shaped like an EXP line. Kept
     /// letters that can't read most of its phrase count against them, and after
-    /// [`RESTORE_PATIENCE`] such lines in a row they're dropped and learned again. Lines drawn
-    /// over by something else rarely split into the phrase's words, so they don't count.
+    /// [`RESTORE_PATIENCE`] such lines in a row they're dropped and learned again: a font the
+    /// game redrew, or the letters at another size, match none of them. A letter or two that
+    /// something behind the line changed, which on a bright map can happen to line after line,
+    /// leaves the rest read and doesn't count. Lines drawn over by something else rarely split
+    /// into the phrase's words, so they don't count either.
     fn check_restored(&mut self, cut: &Cut) {
         let Some(strikes) = self.restored else {
             return;
@@ -1607,8 +1610,12 @@ impl NoticeReader {
         let Some(fit) = fit_amount(cut, EXP_PHRASE).filter(|_| !cut.yellow) else {
             return;
         };
-        let reads =
-            agreement(&self.atlas, &fit.fixed).is_some_and(|known| known * 2 >= fit.fixed.len());
+        let read = fit
+            .fixed
+            .iter()
+            .filter(|(glyph, c)| self.atlas.name(glyph) == Some(*c))
+            .count();
+        let reads = read * 2 >= fit.fixed.len();
         self.restored = match reads {
             true => Some(0),
             false if strikes + 1 < RESTORE_PATIENCE => Some(strikes + 1),
@@ -2945,6 +2952,36 @@ mod tests {
             notices(&run(&mut game, &mut reader, vec![one(&mesos("70"), 0)])),
             [Notice::Mesos {
                 amount: 70,
+                shaped: false
+            }]
+        );
+    }
+
+    // On a bright map, something behind an EXP line can make one of its letters look like another
+    // letter, and in a party such lines come several in a row. Fails if they throw away the letters
+    // kept from the last session, so pickups go unread until they're learned again.
+    #[test]
+    fn kept_letters_stay_through_lines_spoiled_into_other_letters() {
+        let kept = confirmed_reader(&mut Game::new(Scene::Rock))
+            .knowledge()
+            .unwrap();
+        let mut reader = NoticeReader::from_knowledge(&kept).unwrap();
+        let mut game = Game::new(Scene::Rock);
+        // Until the EXP bar is read, no line can be checked against it, so nothing shows the kept
+        // letters right in the meantime.
+        for n in [31, 48, 27, 55] {
+            // The "e" of "received" drawn as a "c".
+            let text = exp(&n.to_string()).replacen("received", "reccived", 1);
+            for arrive in [vec![(text.as_str(), WHITE)], Vec::new()] {
+                let canvas = game.next(&arrive, 0);
+                reader.observe(&canvas.frame(), None).unwrap();
+            }
+        }
+        assert!(reader.confirmed(), "the kept letters were dropped");
+        assert_eq!(
+            notices(&run(&mut game, &mut reader, vec![one(&mesos("46"), 0)])),
+            [Notice::Mesos {
+                amount: 46,
                 shaped: false
             }]
         );
