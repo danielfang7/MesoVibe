@@ -72,6 +72,14 @@ function chatter(handler: (lines: ChatLine[]) => void): void {
   }, 1000);
 }
 
+/** Pickups the loot scenario draws from: matched items, one name several items share, and one no item fits. */
+const MOCK_ITEMS: GameEvent[] = [
+  { type: "ItemGained", item_key: "00000000000000a1", count: 1, tab: "Etc", item_id: 4000028, name: "Tablecloth", sell: 34 },
+  { type: "ItemGained", item_key: "00000000000000a2", count: 1, tab: "Etc", item_id: 4000018, name: "Jr. Necki Skin", sell: 21 },
+  { type: "ItemGained", item_key: "00000000000000a3", count: 1, tab: "Use", item_id: null, name: "Blue Potion", sell: 22 },
+  { type: "ItemGained", item_key: "00000000000000a4", count: 1, tab: "Etc", item_id: null, name: null, sell: null },
+];
+
 export function mockHost(scenario: string): Host {
   const problem = scenario === "moved" ? "Move MesoVibe to your Applications folder and open it from there first." : null;
   const refused = scenario === "loginfail" ? "MesoVibe couldn't add itself to your login items: Access is denied." : null;
@@ -183,10 +191,14 @@ export function mockHost(scenario: string): Host {
           lastMap = map;
           for (const handler of eventHandlers) handler({ type: "MapChanged", map_key: map }, s.atMs);
         }
-        // Mesos about every other kill.
+        // Mesos about every other kill, and an item about every third.
         if (Math.random() < 0.5) {
           const mesos: GameEvent = { type: "MesosGained", amount: 40 + Math.round(Math.random() * 80), late: false, shaped: false };
           for (const handler of eventHandlers) handler(mesos, s.atMs);
+        }
+        if (Math.random() < 0.34) {
+          const item = MOCK_ITEMS[Math.floor(Math.random() * MOCK_ITEMS.length)] as GameEvent;
+          for (const handler of eventHandlers) handler(item, s.atMs);
         }
       }
     }
@@ -194,7 +206,7 @@ export function mockHost(scenario: string): Host {
   let lastMap: string | null = null;
 
   return {
-    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 3 }),
+    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 4 }),
     settings: async () => settings,
     startup: async () => startup,
     setStartup: async (on) => {
@@ -332,7 +344,7 @@ function namePicture(name: string): GamePicture {
  */
 export function mockHudHost(scenario: string): HudHost {
   const summary: HudSummary | null =
-    scenario === "grind" || scenario === "fullscreen-grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51 } : null;
+    scenario === "grind" || scenario === "fullscreen-grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51, lootPerHour: 21_480 } : null;
   const started = Date.now();
   const status = (): Status => {
     const base = {

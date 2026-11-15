@@ -51,7 +51,11 @@ export interface GameTextCell {
 /** What a table cell or key-value value holds: text, nothing yet ("?"), or a name picture. */
 export type Cell = string | null | GameTextCell;
 
-/** One number with its label, like "EXP/hr 1.84M". `value` null shows "?" (never 0). */
+/**
+ * One number with its label, like "EXP/hr 1.84M". `value` null shows "?" (never 0). On its own it's
+ * a section's headline figure, drawn large with its label after it; in a `statRow`, a smaller one
+ * under its label.
+ */
 export interface StatNode {
   kind: "stat";
   label: string;
@@ -132,11 +136,18 @@ export interface SessionSummary {
   expToGo: number | null;
   /** Time played while capturing, in milliseconds. */
   activeMs: number;
+  /**
+   * Mesos and the NPC value of items picked up, per hour over the time the pickup notices were
+   * read; null until loot is counted, and while the notices are still being learned or are blocked.
+   *
+   * @experimental May change before the Loot Tracker's item list is released.
+   */
+  lootPerHour: number | null;
   /** The session has EXP, or loot without EXP, worth keeping: End is offered. */
   canEnd: boolean;
   /** The session has something to throw away: Reset is offered. */
   canReset: boolean;
-  /** The session counted loot but no EXP yet: the strip says "Mesos only so far". */
+  /** The session counted loot but no EXP yet: the strip says "Pickups only so far". */
   lootOnly: boolean;
   /** The player paused the session: no time, EXP or loot counts until Resume. */
   paused: boolean;
@@ -155,6 +166,14 @@ export interface Readers {
   waitingMesos: number;
 }
 
+/**
+ * A page a plugin draws besides its main view, in a rail tab of its own. First-party Session
+ * Tracker only, for now: `loot` is the Loot tab.
+ *
+ * @experimental May change before the Loot Tracker's first release.
+ */
+export type PluginPage = "loot";
+
 // MARK: the protocol between host and plugin
 
 /** Host to plugin. */
@@ -169,7 +188,7 @@ export type ToPlugin =
 /** Plugin to host. */
 export type ToHost =
   | { type: "ready"; manifest: PluginManifest }
-  | { type: "render"; view: ViewNode[] }
+  | { type: "render"; view: ViewNode[]; page?: PluginPage }
   | { type: "summary"; summary: SessionSummary | null }
   | { type: "save"; data: unknown }
   | { type: "notice"; text: string; undo?: string };
@@ -178,8 +197,8 @@ export type ToHost =
 export interface PluginContext {
   /** What this plugin saved last time, or null. */
   readonly saved: unknown;
-  /** Replaces the plugin's view. */
-  render(view: ViewNode[]): void;
+  /** Replaces the plugin's view, or with `page`, that page's ({@link PluginPage}). */
+  render(view: ViewNode[], page?: PluginPage): void;
   /** Keeps data on this computer, replacing what was kept before. */
   save(data: unknown): void;
   /** Feeds the session strip. First-party Session Tracker only, for now. */
@@ -222,7 +241,7 @@ export function definePlugin(plugin: Plugin): void {
     if (data.type === "start") {
       const context: PluginContext = {
         saved: data.saved ?? null,
-        render: (view) => send({ type: "render", view }),
+        render: (view, page) => send(page === undefined ? { type: "render", view } : { type: "render", view, page }),
         save: (saved) => send({ type: "save", data: saved }),
         setSummary: (summary) => send({ type: "summary", summary }),
         notice: (text, undo) => send(undo === undefined ? { type: "notice", text } : { type: "notice", text, undo }),

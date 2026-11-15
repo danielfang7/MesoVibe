@@ -89,6 +89,18 @@ function paint(hud: Hud): void {
           ),
     ),
   );
+  const loot = summary?.lootPerHour ?? null;
+  if (loot !== null && (issue === null || issue.tone === "live")) {
+    // Mesos and items' NPC value per hour, the number atop the Session view's Items.
+    rows.push(
+      h(
+        "p",
+        { class: "hud-line hud-loot", attrs: { title: `${formatDigits(loot)} mesos and NPC item value per hour` } },
+        h("span", { class: "number" }, formatCompact(loot)),
+        " loot/hr",
+      ),
+    );
+  }
   if (rate !== null && issue !== null && issue.tone !== "live") {
     rows.push(h("p", { class: "hud-line hud-issue" }, issue.text));
   } else if (summary?.level != null) {
@@ -101,7 +113,7 @@ function paint(hud: Hud): void {
       ),
     );
   }
-  // A hint takes the progress row: the card has room for three rows.
+  // A hint takes the progress row: the card has room for four rows, loot/hr's included.
   if (issue?.hint !== undefined) {
     rows.push(h("p", { class: "hud-line" }, issue.hint));
   } else if (summary?.pctHundredths != null) {

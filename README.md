@@ -2,7 +2,7 @@
 
 # MesoVibe [![CI](https://github.com/danielfang7/MesoVibe/actions/workflows/ci.yml/badge.svg)](https://github.com/danielfang7/MesoVibe/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/danielfang7/MesoVibe)](https://github.com/danielfang7/MesoVibe/releases/latest)
 
-MesoVibe is a free, open-source companion for MapleStory Classic World. It reads the game window the way a stream viewer sees it and shows your EXP per hour, time to level, the mesos you pick up, your sessions map by map and your chat, in a panel beside the game or a small overlay on it.
+MesoVibe is a free, open-source companion for MapleStory Classic World. It reads the game window the way a stream viewer sees it and shows your EXP per hour, time to level, the mesos and items you pick up and what shops pay for them, your sessions map by map and your chat, in a panel beside the game or a small overlay on it.
 
 ## Download
 

@@ -2,7 +2,7 @@
 // "What MesoVibe sees" and Settings views.
 // Every word on screen is a text node, never parsed HTML.
 import { formatCompact, formatDigits, formatMinutes, formatPercent } from "@mesovibe/sdk";
-import type { CaptureState, SessionSummary } from "@mesovibe/sdk";
+import type { CaptureState, SessionSummary, ViewNode } from "@mesovibe/sdk";
 
 import { CHANNEL_NAME, clockTime, messageText, messages } from "./chatlines.js";
 import { darkWatch, fullScreenWatch } from "./dark.js";
@@ -11,7 +11,7 @@ import { connect } from "./ipc.js";
 import type { AppInfo, ChatChannel, ChatChannels, ChatColors, ChatLine, ChatPosition, Corner, Display, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
 import { PluginHost, confirmDialog, fill, namePicture, renderView } from "./plugins.js";
 
-type ViewName = "session" | "chat" | "sees" | "settings";
+type ViewName = "session" | "loot" | "chat" | "sees" | "settings";
 
 const CHANNELS: ChatChannel[] = ["whisper", "party", "friend"];
 const TAB_NAME: Record<ChatChannel, string> = { whisper: "Whispers", party: "Party", friend: "Friends" };
@@ -311,7 +311,7 @@ function shell(initial: Settings): void {
   );
   const view = h("main", { class: "view", attrs: { tabindex: "-1" } });
   const railButtons = new Map<ViewName, HTMLButtonElement>();
-  const railItem = (name: ViewName, label: string, glyph: "session" | "chat" | "sees" | "settings", ...extra: Node[]) => {
+  const railItem = (name: ViewName, label: string, glyph: "session" | "loot" | "chat" | "sees" | "settings", ...extra: Node[]) => {
     const item = h(
       "button",
       {
@@ -330,6 +330,7 @@ function shell(initial: Settings): void {
     "nav",
     { class: "rail", attrs: { "aria-label": "Views" } },
     railItem("session", "Session", "session"),
+    railItem("loot", "Loot", "loot"),
     railItem("chat", "Chat", "chat", chatBadge),
     h("span", { class: "rail-spacer" }),
     railItem("settings", "Settings", "settings"),
@@ -342,8 +343,9 @@ function shell(initial: Settings): void {
     "Session Tracker",
     host,
     {
-      render: () => {
-        if (panel.view === "session") paintView();
+      render: (page) => {
+        const shown = page === null ? panel.view === "session" || panel.view === "loot" : panel.view === (page ?? "session");
+        if (shown) paintView();
       },
       summary: (summary) => {
         panel.summary = summary;
@@ -578,7 +580,7 @@ function shell(initial: Settings): void {
       heroEmpty.textContent = paused
         ? "Session paused"
         : summary?.lootOnly
-          ? "Mesos only so far"
+          ? "Pickups only so far"
           : capturing && gained
             ? "Your rate appears after a few seconds of play."
             : "";
@@ -603,8 +605,8 @@ function shell(initial: Settings): void {
       paintedPaused = paused;
       pauseButton.replaceChildren(icon(paused ? "resume" : "pause"), paused ? "Resume" : "Pause");
       pauseButton.title = paused
-        ? "Resume the session: time, EXP and mesos count again"
-        : "Pause the session: time, EXP and mesos don't count until you resume";
+        ? "Resume the session: time, EXP and pickups count again"
+        : "Pause the session: time, EXP and pickups don't count until you resume";
     }
     sessionActions.hidden =
       panel.settings.safeMode ||
@@ -676,33 +678,38 @@ function shell(initial: Settings): void {
     paintUpdate();
   }
 
+  /** One of the Session Tracker's views, or, when it has crashed, why and a way to restart it. */
+  function trackerView(nodes: ViewNode[]): Node[] {
+    if (panel.crashed === null) return renderView(nodes, viewAction, tracker.pictures);
+    return [
+      h(
+        "section",
+        { class: "block" },
+        h("p", { class: "state error", attrs: { role: "alert" } }, panel.crashed),
+        button(
+          "Restart",
+          () => {
+            panel.crashed = null;
+            // The old numbers belong to the stopped tracker; the restarted one sends its own,
+            // and until then there is nothing for End or Reset to act on.
+            panel.summary = null;
+            startTracker();
+            paintStrip();
+          },
+          "primary",
+          "restart",
+        ),
+      ),
+    ];
+  }
+
   function paintView(): void {
     switch (panel.view) {
       case "session":
-        replace(
-          view,
-          panel.crashed !== null
-            ? h(
-                "section",
-                { class: "block" },
-                h("p", { class: "state error", attrs: { role: "alert" } }, panel.crashed),
-                button(
-                  "Restart",
-                  () => {
-                    panel.crashed = null;
-                    // The old numbers belong to the stopped tracker; the restarted one sends its own,
-                    // and until then there is nothing for End or Reset to act on.
-                    panel.summary = null;
-                    startTracker();
-                    paintStrip();
-                  },
-                  "primary",
-                  "restart",
-                ),
-              )
-            : null,
-          ...(panel.crashed === null ? renderView(tracker.view, viewAction, tracker.pictures) : []),
-        );
+        replace(view, ...trackerView(tracker.view));
+        break;
+      case "loot":
+        replace(view, ...trackerView(tracker.pages.loot ?? []));
         break;
       case "chat":
         replace(view, ...chatView());
@@ -1142,8 +1149,8 @@ function shell(initial: Settings): void {
                 confirmDialog(
                   {
                     title: "Delete all session history?",
-                    deletes: ["Every past session on this computer: EXP gained, time played, rates and mesos, and the All time totals."],
-                    keeps: ["The session running now, your settings, item and map name pictures, and everything outside the Session Tracker."],
+                    deletes: ["Every past session on this computer: EXP gained, time played, rates, mesos and items, and the All time totals."],
+                    keeps: ["The session running now, your settings, item names and NPC prices, map name pictures, and everything outside the Session Tracker."],
                     confirmLabel: "Delete session history",
                   },
                   () => tracker.action("delete-history"),
@@ -1171,6 +1178,11 @@ function shell(initial: Settings): void {
           "p",
           { class: "text muted" },
           "Fonts: Atkinson Hyperlegible Next and Mono, and Pixelify Sans, under the SIL Open Font License 1.1.",
+        ),
+        h(
+          "p",
+          { class: "text muted" },
+          "Item and map data: OSMS Data Explorer (osmsdataexplorer.com) under CC BY 4.0 (creativecommons.org/licenses/by/4.0), trimmed to names, tabs and NPC prices.",
         ),
         h("p", { class: "text muted" }, "Not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon."),
       ),
