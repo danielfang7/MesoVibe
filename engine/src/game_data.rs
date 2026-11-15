@@ -96,6 +96,12 @@ impl ItemMatch {
 /// may be a letter longer or shorter than read. Once some item fits, every item those misreads
 /// fit joins the match too: a single item is named only when no misread could be another one.
 ///
+/// When no item fits as read, a piece the reader doesn't know may be two or three letters the
+/// font draws touching ("rty" in Dirty Bandage): see [`touching`]. Most such pieces are a letter
+/// the reader hasn't learned yet, so this is tried only then; tried always, Red Potion's unknown
+/// "R" as three letters would make it fit Speed Potion. What it finds goes through the misreads
+/// above like any other match.
+///
 /// `None` when no item fits.
 pub fn name_item(letters: &[NameLetter], tab: Option<Tab>) -> Option<ItemMatch> {
     let cut = letters.len() > 3
@@ -115,18 +121,22 @@ pub fn name_item(letters: &[NameLetter], tab: Option<Tab>) -> Option<ItemMatch> 
             .iter()
             .filter(move |item| tab.is_none_or(|tab| item.tab == tab))
     };
-    let mut found: Vec<&'static Item> =
-        in_tab().filter(|item| fits(read, cut, item.name)).collect();
-    if found.is_empty() {
-        return None;
-    }
-    for misread in misreads(read) {
+    let add = |found: &mut Vec<&'static Item>, misread: Vec<NameLetter>| {
         for item in in_tab().filter(|item| fits(&misread, cut, item.name)) {
             if !found.iter().any(|f| f.id == item.id) {
                 found.push(item);
             }
         }
+    };
+    let mut found: Vec<&'static Item> =
+        in_tab().filter(|item| fits(read, cut, item.name)).collect();
+    if found.is_empty() {
+        touching(read).for_each(|misread| add(&mut found, misread));
     }
+    if found.is_empty() {
+        return None;
+    }
+    misreads(read).for_each(|misread| add(&mut found, misread));
     found.sort_by_key(|item| item.id);
     Some(ItemMatch {
         name: shared_name(&found),
@@ -135,30 +145,44 @@ pub fn name_item(letters: &[NameLetter], tab: Option<Tab>) -> Option<ItemMatch> 
 }
 
 /// A letter of a misread that stands for any letter: see [`misreads`].
-const ANY_SHAPE: u16 = u16::MAX;
+const ANY: NameLetter = NameLetter {
+    known: None,
+    shape: u16::MAX,
+};
 
 /// The other ways the reader could have cut the same name: one unknown piece that was two
 /// touching letters, or two unknown pieces in a row that were one letter split in two. A known
 /// letter's piece was cut right, as its shape matched.
 fn misreads(read: &[NameLetter]) -> impl Iterator<Item = Vec<NameLetter>> + '_ {
-    let any = NameLetter {
-        known: None,
-        shape: ANY_SHAPE,
-    };
     let unknown = |i: usize| read[i].known.is_none();
-    let touching = (0..read.len()).filter(move |&i| unknown(i)).map(move |i| {
-        let mut misread = read.to_vec();
-        misread.splice(i..=i, [any, any]);
-        misread
-    });
+    let touching = (0..read.len())
+        .filter(move |&i| unknown(i))
+        .map(move |i| as_letters(read, i..=i, 2));
     let split = (1..read.len())
         .filter(move |&i| unknown(i - 1) && unknown(i))
-        .map(move |i| {
-            let mut misread = read.to_vec();
-            misread.splice(i - 1..=i, [any]);
-            misread
-        });
+        .map(move |i| as_letters(read, i - 1..=i, 1));
     touching.chain(split)
+}
+
+/// The ways one unknown piece could be two or three letters drawn touching, for a name no item
+/// fits as read. A piece whose shape shows up again in the name is one letter: letters drawn
+/// touching make a shape of their own, and the same shape alone elsewhere is a letter.
+fn touching(read: &[NameLetter]) -> impl Iterator<Item = Vec<NameLetter>> + '_ {
+    let alone = |i: usize| read.iter().filter(|l| l.shape == read[i].shape).count() == 1;
+    (0..read.len())
+        .filter(move |&i| read[i].known.is_none() && alone(i))
+        .flat_map(move |i| [2, 3].map(|letters| as_letters(read, i..=i, letters)))
+}
+
+/// `read` with its pieces in `pieces` read as `letters` letters, any letters at all.
+fn as_letters(
+    read: &[NameLetter],
+    pieces: std::ops::RangeInclusive<usize>,
+    letters: usize,
+) -> Vec<NameLetter> {
+    let mut misread = read.to_vec();
+    misread.splice(pieces, vec![ANY; letters]);
+    misread
 }
 
 /// Whether `name` fits the letters read, by [`name_item`]'s rules.
@@ -167,7 +191,7 @@ fn fits(read: &[NameLetter], cut: bool, name: &str) -> bool {
     // The letter each of the read name's shapes stands for, once a place has shown it.
     let shape_count = read
         .iter()
-        .filter(|l| l.shape != ANY_SHAPE)
+        .filter(|l| l.shape != ANY.shape)
         .map(|l| usize::from(l.shape) + 1)
         .max()
         .unwrap_or(0);
@@ -179,7 +203,7 @@ fn fits(read: &[NameLetter], cut: bool, name: &str) -> bool {
         if letter.known.is_some_and(|known| known != c) {
             return false;
         }
-        if letter.shape == ANY_SHAPE {
+        if letter.shape == ANY.shape {
             continue;
         }
         if *shapes[usize::from(letter.shape)].get_or_insert(c) != c {
@@ -519,6 +543,41 @@ mod tests {
             "{names:?}"
         );
         assert_eq!(willow.id(), None);
+    }
+
+    // The game's font draws some letters touching: "rty" in Dirty Bandage comes as one piece, so
+    // the name reads two letters short and fits no item as read. Fails if letters drawn together
+    // leave an item unnamed, as they left every Dirty Bandage among the unread pickups.
+    #[test]
+    fn letters_drawn_together_still_name_the_item() {
+        let together = |name: &str, letters: std::ops::RangeInclusive<usize>| {
+            let mut read = read(name, PHRASES);
+            read.splice(
+                letters,
+                [NameLetter {
+                    known: None,
+                    shape: 30,
+                }],
+            );
+            read
+        };
+        // D, i, then r, t and y as one piece the reader doesn't know.
+        let bandage = name_item(&together("Dirty Bandage", 2..=4), Some(Tab::Etc)).unwrap();
+        assert_eq!(
+            (bandage.id(), bandage.name.as_deref(), bandage.sell()),
+            (Some(4000155), Some("Dirty Bandage"), Some(47))
+        );
+        // Two letters together, with no item fitting the name as read: "ai" in Snail Shell.
+        let shell = name_item(&together("Snail Shell", 2..=3), Some(Tab::Etc)).unwrap();
+        assert_eq!(shell.id(), Some(4000001));
+        // Only when nothing fits: Red Potion's "R", which the phrases don't teach, read as three
+        // letters would make it fit Speed Potion too.
+        let potion = found("Red Potion", Tab::Use).unwrap();
+        assert!(
+            potion.items.iter().all(|item| item.name == "Red Potion"),
+            "{:?}",
+            potion.items
+        );
     }
 
     // Items whose names start differently still make a match, so a plugin can tell them from an
