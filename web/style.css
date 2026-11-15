@@ -471,8 +471,8 @@ h1 {
   background: var(--app-accent);
 }
 
-/* Past sessions as the panel lists them: each map with its own rates, and when it was played
-   underneath. */
+/* Tables as the panel draws them: a name on the left with a muted line under it (an item's tab),
+   numbers on the right. */
 .past {
   width: 100%;
   margin-top: 12px;
@@ -502,13 +502,10 @@ h1 {
   text-align: left;
   white-space: normal;
 }
-.past .more,
-.past .when {
-  color: var(--app-muted);
-}
-.past .when {
+.past .item-tab {
   display: block;
   margin-top: 2px;
+  color: var(--app-muted);
 }
 
 /* FAQ: one reading column; each question opens in place (native <details>, no script). */
