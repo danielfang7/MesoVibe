@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MesoVibe: read-only companion for MapleStory Classic World</title>
-  <meta name="description" content="Free, open-source companion for MapleStory Classic World. Whispers, party and friend chat in their own tabs, EXP tracking, and more. It reads your screen and never touches the game.">
+  <meta name="description" content="Free, open-source companion for MapleStory Classic World. Whispers, party and friend chat in their own tabs, EXP and loot tracking, and more. It reads your screen and never touches the game.">
   <link rel="canonical" href="https://mesovibe.com/">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://mesovibe.com/">
@@ -121,26 +121,28 @@
       </section>
 
       <section class="feature" aria-labelledby="loot-title">
-        <div class="panel mock-loot" role="img" aria-label="An example of past sessions, map by map. Ant Tunnel I, played Nov 10 for 1 hour 12 minutes: 1.49M EXP gained, 1.24M EXP per hour. Ant Tunnel II and one more map, Nov 9 for 48 minutes: 1.05M EXP gained, 1.31M EXP per hour. Sleepy Dungeon IV, Nov 8 for 35 minutes: 572K EXP gained, 980K EXP per hour.">
-          <p class="panel-label">Past sessions</p>
+        <div class="panel mock-loot" role="img" aria-label="An example of the Items section: 46.9K loot per hour. Horny Mushroom Cap ×142, worth 3.12K mesos at an NPC shop. Orange Potion, a Use item, ×18, worth 270. Mithril Ore ×6, worth 240. Mithril Viking Helm, an Equip item, ×1, worth 1.3K.">
+          <p class="panel-label">Items</p>
+          <p class="rate"><span class="rate-number">46.9K</span> <span class="rate-unit">Loot/hr</span></p>
           <table class="past">
             <thead>
-              <tr><th>Map</th><th>EXP gained</th><th>EXP/hr</th></tr>
+              <tr><th>Item</th><th>Count</th><th>Value</th></tr>
             </thead>
             <tbody>
-              <tr><td>Ant Tunnel I<span class="when">Nov 10 · 1h 12m</span></td><td>1.49M</td><td>1.24M</td></tr>
-              <tr><td>Ant Tunnel II <span class="more">+1 map</span><span class="when">Nov 9 · 48m</span></td><td>1.05M</td><td>1.31M</td></tr>
-              <tr><td>Sleepy Dungeon IV<span class="when">Nov 8 · 35m</span></td><td>572K</td><td>980K</td></tr>
+              <tr><td>Horny Mushroom Cap</td><td>×142</td><td>3.12K</td></tr>
+              <tr><td>Orange Potion<span class="item-tab">Use</span></td><td>×18</td><td>270</td></tr>
+              <tr><td>Mithril Ore</td><td>×6</td><td>240</td></tr>
+              <tr><td>Mithril Viking Helm<span class="item-tab">Equip</span></td><td>×1</td><td>1.3K</td></tr>
             </tbody>
           </table>
         </div>
         <div class="feature-text">
-          <h2 id="loot-title">Track your mesos</h2>
-          <p>MesoVibe reads the pickup notices at the bottom right of the game and adds up the mesos you pick up. Each session remembers the map you played, so you can see which map pays best in EXP per hour.</p>
+          <h2 id="loot-title">Track your loot</h2>
+          <p>MesoVibe reads the pickup notices at the bottom right of the game. It adds up the mesos and items you pick up, and what an NPC shop would pay for each item. Loot per hour puts them together, so you can see which map pays best.</p>
           <ul class="points">
-            <li>Mesos per hour for each map is coming soon.</li>
-            <li>In a party, the game's party list covers the notices, so mesos aren't counted there yet.</li>
-            <li>Items you pick up are coming next.</li>
+            <li>The Loot tab keeps every session's loot per hour with the map you played, and your totals across all of them.</li>
+            <li>Item values are NPC shop prices. Equips and scrolls often sell for more on the Free Market.</li>
+            <li>In a party, the game's party list covers the notices, so pickups aren't counted there yet.</li>
           </ul>
         </div>
       </section>
@@ -159,9 +161,10 @@
             <p>The few things it keeps stay on your computer:</p>
             <ul class="points">
               <li>Your settings.</li>
-              <li>Your past sessions: EXP gained, mesos picked up, time played and the maps you played. You can delete them anytime in Settings.</li>
-              <li>The numbers it has learned to read on the EXP bar and in the pickup notices, so it can start reading right away next time.</li>
+              <li>Your past sessions: EXP gained, mesos and items picked up, time played and the maps you played. You can delete them anytime in Settings.</li>
+              <li>The numbers and letters it has learned to read on the EXP bar and in the pickup notices, so it can start reading right away next time.</li>
               <li>Small pictures of the map names it has read, cut from the minimap, so the panel can show which map a session was on. They stay when you delete your session history.</li>
+              <li>The name, tab and NPC price of each item you've picked up, so past sessions can list them. These stay when you delete your session history too.</li>
             </ul>
             <p>Chat is never saved. MesoVibe holds it only while it's open, and it's gone when you quit. The only time MesoVibe goes online is to check for updates and download them.</p>
           </div>
@@ -251,15 +254,15 @@
         <details>
           <summary><span>Will using MesoVibe get me banned?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
           <div class="answer">
-            <p>We can't promise anything.</p>
-            <p>But what we can promise is how it works. Tools that get players banned generally change the game, look inside it, or play it for you. MesoVibe does none of that:</p>
+            <p>We don't believe Nexon would ban anyone for using a read-only tool like MesoVibe, but we can't promise anything.</p>
+            <p>What we can promise is how it works. Tools that get players banned generally change the game, look inside it, or play it for you. MesoVibe does none of that:</p>
             <ul class="points">
               <li>It only looks at the game window, the way someone watching your stream would. It never changes the game or looks inside it.</li>
               <li>It never presses a key or clicks for you: no auto-potting, no macros, no botting. MesoVibe has no way to control the game at all.</li>
               <li>It never touches the connection between your game and Nexon's servers.</li>
               <li>It won't help with the Lie Detector, the game's anti-bot check.</li>
             </ul>
-            <p>If Nexon ever asks us to remove a feature, we'll remove it. If you'd rather take no chances, turn on Safe mode in Settings. MesoVibe then stops looking at the game entirely, so EXP and mesos tracking and chat tabs pause too.</p>
+            <p>If Nexon ever asks us to remove a feature, we'll remove it. If you'd rather take no chances, turn on Safe mode in Settings. MesoVibe then stops looking at the game entirely, so EXP and loot tracking and chat tabs pause too.</p>
           </div>
         </details>
       </div>
