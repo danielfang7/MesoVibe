@@ -407,12 +407,15 @@ fn notice_events(reading: &Result<NoticeReading, NoticeUnreadable>) -> Vec<Event
         }),
         Notice::Item { name, count, tab } => {
             let found = game_data::name_item(&name.letters, *tab);
+            let range = found.as_ref().and_then(|f| f.sell_range());
             Some(Event::ItemGained {
                 item_key: name.key.clone(),
                 count: *count,
                 tab: *tab,
                 item_id: found.as_ref().and_then(|f| f.id()),
                 sell: found.as_ref().and_then(|f| f.sell()),
+                sell_min: range.map(|(min, _)| min),
+                sell_max: range.map(|(_, max)| max),
                 name: found.and_then(|f| f.name),
             })
         }
@@ -847,6 +850,8 @@ mod tests {
                     item_id: None,
                     name: Some(name),
                     sell: Some(5),
+                    sell_min: Some(5),
+                    sell_max: Some(5),
                 }] if item_key.len() == 16 && name == "Red Potion"
             ),
             "{events:?}"
@@ -989,6 +994,8 @@ mod tests {
                 item_id: None,
                 name: None,
                 sell: None,
+                sell_min: None,
+                sell_max: None,
             }]
         );
     }

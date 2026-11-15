@@ -61,6 +61,22 @@ export interface ItemInfo {
   t: string | null;
   /** Mesos an NPC shop pays for one, when known. */
   v: number | null;
+  /**
+   * For a name several items fit that sell for different prices, the lowest and highest price of
+   * one: it's worth at least the first. Absent for anything else.
+   */
+  r?: [number, number];
+}
+
+/** What one of an item is worth at least: its price, or the lowest of the prices it may have. */
+export function leastPrice(info: ItemInfo | undefined): number | null {
+  return info?.v ?? info?.r?.[0] ?? null;
+}
+
+/** An item event's lowest and highest price, when they differ. */
+function priceRange(event: Extract<Event, { type: "ItemGained" }>): [number, number] | undefined {
+  const { sell_min: min, sell_max: max } = event;
+  return min != null && max != null && min < max ? [min, max] : undefined;
 }
 
 /** Item keys and what's known about them. */
@@ -178,7 +194,11 @@ export function addItem(
   // Otherwise a price once known stays when a later pickup of the same key brings none (one whose
   // tab wasn't read can fit items in several tabs that sell for different prices).
   const price = key.startsWith("?") ? null : (event.sell ?? catalog[key]?.v ?? null);
-  catalog[key] = { n: event.name, t: event.tab, v: price };
+  // A name several items fit at different prices has no one price, but its range is kept the
+  // same way, and it counts at the lowest.
+  const range = key.startsWith("?") || price !== null ? undefined : (priceRange(event) ?? catalog[key]?.r);
+  catalog[key] = range === undefined ? { n: event.name, t: event.tab, v: price } : { n: event.name, t: event.tab, v: price, r: range };
+  const least = price ?? range?.[0] ?? null;
   if (!started) {
     if (loot.held === undefined || loot.held.map !== map) {
       loot.held = { map, atMs, mesos: 0, shaped: 0, missed: false };
@@ -189,7 +209,7 @@ export function addItem(
   if (map === undefined) return;
   const entry = entryFor(loot, map, level);
   addCount((entry.i ??= []), key, event.count);
-  if (reading && price !== null) entry.rv = (entry.rv ?? 0) + price * event.count;
+  if (reading && least !== null) entry.rv = (entry.rv ?? 0) + least * event.count;
 }
 
 /**
@@ -281,9 +301,12 @@ export function sessionItems(loot: LootFields): ItemEntry[] {
   return sumItems([...(loot.maps ?? []).map((entry) => entry.i ?? []), loot.held?.items ?? []]);
 }
 
-/** What NPC shops pay for `items`, counting the items whose price is known. */
+/**
+ * What NPC shops pay for `items`, counting the items whose price is known, and the ones that may be
+ * several items at the lowest of their prices.
+ */
 export function itemsValue(items: ItemEntry[], catalog: Catalog): number {
-  return items.reduce((sum, item) => sum + item.c * (catalog[item.k]?.v ?? 0), 0);
+  return items.reduce((sum, item) => sum + item.c * (leastPrice(catalog[item.k]) ?? 0), 0);
 }
 
 /**
@@ -386,11 +409,13 @@ export function validCatalog(value: unknown): Catalog {
   const catalog: Catalog = Object.create(null) as Catalog;
   if (typeof value !== "object" || value === null || Array.isArray(value)) return catalog;
   const text = (x: unknown): x is string | null => x === null || typeof x === "string";
+  const mesos = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x >= 0;
+  const range = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2 && mesos(x[0]) && mesos(x[1]) && x[0] <= x[1];
   for (const [key, raw] of Object.entries(value)) {
     if (typeof raw !== "object" || raw === null) continue;
-    const { n, t, v } = raw as Record<string, unknown>;
-    const price = v === null || (typeof v === "number" && Number.isFinite(v) && v >= 0);
-    if (ITEM_KEY.test(key) && text(n) && text(t) && price) catalog[key] = { n, t, v: v as number | null };
+    const { n, t, v, r } = raw as Record<string, unknown>;
+    if (!ITEM_KEY.test(key) || !text(n) || !text(t) || !(v === null || mesos(v))) continue;
+    catalog[key] = range(r) ? { n, t, v, r: [r[0], r[1]] } : { n, t, v };
   }
   return catalog;
 }

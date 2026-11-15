@@ -12,7 +12,8 @@ use crate::recognizers::notices::{Missed, Tab};
 /// 3: `MesosGained`, `ItemGained`, `PartyBonus` and `NoticesMissed`, from the pickup notices, and
 /// `MapChanged`.
 /// 4: `ItemGained` gained `item_id`, `name` and `sell`, from the game data.
-pub const SCHEMA_VERSION: u32 = 4;
+/// 5: `ItemGained` gained `sell_min` and `sell_max`, for a name several items fit.
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Events the engine emits after a confident read (below the confidence
 /// threshold a recognizer reports "unreadable" and no value event is sent).
@@ -58,6 +59,11 @@ pub enum Event {
     /// for one when every item that fits sells for the same. All three are `null` when no item
     /// fits; `name` alone is `null` when the items that fit start differently. A speck over a
     /// letter can give one item a second `item_key`; its `item_id` stays the same.
+    ///
+    /// `sell_min` and `sell_max` are the lowest and highest price an NPC shop pays for one of the
+    /// items that fit, when every one of them sells, so a pickup whose name fits several items
+    /// that sell for different prices is worth at least `sell_min`. Both equal `sell` when the
+    /// prices agree, and both are `null` when an item that fits doesn't sell or none fits.
     ItemGained {
         item_key: String,
         count: u32,
@@ -66,6 +72,8 @@ pub enum Event {
         item_id: Option<u32>,
         name: Option<String>,
         sell: Option<u32>,
+        sell_min: Option<u32>,
+        sell_max: Option<u32>,
     },
     /// The game's "Bonus EXP for PARTY (+N)": the player is in a party. Its EXP is already in the
     /// EXP bar's reading.

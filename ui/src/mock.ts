@@ -74,10 +74,12 @@ function chatter(handler: (lines: ChatLine[]) => void): void {
 
 /** Pickups the loot scenario draws from: matched items, one name several items share, and one no item fits. */
 const MOCK_ITEMS: GameEvent[] = [
-  { type: "ItemGained", item_key: "00000000000000a1", count: 1, tab: "Etc", item_id: 4000028, name: "Tablecloth", sell: 34 },
-  { type: "ItemGained", item_key: "00000000000000a2", count: 1, tab: "Etc", item_id: 4000018, name: "Jr. Necki Skin", sell: 21 },
-  { type: "ItemGained", item_key: "00000000000000a3", count: 1, tab: "Use", item_id: null, name: "Blue Potion", sell: 22 },
-  { type: "ItemGained", item_key: "00000000000000a4", count: 1, tab: "Etc", item_id: null, name: null, sell: null },
+  { type: "ItemGained", item_key: "00000000000000a1", count: 1, tab: "Etc", item_id: 4000028, name: "Tablecloth", sell: 34, sell_min: 34, sell_max: 34 },
+  { type: "ItemGained", item_key: "00000000000000a2", count: 1, tab: "Etc", item_id: 4000018, name: "Jr. Necki Skin", sell: 21, sell_min: 21, sell_max: 21 },
+  { type: "ItemGained", item_key: "00000000000000a3", count: 1, tab: "Use", item_id: null, name: "Blue Potion", sell: 22, sell_min: 22, sell_max: 22 },
+  { type: "ItemGained", item_key: "00000000000000a4", count: 1, tab: "Etc", item_id: null, name: null, sell: null, sell_min: null, sell_max: null },
+  // The game cuts long names short: this one is Blue Jangoon Armor or Shoes.
+  { type: "ItemGained", item_key: "00000000000000a5", count: 1, tab: "Equip", item_id: null, name: "Blue Jangoon…", sell: null, sell_min: 4200, sell_max: 7000 },
 ];
 
 export function mockHost(scenario: string): Host {
@@ -206,7 +208,7 @@ export function mockHost(scenario: string): Host {
   let lastMap: string | null = null;
 
   return {
-    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 4 }),
+    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 5 }),
     settings: async () => settings,
     startup: async () => startup,
     setStartup: async (on) => {
