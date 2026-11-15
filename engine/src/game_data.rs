@@ -80,6 +80,17 @@ impl ItemMatch {
             .then_some(first)
             .flatten()
     }
+
+    /// The lowest and highest price an NPC shop pays for one of the items that fit, when every
+    /// one of them sells: the pickup is worth at least the first. The same twice when they agree.
+    pub fn sell_range(&self) -> Option<(u32, u32)> {
+        let prices: Vec<u32> = self
+            .items
+            .iter()
+            .map(|item| item.sell)
+            .collect::<Option<_>>()?;
+        Some((*prices.iter().min()?, *prices.iter().max()?))
+    }
 }
 
 /// Finds the items of `tab` (every tab while it isn't known) whose names fit `letters`: an item's
@@ -463,9 +474,28 @@ mod tests {
         };
         assert_eq!(pair(&a, &b).sell(), None, "prices differ");
         assert_eq!(pair(&a, &c).sell(), None, "one has no price");
+        assert_eq!(pair(&a, &b).sell_range(), Some((1, 2)));
+        assert_eq!(pair(&a, &c).sell_range(), None, "one has no price");
         assert_eq!(shared_name(&[&a, &b]).as_deref(), Some("Snail S…"));
         assert_eq!(shared_name(&[&a, &d]), None);
         assert_eq!(shared_name(&[]), None);
+    }
+
+    // The game cut Blue Jangoon Armor (7,000) and Blue Jangoon Shoes (4,200) to the same "Blue
+    // Jangoon...", so the pickup has no one price but is worth at least the lower one. Fails if
+    // the range is lost or comes out wrong.
+    #[test]
+    fn a_name_several_items_fit_is_worth_at_least_the_lowest_price() {
+        let jangoon = found("Blue Jangoon...", Tab::Equip).unwrap();
+        let names: Vec<&str> = jangoon.items.iter().map(|item| item.name).collect();
+        assert_eq!(names, ["Blue Jangoon Armor", "Blue Jangoon Shoes"]);
+        assert_eq!(
+            (jangoon.sell(), jangoon.sell_range()),
+            (None, Some((4200, 7000)))
+        );
+        // One price for all: that price twice.
+        let scroll = found("Hat Accuracy Sc...", Tab::Use).unwrap();
+        assert_eq!(scroll.sell_range(), Some((1, 1)));
     }
 
     // Two items the game gives one name are one name with no single ID.
