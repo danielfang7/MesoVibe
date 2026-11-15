@@ -409,19 +409,26 @@ test("items count with their NPC value, in Item value and loot/hr", () => {
   assert.equal(allTimeFigures(sent)["Loot/hr"], "22.7K");
 });
 
-// "—" says shops won't buy an item. A name several items fit at different prices (the game cut
-// Blue Jangoon Armor or Shoes short) has no value to show, which the panel draws as "?". Fails if
-// such a pickup reads as worthless.
-test("a name several items fit at different prices shows no value, not —", () => {
+// The game cut Blue Jangoon Armor (7,000) and Blue Jangoon Shoes (4,200) to the same "Blue
+// Jangoon…": the row shows both prices, and Item value and loot/hr count the lower one, so Item
+// value says it's at least that. "—" stays for one item shops won't buy, and a name with no price
+// at all shows "?". Fails if such a pickup reads as worthless or exact, or counts a price it may
+// not have.
+test("a name several items fit shows their price range and counts the lowest", () => {
   const { send, sent, now } = play({ seconds: 120 });
-  send(item("Blue Jangoon…", now, { item_id: null, sell: null, tab: "Equip" }));
-  send(item("White Undershirt", now + 1, { item_id: 1040001, sell: null, tab: "Equip" }));
+  send(item("Blue Jangoon…", now, { item_id: null, sell: null, sell_min: 4200, sell_max: 7000, tab: "Equip", count: 2 }));
+  send(item("White Undershirt", now, { item_id: 1040001, sell: null, sell_min: null, sell_max: null, tab: "Equip" }));
+  send(item("Old Wooden Box…", now, { item_id: null, sell: null, sell_min: null, sell_max: null }));
   assert.deepEqual(itemTable(sent), [
     [
-      ["Blue Jangoon…", "×1", null],
+      ["Blue Jangoon…", "×2", "8.4K–14K"],
       ["White Undershirt", "×1", "—"],
+      ["Old Wooden Box…", "×1", null],
     ],
   ]);
+  assert.equal(items(sent)["Item value"], "8,400+");
+  // 600 mesos and 8,400 of items over two minutes of reading.
+  assert.equal(Math.round(summary(sent).lootPerHour), Math.round(((600 + 8400) * 3_600_000) / 120_000));
 });
 
 // No loot rate while the pickup text is still learned. Fails if a rate shows before pickups count.
@@ -759,8 +766,8 @@ test("items don't count while paused", () => {
   assert.equal(section(sent, "Items"), undefined);
 });
 
-// A bad item entry or catalog value in a save must never stop the tracker. Fails if it throws or
-// the good entries go with it.
+// A bad item entry or catalog value in a save must never stop the tracker, and a price range must
+// run low to high. Fails if it throws, the good entries go with it, or a bad range is shown.
 test("malformed items and catalog entries in a save are dropped", () => {
   const past = {
     startedAtMs: T0 - 600_000,
@@ -770,10 +777,21 @@ test("malformed items and catalog entries in a save are dropped", () => {
     expLost: 0,
     startLevel: 42,
     endLevel: 42,
-    maps: [{ k: "aaaa", p: 60_000, x: 300, m: 50, r: 50, l: 60_000, s: 42, e: 42, i: [{ k: "#1", c: 2 }, { k: 5, c: 1 }, { k: "#2", c: -1 }] }],
+    maps: [{ k: "aaaa", p: 60_000, x: 300, m: 50, r: 50, l: 60_000, s: 42, e: 42, i: [{ k: "#1", c: 2 }, { k: 5, c: 1 }, { k: "#2", c: -1 }, { k: "=Blue Jangoon…", c: 1 }, { k: "=Hat Accuracy Scroll:…", c: 1 }] }],
   };
-  const catalog = { "#1": { n: "Snail Shell", t: "Etc", v: 1 }, "#2": { n: 7 } };
+  const catalog = {
+    "#1": { n: "Snail Shell", t: "Etc", v: 1 },
+    "#2": { n: 7 },
+    "=Blue Jangoon…": { n: "Blue Jangoon…", t: "Equip", v: null, r: [4200, 7000] },
+    "=Hat Accuracy Scroll:…": { n: "Hat Accuracy Scroll:…", t: "Use", v: null, r: [7000, 4200] },
+  };
   const { send, sent } = run();
   send({ type: "start", saved: { version: 1, history: [past], current: null, catalog }, atMs: T0, capture: "capturing", readers: READING });
-  assert.deepEqual(itemTable(sent, "All time", "loot"), [[["Snail Shell", "×2", "2"]]]);
+  assert.deepEqual(itemTable(sent, "All time", "loot"), [
+    [
+      ["Snail Shell", "×2", "2"],
+      ["Blue Jangoon…", "×1", "4.2K–7K"],
+      ["Hat Accuracy Scroll:…", "×1", null],
+    ],
+  ]);
 });

@@ -344,19 +344,33 @@ const DELETE_SESSION = "delete-session:";
 /** The action that shows all of one item list, or fewer again, by its group. */
 const TOGGLE_ITEMS = "toggle-items:";
 
-/** Whether some of `items` had names no item fit, so their value isn't known. */
-function unread(items: ItemEntry[], catalog: Catalog): boolean {
-  return items.some((item) => (catalog[item.k]?.n ?? null) === null);
+/**
+ * Whether `items` are worth at least their counted value, not exactly: some had names no item fit,
+ * or fit several items, counted at the lowest price they may have or, with no price, not at all.
+ */
+function valueAtLeast(items: ItemEntry[], catalog: Catalog): boolean {
+  return items.some((item) => {
+    const info = catalog[item.k];
+    return info === undefined || info.n === null || (info.v === null && !item.k.startsWith("#"));
+  });
 }
 
 /**
  * A named item's row: its name, the count and what an NPC shop pays for them all, with its tab
- * under the name when that isn't Etc, where most drops go. With no price, "—" when it's one item
- * shops won't buy, and no value ("?") when the name fits several items that sell for different
- * prices, as a name the game cut short can: which of them it is isn't known.
+ * under the name when that isn't Etc, where most drops go. A name several items fit that sell for
+ * different prices (as a name the game cut short can) shows the lowest and highest, "4.2K–7K".
+ * With no price, "—" when it's one item shops won't buy, and no value ("?") when which item it is
+ * isn't known.
  */
 function itemRow(item: ItemEntry, name: string, info: ItemInfo): { cells: Cell[]; detail: string | null } {
-  const value = info.v !== null ? formatCompact(item.c * info.v) : item.k.startsWith("#") ? "—" : null;
+  const value =
+    info.v !== null
+      ? formatCompact(item.c * info.v)
+      : info.r !== undefined
+        ? `${formatCompact(item.c * info.r[0])}–${formatCompact(item.c * info.r[1])}`
+        : item.k.startsWith("#")
+          ? "—"
+          : null;
   return { cells: [name, `×${formatDigits(item.c)}`, value], detail: info.t === null || info.t === "Etc" ? null : info.t };
 }
 
@@ -411,9 +425,9 @@ function lootValue(loot: LootFields, catalog: Catalog): number {
   return totalMesos(loot) + itemsValue(sessionItems(loot), catalog);
 }
 
-/** Whether a session's loot is at least what's shown: some pickups unread, or names not matched. */
+/** Whether a session's loot is at least what's shown: some pickups missed, or items' values not known exactly. */
 function lootPartial(loot: LootFields, catalog: Catalog): boolean {
-  return loot.missed === true || unread(sessionItems(loot), catalog);
+  return loot.missed === true || valueAtLeast(sessionItems(loot), catalog);
 }
 
 /**
@@ -436,7 +450,7 @@ function allTimeView(session: Session, history: Past[], allTime: AllTime, catalo
     ["Played", formatDuration(sessions.reduce((sum, s) => sum + s.activeMs, allTime.playedMs))],
     ["Mesos", mesosText(mesos, partial, true)],
   ];
-  if (items.length > 0) rows.push(["Item value", mesosText(itemsValue(items, catalog), partial || unread(items, catalog), true)]);
+  if (items.length > 0) rows.push(["Item value", mesosText(itemsValue(items, catalog), partial || valueAtLeast(items, catalog), true)]);
   if (rate !== null) rows.push(["Loot/hr", formatCompact(rate)]);
   const children: ViewNode[] = [{ kind: "keyValue", items: rows }];
   if (items.length > 0) children.push(...itemList(items, catalog, "all-time", expanded));
@@ -547,7 +561,7 @@ function view(
   const lootRows: [string, Cell][] = [
     ...(mesos > 0 ? [["Mesos", mesosText(mesos, partial, false)] as [string, Cell]] : []),
     ...(items.length > 0
-      ? [["Item value", mesosText(itemsValue(items, catalog), partial || unread(items, catalog), false)] as [string, Cell]]
+      ? [["Item value", mesosText(itemsValue(items, catalog), partial || valueAtLeast(items, catalog), false)] as [string, Cell]]
       : []),
   ];
   if (session.last === null) {
