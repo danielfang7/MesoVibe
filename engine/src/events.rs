@@ -11,7 +11,8 @@ use crate::recognizers::notices::{Missed, Tab};
 /// 2: `ExpChanged` gained `needed`, and its `level` became optional.
 /// 3: `MesosGained`, `ItemGained`, `PartyBonus` and `NoticesMissed`, from the pickup notices, and
 /// `MapChanged`.
-pub const SCHEMA_VERSION: u32 = 3;
+/// 4: `ItemGained` gained `item_id`, `name` and `sell`, from the game data.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Events the engine emits after a confident read (below the confidence
 /// threshold a recognizer reports "unreadable" and no value event is sent).
@@ -48,11 +49,23 @@ pub enum Event {
     /// item's name by its exact shape, the same every time the same item is picked up, whether or
     /// not its letters are known yet: it's a key for the name's picture, not the name. `tab` is the
     /// inventory tab it went to, when its letters are known.
+    ///
+    /// `name` is the item's name as text, found in the game data from the letters read so far.
+    /// When several items fit (the game cut a long name short, has two items of that name, or the
+    /// letters read so far fit more than one), it's the name they share or the start of it, then
+    /// "…". `item_id` is the item's ID when exactly one item fits, counting the items two touching
+    /// letters or a split letter could also make the name, and `sell` the mesos an NPC shop pays
+    /// for one when every item that fits sells for the same. All three are `null` when no item
+    /// fits; `name` alone is `null` when the items that fit start differently. A speck over a
+    /// letter can give one item a second `item_key`; its `item_id` stays the same.
     ItemGained {
         item_key: String,
         count: u32,
         #[ts(inline)]
         tab: Option<Tab>,
+        item_id: Option<u32>,
+        name: Option<String>,
+        sell: Option<u32>,
     },
     /// The game's "Bonus EXP for PARTY (+N)": the player is in a party. Its EXP is already in the
     /// EXP bar's reading.

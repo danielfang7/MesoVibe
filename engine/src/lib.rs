@@ -10,6 +10,7 @@
 pub mod capture;
 pub mod events;
 pub mod frame;
+pub mod game_data;
 pub mod glyph;
 pub mod letterbox;
 pub mod lines;

@@ -2,7 +2,7 @@
 // `MESOVIBE_UPDATE_SDK=1 cargo test -p mesovibe-engine events`.
 
 /** The event schema version these types describe. */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * Events the engine emits after a confident read (below the confidence
@@ -10,7 +10,7 @@ export const SCHEMA_VERSION = 3;
  *
  * As JSON, an event is an object whose `type` names the variant, with its fields beside it.
  */
-export type Event = { "type": "ExpChanged", level: number | null, exp: number, pct_hundredths: number, needed: number | null, } | { "type": "LevelUp", level: number, } | { "type": "MesosGained", amount: number, late: boolean, shaped: boolean, } | { "type": "ItemGained", item_key: string, count: number, tab: "Equip" | "Use" | "Setup" | "Etc" | "Cash" | null, } | { "type": "PartyBonus", amount: number, } | { "type": "MapChanged", map_key: string | null, } | { "type": "NoticesMissed", reason: "unaligned" | "unreadable" | "not_learned" | "exp_short" | "exp_over" | "lost" | "dropped" | "shapes_wrong", } | { "type": "Unreadable", recognizer: string, };
+export type Event = { "type": "ExpChanged", level: number | null, exp: number, pct_hundredths: number, needed: number | null, } | { "type": "LevelUp", level: number, } | { "type": "MesosGained", amount: number, late: boolean, shaped: boolean, } | { "type": "ItemGained", item_key: string, count: number, tab: "Equip" | "Use" | "Setup" | "Etc" | "Cash" | null, item_id: number | null, name: string | null, sell: number | null, } | { "type": "PartyBonus", amount: number, } | { "type": "MapChanged", map_key: string | null, } | { "type": "NoticesMissed", reason: "unaligned" | "unreadable" | "not_learned" | "exp_short" | "exp_over" | "lost" | "dropped" | "shapes_wrong", } | { "type": "Unreadable", recognizer: string, };
 
 
 /**
