@@ -350,11 +350,13 @@ function unread(items: ItemEntry[], catalog: Catalog): boolean {
 }
 
 /**
- * A named item's row: its name, the count and what an NPC shop pays for them all ("—" when shops
- * won't buy it), with its tab under the name when that isn't Etc, where most drops go.
+ * A named item's row: its name, the count and what an NPC shop pays for them all, with its tab
+ * under the name when that isn't Etc, where most drops go. With no price, "—" when it's one item
+ * shops won't buy, and no value ("?") when the name fits several items that sell for different
+ * prices, as a name the game cut short can: which of them it is isn't known.
  */
 function itemRow(item: ItemEntry, name: string, info: ItemInfo): { cells: Cell[]; detail: string | null } {
-  const value = info.v === null ? "—" : formatCompact(item.c * info.v);
+  const value = info.v !== null ? formatCompact(item.c * info.v) : item.k.startsWith("#") ? "—" : null;
   return { cells: [name, `×${formatDigits(item.c)}`, value], detail: info.t === null || info.t === "Etc" ? null : info.t };
 }
 

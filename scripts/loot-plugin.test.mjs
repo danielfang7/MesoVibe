@@ -409,6 +409,21 @@ test("items count with their NPC value, in Item value and loot/hr", () => {
   assert.equal(allTimeFigures(sent)["Loot/hr"], "22.7K");
 });
 
+// "—" says shops won't buy an item. A name several items fit at different prices (the game cut
+// Blue Jangoon Armor or Shoes short) has no value to show, which the panel draws as "?". Fails if
+// such a pickup reads as worthless.
+test("a name several items fit at different prices shows no value, not —", () => {
+  const { send, sent, now } = play({ seconds: 120 });
+  send(item("Blue Jangoon…", now, { item_id: null, sell: null, tab: "Equip" }));
+  send(item("White Undershirt", now + 1, { item_id: 1040001, sell: null, tab: "Equip" }));
+  assert.deepEqual(itemTable(sent), [
+    [
+      ["Blue Jangoon…", "×1", null],
+      ["White Undershirt", "×1", "—"],
+    ],
+  ]);
+});
+
 // No loot rate while the pickup text is still learned. Fails if a rate shows before pickups count.
 test("no loot/hr while learning the pickup text", () => {
   const { sent } = play({ seconds: 120, readers: { notices: "learning", waitingMesos: 0 } });
