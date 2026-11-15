@@ -1182,7 +1182,7 @@ function shell(initial: Settings): void {
         h(
           "p",
           { class: "text muted" },
-          "Item and map data: OSMS Data Explorer (osmsdataexplorer.com) under CC BY 4.0 (creativecommons.org/licenses/by/4.0), trimmed to names, tabs and NPC prices.",
+          "Item and map data: OSMS Data Explorer (osmsdataexplorer.com) under CC BY 4.0 (creativecommons.org/licenses/by/4.0), trimmed to item names, tabs, NPC prices and flags, and map names and regions.",
         ),
         h("p", { class: "text muted" }, "Not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon."),
       ),
