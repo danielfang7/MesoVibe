@@ -284,7 +284,7 @@ function noticeLines(session: Session, notices: Notices): ViewNode[] {
         : "Learning the pickup text. Mesos show after a few kills.",
     });
   } else if (readers.notices === "blocked") {
-    lines.push({ kind: "partial", text: "Pickups aren't read in a party yet: the party list covers the notices." });
+    lines.push({ kind: "partial", text: "Pickups aren't being read: something keeps covering the notices, like a party list." });
   }
   if (session.shapesWrong) {
     lines.push({ kind: "partial", text: "Some mesos amounts may be wrong: a digit was misread and is no longer used." });

@@ -31,8 +31,9 @@ pub enum NoticeState {
     Reading,
     /// A line was missed in the last few seconds: something passed over the notices.
     Covered,
-    /// Covered most of the last two minutes, or a party bonus line showed while covered: the
-    /// party's HP list sits over the notices.
+    /// Covered most of the last two minutes, or a party bonus line showed while covered:
+    /// something sits over the notices, like a party's HP list. A line that's there but can't be
+    /// read counts as covered too, so the cause isn't always a party.
     Blocked,
     /// EXP went up several times and no notice line was seen, or the game area can't hold them.
     NotFound,

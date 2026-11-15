@@ -160,6 +160,9 @@ const RESTORE_PATIENCE: usize = 3;
 /// EXP lines in a row whose letters clash with those being learned before the reader drops them
 /// and learns again.
 const CLASH_PATIENCE: usize = 3;
+/// Item lines in a row, read but for their "x", with one same other shape there before the reader
+/// forgets its "x" and learns it again.
+const X_PATIENCE: usize = 3;
 
 /// The inventory tab a picked-up item went to, as the notice names it. In events it's the tab's
 /// name as the game writes it ("Equip", "Use", "Setup", "Etc" or "Cash").
@@ -880,6 +883,20 @@ fn read_number<'a>(atlas: &Atlas, glyphs: impl IntoIterator<Item = &'a Glyph>) -
     parse_number(&text?)
 }
 
+/// Whether an item fit's count, after its "x", reads as a number with the digits known, in a
+/// word of its own. A "1" leaves a gap as wide as a space after it, so "x100" comes cut into "x1"
+/// and "00", and "x1,000" into "x1" and ",000": the word taken for the count then follows one
+/// ending in a digit, and its first glyph is a digit or a comma, not the "x".
+fn counts(atlas: &Atlas, cut: &Cut, fit: &Fit) -> bool {
+    let n = cut.words.len();
+    let cut_after_a_digit = n >= 4
+        && cut.words[n - 4]
+            .last()
+            .and_then(|p| atlas.name(&p.glyph))
+            .is_some_and(|c| c.is_ascii_digit());
+    !cut_after_a_digit && read_number(atlas, fit.number.iter().map(|p| &p.glyph)).is_some()
+}
+
 /// An EXP line waiting for the HUD's EXP to say what it's worth: its phrase's letters and its
 /// amount's glyphs, and the amount if they're all known.
 #[derive(Debug, Clone)]
@@ -1023,6 +1040,9 @@ pub struct NoticeReader {
     restored: Option<usize>,
     /// EXP lines in a row whose letters clashed with those being learned.
     clashes: usize,
+    /// Item lines in a row, read but for their "x", with the shape in `x_seen` where "x" goes.
+    x_misses: usize,
+    x_seen: Option<Glyph>,
 }
 
 impl Default for NoticeReader {
@@ -1053,6 +1073,8 @@ impl NoticeReader {
             confirmed: false,
             restored: None,
             clashes: 0,
+            x_misses: 0,
+            x_seen: None,
         }
     }
 
@@ -1363,6 +1385,7 @@ impl NoticeReader {
             self.check_restored(cut);
             self.check_learning(cut);
         }
+        self.check_x(cut, arrived);
         if self.atlas.is_empty() {
             // Before any letter is known, a line shaped like an EXP line waits for the HUD to
             // name its letters and digits.
@@ -1603,6 +1626,61 @@ impl NoticeReader {
         }
     }
 
+    /// Checks the learned "x" against a line shaped like an item line whose "earned.", brackets
+    /// and count all read. Only item lines have an "x", before their count, so one learned wrong
+    /// leaves every item line unreadable, kept from session to session, and no other line shows
+    /// it. After [`X_PATIENCE`] lines in a row as they arrive with one same other shape there, "x"
+    /// is forgotten and learned again from the line: a wrong "x" puts the font's real one there
+    /// every time, while something passing behind a line spoils it differently each time. Only a
+    /// shape the atlas doesn't name counts: with "x" learned wrong, the real one has no name, while
+    /// a shape named as another letter is a line cut some other way. A line that reads with the
+    /// learned "x", when it arrives or when it's read again (`arrived` false) after something
+    /// spoiled it, starts the count over.
+    fn check_x(&mut self, cut: &Cut, arrived: bool) {
+        if cut.yellow || self.atlas.shape('x').is_none() {
+            return;
+        }
+        let Some(fit) = fit_item(cut, None) else {
+            return;
+        };
+        let Some(&(mark, _)) = fit.fixed.iter().find(|(_, c)| *c == 'x') else {
+            return;
+        };
+        let rest_reads = fit
+            .fixed
+            .iter()
+            .filter(|(_, c)| *c != 'x')
+            .all(|(g, c)| self.atlas.name(g) == Some(*c));
+        if !rest_reads || !counts(&self.atlas, cut, &fit) {
+            return;
+        }
+        match self.atlas.name(mark) {
+            Some('x') => {
+                self.x_misses = 0;
+                self.x_seen = None;
+                return;
+            }
+            Some(_) => return,
+            None => {}
+        }
+        // A line read again was counted when it arrived.
+        if !arrived {
+            return;
+        }
+        match &self.x_seen {
+            Some(seen) if seen == mark => self.x_misses += 1,
+            _ => {
+                self.x_seen = Some(mark.clone());
+                self.x_misses = 1;
+            }
+        }
+        if self.x_misses >= X_PATIENCE {
+            self.atlas.forget('x');
+            self.x_misses = 0;
+            self.x_seen = None;
+        }
+    }
+
     /// Starts learning the letters over, with nothing counted for or against them.
     fn forget_letters(&mut self) {
         self.atlas = Atlas::default();
@@ -1610,6 +1688,8 @@ impl NoticeReader {
         self.checks = 0;
         self.misses = 0;
         self.clashes = 0;
+        self.x_misses = 0;
+        self.x_seen = None;
         self.window = Window::default();
     }
 
@@ -1624,10 +1704,15 @@ impl NoticeReader {
             false => [fit_amount(cut, EXP_PHRASE), fit_amount(cut, MESOS_PHRASE)],
         };
         let mut fits: Vec<Fit> = amounts.into_iter().flatten().collect();
+        // An item line teaches its "x" only when a count follows it in a word of its own: a name
+        // that ran into its count ("Capx1"), a count cut after a "1", or a line drawn over, would
+        // put another glyph where "x" goes, and then no item line would read.
+        let counted = |fit: &Fit| counts(&self.atlas, cut, fit);
         // The tab whose letters the atlas knows best, if just one does.
         let tabs: Vec<(usize, Fit)> = Tab::ALL
             .iter()
             .filter_map(|&tab| fit_item(cut, Some(tab)))
+            .filter(counted)
             .filter_map(|fit| agreement(&self.atlas, &fit.fixed).map(|n| (n, fit)))
             .collect();
         let best = tabs.iter().map(|(n, _)| *n).max();
@@ -1635,7 +1720,7 @@ impl NoticeReader {
             Some(n) if tabs.iter().filter(|(m, _)| *m == n).count() == 1 => {
                 fits.extend(tabs.into_iter().find(|(m, _)| *m == n).map(|(_, fit)| fit));
             }
-            _ => fits.extend(fit_item(cut, None)),
+            _ => fits.extend(fit_item(cut, None).filter(counted)),
         }
         let known = |fit: &Fit| {
             agreement(&self.atlas, &fit.fixed).is_some_and(|known| known * 2 >= fit.fixed.len())
@@ -2086,6 +2171,21 @@ pub(crate) mod test_support {
             self
         }
 
+        /// Where the bottom line `text` draws its letter at `at` (an ASCII index): the left
+        /// column and the line's top row.
+        pub(crate) fn letter_at(&self, text: &str, at: usize) -> (u32, u32) {
+            let columns: Vec<u32> = text
+                .chars()
+                .map(|c| self.font.columns(c).len() as u32 + 1)
+                .collect();
+            let width: u32 = columns.iter().sum::<u32>() - 1;
+            let left = self.width - RIGHT_MARGIN + 1 - width;
+            (
+                left + columns[..at].iter().sum::<u32>(),
+                self.height - BOTTOM_LINE_UP,
+            )
+        }
+
         /// The next frame: the lines on screen fade, `arrive` (oldest first) enter at the
         /// bottom, and the HUD gains `gained`.
         pub(crate) fn next(&mut self, arrive: &[(&str, [u8; 3])], gained: u64) -> Canvas {
@@ -2419,6 +2519,230 @@ mod tests {
         };
         assert_eq!(name.picture.height, LINE_ROWS);
         assert!(name.picture.coverage.contains(&255));
+    }
+
+    fn items_read(readings: &[NoticeReading]) -> Vec<u32> {
+        notices(readings)
+            .into_iter()
+            .filter_map(|n| match n {
+                Notice::Item { count, .. } => Some(count),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // A name that runs into its count ("Bandanax1") puts its first letter where "x" goes. Learned
+    // as "x", it would leave every later item line unreadable. Fails if that line teaches "x".
+    #[test]
+    fn a_name_run_into_its_count_doesnt_teach_x() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        let readings = run(
+            &mut game,
+            &mut reader,
+            vec![
+                one("Red Bandanax1 earned. (Etc)", 0),
+                (Vec::new(), 0),
+                one(&item("Red Bandana", 2, "Etc"), 0),
+            ],
+        );
+        assert_eq!(items_read(&readings), [2]);
+    }
+
+    // A wrong "x" kept from an earlier session left every item line unreadable for good, and the
+    // panel blamed a party list. Fails if item lines don't read again after a few, or the wrong
+    // shape is kept.
+    #[test]
+    fn an_x_learned_wrong_is_learned_again_from_item_lines() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        run(
+            &mut game,
+            &mut reader,
+            vec![one(&item("Red Bandana", 1, "Etc"), 0)],
+        );
+        let good = reader.knowledge().unwrap();
+        let x = good.lines().find(|l| l.starts_with("78 ")).unwrap();
+        // A box, a shape the font has for no letter.
+        let bad = good.replace(x, "78 7:7f,41,41,41,41,41,41,41,7f,0,0");
+        let mut reader = NoticeReader::from_knowledge(&bad).unwrap();
+        let mut game = Game::new(Scene::Rock);
+        let mut steps = vec![(Vec::new(), 0)];
+        for count in 1..=4 {
+            steps.push(one(&item("Red Bandana", count, "Etc"), 0));
+            steps.push((Vec::new(), 0));
+        }
+        let mut read = items_read(&run(&mut game, &mut reader, steps));
+        read.sort_unstable();
+        // The first is missed. The third shows "x" wrong for the third time in a row and teaches
+        // it again, and the second, still waiting to be read again, reads with it.
+        assert_eq!(read, [2, 3, 4]);
+        let relearned = reader.knowledge().unwrap();
+        assert!(relearned.lines().any(|l| l == x), "{relearned}");
+    }
+
+    // Something walking behind an item line can spoil just its "x" while the rest still reads.
+    // Such lines now and then, between good ones, must never drop a right "x". Fails if one does,
+    // and good item lines stop reading or a spoiled one is read.
+    #[test]
+    fn a_right_x_is_kept_through_item_lines_spoiled_now_and_then() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        run(
+            &mut game,
+            &mut reader,
+            vec![one(&item("Red Bandana", 1, "Etc"), 0), (Vec::new(), 0)],
+        );
+        let kept = reader.knowledge().unwrap();
+        let x = kept.lines().find(|l| l.starts_with("78 ")).unwrap();
+        // Another letter where "x" goes stands for an "x" spoiled by something behind it.
+        let spoiled = || one("Red Bandana z1 earned. (Etc)", 0);
+        let good = |count| one(&item("Red Bandana", count, "Etc"), 0);
+        let mut steps = Vec::new();
+        // Two spoiled in a row, one short of dropping "x", then a good line, twice over.
+        for line in [
+            spoiled(),
+            spoiled(),
+            good(2),
+            spoiled(),
+            spoiled(),
+            good(3),
+            spoiled(),
+            good(4),
+            good(5),
+        ] {
+            steps.push(line);
+            steps.push((Vec::new(), 0));
+        }
+        let read = items_read(&run(&mut game, &mut reader, steps));
+        assert_eq!(read, [2, 3, 4, 5]);
+        let now = reader.knowledge().unwrap();
+        assert!(now.lines().any(|l| l == x), "{now}");
+    }
+
+    // Something passing behind a line as it arrives can spoil its "x" for that frame only; the
+    // line is read again in the next frame and reads. However many such lines come in a row, a
+    // right "x" must stay. Fails if misses counted as lines arrive drop it and pickups are lost.
+    #[test]
+    fn an_x_spoiled_only_as_its_line_arrives_is_kept() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        run(
+            &mut game,
+            &mut reader,
+            vec![one(&item("Red Bandana", 1, "Etc"), 0), (Vec::new(), 0)],
+        );
+        let kept = reader.knowledge().unwrap();
+        let x = kept.lines().find(|l| l.starts_with("78 ")).unwrap();
+        let mut read = Vec::new();
+        for count in 2..=5 {
+            let text = item("Red Bandana", count, "Etc");
+            let mut canvas = game.next(&[(text.as_str(), WHITE)], 0);
+            // A speck on the "x", in this frame only.
+            let (left, top) = game.letter_at(&text, text.find(" x").unwrap() + 1);
+            canvas.set(left, top + 9, WHITE);
+            canvas.set(left + 1, top + 10, [0, 0, 0]);
+            let arrival = reader.observe(&canvas.frame(), Some(&game.hud())).unwrap();
+            read.extend(items_read(&[arrival]));
+            let after = run(&mut game, &mut reader, vec![(Vec::new(), 0); 2]);
+            read.extend(items_read(&after));
+        }
+        assert_eq!(read, [2, 3, 4, 5]);
+        let now = reader.knowledge().unwrap();
+        assert!(now.lines().any(|l| l == x), "{now}");
+    }
+
+    // A "1" leaves a gap as wide as a space after it, so a stack of 100 to 199 comes cut in two
+    // ("x1" and "00") and so does 1,000 ("x1" and ",000"): the glyph before the count is then a
+    // digit or a comma, not "x". Fails if three such stacks in a row drop a right "x" or teach the
+    // comma as "x", so the stacks or the next pickups are lost or counted wrong.
+    #[test]
+    fn stacks_cut_after_a_1_keep_a_right_x() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        run(
+            &mut game,
+            &mut reader,
+            vec![one(&item("Red Bandana", 1, "Etc"), 0), (Vec::new(), 0)],
+        );
+        let kept = reader.knowledge().unwrap();
+        let x = kept.lines().find(|l| l.starts_with("78 ")).unwrap();
+        let mut steps = Vec::new();
+        for count in [100, 150, 199] {
+            steps.push(one(&item("Red Bandana", count, "Etc"), 0));
+            steps.push((Vec::new(), 0));
+        }
+        // No amount has had a comma yet, so the comma isn't learned: these can't be read.
+        for _ in 0..3 {
+            steps.push(one("Red Bandana x1,000 earned. (Etc)", 0));
+            steps.push((Vec::new(), 0));
+        }
+        for count in 2..=4 {
+            steps.push(one(&item("Red Bandana", count, "Etc"), 0));
+            steps.push((Vec::new(), 0));
+        }
+        assert_eq!(
+            items_read(&run(&mut game, &mut reader, steps)),
+            [100, 150, 199, 2, 3, 4]
+        );
+        let now = reader.knowledge().unwrap();
+        assert!(now.lines().any(|l| l == x), "{now}");
+    }
+
+    // Different marks where "x" goes, line after line, are spoiled lines: only one same shape
+    // there every time shows the learned "x" is wrong. Fails if three different marks drop a
+    // right "x" and the next pickups are lost.
+    #[test]
+    fn different_marks_where_x_goes_keep_a_right_x() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        run(
+            &mut game,
+            &mut reader,
+            vec![one(&item("Red Bandana", 1, "Etc"), 0), (Vec::new(), 0)],
+        );
+        let kept = reader.knowledge().unwrap();
+        let x = kept.lines().find(|l| l.starts_with("78 ")).unwrap();
+        let mut steps = Vec::new();
+        for mark in ["z", "k", "w"] {
+            steps.push(one(&format!("Red Bandana {mark}1 earned. (Etc)"), 0));
+            steps.push((Vec::new(), 0));
+        }
+        for count in 2..=4 {
+            steps.push(one(&item("Red Bandana", count, "Etc"), 0));
+            steps.push((Vec::new(), 0));
+        }
+        assert_eq!(items_read(&run(&mut game, &mut reader, steps)), [2, 3, 4]);
+        let now = reader.knowledge().unwrap();
+        assert!(now.lines().any(|l| l == x), "{now}");
+    }
+
+    // Letters dropped and learned again, as after a size switch draws them differently, start
+    // with nothing counted against "x". Fails if spoiled lines from before still count, so one
+    // more drops the new "x" and good item lines stop reading.
+    #[test]
+    fn letters_learned_again_start_with_nothing_against_x() {
+        let spoiled = || one("Red Bandana z1 earned. (Etc)", 0);
+        let good = |count| one(&item("Red Bandana", count, "Etc"), 0);
+        let quiet = || (Vec::new(), 0);
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        run(
+            &mut game,
+            &mut reader,
+            vec![good(1), quiet(), spoiled(), quiet(), spoiled(), quiet()],
+        );
+        reader.recheck();
+        let mut switched = Game::new(Scene::Rock).redrawn();
+        let twice: Vec<u64> = EVERY_DIGIT.iter().chain(&EVERY_DIGIT).copied().collect();
+        run(&mut switched, &mut reader, learning(&twice));
+        assert!(reader.confirmed(), "learned again at the new size");
+        let read = run(
+            &mut switched,
+            &mut reader,
+            vec![good(2), quiet(), spoiled(), quiet(), good(3), quiet()],
+        );
+        assert_eq!(items_read(&read), [2, 3]);
     }
 
     // Guards the honesty rules: a new line that can't be seen, a digit never learned, and EXP

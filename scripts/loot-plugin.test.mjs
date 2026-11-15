@@ -146,7 +146,7 @@ test("time with the notices covered changes neither side of a map's mesos/hr", (
 });
 
 // Time the notices can't be trusted isn't read time. Fails if a map gets a mesos rate from time
-// spent learning the letters or under the party list.
+// spent learning the letters or with the notices covered.
 test("no mesos/hr from time learning or blocked", () => {
   for (const notices of ["learning", "blocked"]) {
     assert.equal(endedMesosRate(play({ seconds: 120, readers: { notices, waitingMesos: 0 } })), null, notices);
@@ -219,7 +219,7 @@ test("learning, missed and wrong-digit lines, and none for amounts still being r
   assert.deepEqual(lines(sent), ["Some mesos amounts may be wrong: a digit was misread and is no longer used."]);
 
   const party = play({ seconds: 20, readers: { notices: "blocked", waitingMesos: 0 } });
-  assert.deepEqual(lines(party.sent), ["Pickups aren't read in a party yet: the party list covers the notices."]);
+  assert.deepEqual(lines(party.sent), ["Pickups aren't being read: something keeps covering the notices, like a party list."]);
 });
 
 // Past sessions rows are named for the map played longest, with the session's EXP gained and that
