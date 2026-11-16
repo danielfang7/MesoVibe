@@ -70,7 +70,7 @@ cargo run -p mesovibe-engine --release --example replay_exp -- ~/MesoVibe-captur
 
 The folder gets the same format as `--crop-bottom` runs (meta.json, numbered strip PNGs, frames.jsonl), plus each frame's live reading in frames.jsonl. Pick a new folder for each run. On a Retina Mac an hour at 1 Hz is about 0.3 GB. On macOS, run it from Terminal or iTerm2 with Screen Recording permission.
 
-`replay_exp` and `replay_chat` also take folders from the capture helpers.
+`replay_exp`, `replay_chat`, `replay_map`, `replay_notices` and `replay_hp_mp` also take folders from the capture helpers.
 
 ## Shot list (both systems)
 
