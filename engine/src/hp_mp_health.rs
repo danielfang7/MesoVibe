@@ -26,8 +26,8 @@ pub enum HpMpState {
     Reading,
     /// Read before, and not now: something is over the numbers.
     Covered,
-    /// Never read in three minutes of reading the EXP bar: the numbers aren't where they're looked
-    /// for.
+    /// Never read in three minutes of reading the EXP bar at this game size: the numbers aren't
+    /// where they're looked for.
     NotFound,
     /// Still learning after five minutes of reading the EXP bar, because a digit the numbers use
     /// hasn't shown in the EXP field yet.
@@ -47,6 +47,9 @@ pub struct HpMpHealth {
     ever_read: bool,
     /// How long the EXP bar has read with confirmed digits since capture started.
     exp_read_ms: u64,
+    /// The same, since the game's size last changed: the numbers are looked for afresh at a new
+    /// size, while the digits learned carry over.
+    found_ms: u64,
     last_now: Option<u64>,
 }
 
@@ -56,6 +59,7 @@ impl Default for HpMpHealth {
             state: HpMpState::Off,
             ever_read: false,
             exp_read_ms: 0,
+            found_ms: 0,
             last_now: None,
         }
     }
@@ -64,6 +68,13 @@ impl Default for HpMpHealth {
 impl HpMpHealth {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The game is drawn at another size: whether the numbers were read at the old one says
+    /// nothing about this one. The wait for a digit the EXP field hasn't shown goes on.
+    pub fn new_picture(&mut self) {
+        self.ever_read = false;
+        self.found_ms = 0;
     }
 
     /// Takes one tick: `now` in milliseconds on any steady clock, whether the engine is capturing,
@@ -95,6 +106,7 @@ impl HpMpHealth {
         // Only confirmed readings count: before then the numbers can't be read at all.
         if exp.as_ref().is_ok_and(|r| r.confirmed) {
             self.exp_read_ms = self.exp_read_ms.saturating_add(step);
+            self.found_ms = self.found_ms.saturating_add(step);
         }
         self.state = match hp_mp {
             Ok(_) => {
@@ -112,7 +124,7 @@ impl HpMpHealth {
             }
             Err(HpMpUnreadable::MissingDigit) => HpMpState::Learning,
             Err(_) if self.ever_read => HpMpState::Covered,
-            Err(_) if self.exp_read_ms >= NOT_FOUND_AFTER_MS => HpMpState::NotFound,
+            Err(_) if self.found_ms >= NOT_FOUND_AFTER_MS => HpMpState::NotFound,
             Err(_) => HpMpState::Learning,
         };
         self.state
@@ -276,6 +288,34 @@ mod tests {
         assert_eq!(
             feed(&mut health, 240_000, 1, &EXP, &Err(HpMpUnreadable::Garbled)),
             HpMpState::Learning
+        );
+    }
+
+    // A new game size looks for the numbers afresh: read at the old size, never at the new one,
+    // is "not found" after three minutes, not "covered". A digit still unseen stays named. Fails
+    // if a size change keeps the old reading's state or restarts the wait for a digit.
+    #[test]
+    fn a_new_size_looks_for_the_numbers_afresh() {
+        let minute = 4 * 60;
+        let garbled = Err(HpMpUnreadable::Garbled);
+        let mut health = HpMpHealth::new();
+        feed(&mut health, 0, 1, &EXP, &READ);
+        health.new_picture();
+        assert_eq!(
+            feed(&mut health, 250, 3 * minute + 8, &EXP, &garbled),
+            HpMpState::NotFound
+        );
+
+        let missing = Err(HpMpUnreadable::MissingDigit);
+        let mut waiting = HpMpHealth::new();
+        assert_eq!(
+            feed(&mut waiting, 0, 5 * minute + 8, &EXP, &missing),
+            HpMpState::MissingDigits
+        );
+        waiting.new_picture();
+        assert_eq!(
+            feed(&mut waiting, 400_000, 1, &EXP, &missing),
+            HpMpState::MissingDigits
         );
     }
 }

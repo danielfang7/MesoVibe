@@ -110,9 +110,9 @@ pub enum Event {
     /// engine read the numbers on the frame just before this one, so the change between the two
     /// readings is all that happened. A frame the game hadn't redrawn yet doesn't break the chain
     /// unless it lasts about two seconds: nothing on screen changed. It's false on the first
-    /// reading after the numbers couldn't
-    /// be read, after a pause in capture, a dark screen, a covered HUD, a new game size or a game
-    /// restart: something may have happened unseen, and a plugin measuring rises starts again.
+    /// reading after the numbers couldn't be read, after a pause in capture, a dark screen, a
+    /// covered HUD, a new game size or a game restart: something may have happened unseen, and a
+    /// plugin measuring rises starts again.
     HpMpChanged {
         hp: u32,
         max_hp: u32,
