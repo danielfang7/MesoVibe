@@ -11,7 +11,7 @@
 // (chat.html) takes `grind`. During play, whisper, party and friend lines arrive every few
 // seconds, drawn here as pictures the way the host hands them over.
 // Release builds leave this file out (ipc.ts loads it only in development).
-import type { Event as GameEvent } from "@mesovibe/sdk";
+import { SCHEMA_VERSION, type Event as GameEvent } from "@mesovibe/sdk";
 
 import type { ChatChannel, ChatHost, ChatLine, ChatPosition, GamePicture, HudHost, HudSummary, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
 
@@ -223,7 +223,7 @@ export function mockHost(scenario: string): Host {
   let lastMap: string | null = null;
 
   return {
-    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 5 }),
+    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: SCHEMA_VERSION }),
     settings: async () => settings,
     startup: async () => startup,
     setStartup: async (on) => {

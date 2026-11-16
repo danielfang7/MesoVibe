@@ -175,9 +175,9 @@ export type HpMpChanged = Extract<Event, { type: "HpMpChanged" }>;
 
 /**
  * How the engine is reading the pickup notices and the HP and MP numbers. `waitingMesos` is how many
- * mesos amounts wait for a digit to be learned before they're counted; `hpMpMissing` names the
- * digits the HP and MP numbers wait for an EXP gain to show, such as "7", while `hpMp` is
- * `missing_digits`, and is null otherwise.
+ * mesos amounts wait for a digit to be learned before they're counted. While `hpMp` is
+ * `missing_digits`, `hpMpMissing` lists the digits the EXP field hasn't shown yet, such as "7" or
+ * "045": the one the HP and MP numbers wait for is among them. It is null otherwise.
  *
  * @experimental May change before the Loot Tracker's first release.
  */

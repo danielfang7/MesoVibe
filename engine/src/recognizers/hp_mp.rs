@@ -52,6 +52,9 @@ pub(super) struct SlashLearner {
     slash: Option<Glyph>,
     /// A shape one frame put in the slash's place, waiting for a second frame to agree.
     candidate: Option<Glyph>,
+    /// A shape both fields put in the slash's place instead of the learned one, waiting for the
+    /// next frame to agree.
+    replacement: Option<Glyph>,
 }
 
 impl SlashLearner {
@@ -71,8 +74,9 @@ pub(super) fn read(
 ) -> Result<HpMp, HpMpUnreadable> {
     let hp = field(frame, hp, ink)?;
     let mp = field(frame, mp, ink)?;
-    if learner.slash.is_none() {
-        learn_slash(&hp, &mp, atlas, learner);
+    match learner.slash {
+        None => learn_slash(&hp, &mp, atlas, learner),
+        Some(_) => recheck_slash(&hp, &mp, atlas, learner),
     }
     let Some(slash) = &learner.slash else {
         return Err(match learner.candidate {
@@ -126,6 +130,26 @@ fn learn_slash(hp: &[Glyph], mp: &[Glyph], atlas: &Atlas, learner: &mut SlashLea
     match &learner.candidate {
         Some(before) if *before == seen => learner.slash = Some(seen),
         _ => learner.candidate = Some(seen),
+    }
+}
+
+/// Replaces a learned slash that both fields disagree with. The real slash is in both fields; a
+/// shape learned from one field alone, such as the cursor touching the slash, is in neither. Two
+/// frames in a row must agree.
+fn recheck_slash(hp: &[Glyph], mp: &[Glyph], atlas: &Atlas, learner: &mut SlashLearner) {
+    let seen = match (slash_candidate(hp, atlas), slash_candidate(mp, atlas)) {
+        (Some(a), Some(b)) if a == b && learner.slash.as_ref() != Some(&a) => a,
+        _ => {
+            learner.replacement = None;
+            return;
+        }
+    };
+    match &learner.replacement {
+        Some(before) if *before == seen => {
+            learner.slash = Some(seen);
+            learner.replacement = None;
+        }
+        _ => learner.replacement = Some(seen),
     }
 }
 
@@ -409,6 +433,33 @@ mod tests {
             assert_eq!(read, Err(HpMpUnreadable::MissingDigit));
         }
         assert!(!early.knows_slash());
+    }
+
+    // A slash learned wrong from one field, here the cursor joining it to the next digit while MP
+    // shows a digit not seen yet, is replaced once both fields agree on another shape for two
+    // frames. Fails if a wrong slash keeps the numbers unreadable for the rest of the session.
+    #[test]
+    fn a_slash_learned_wrong_is_replaced() {
+        let hud = Hud::new();
+        let mut reader = confirmed(&hud, &[FIRST]);
+        let mut touched = numbers(&hud, (1366, 768), "[712/1386]", "[675/1140]");
+        // Ink in the empty column between the slash and the 1 after it.
+        let before: u32 = "[712"
+            .chars()
+            .map(|c| hud.exp_font.columns(c).len() as u32 + 1)
+            .sum();
+        let gap = 283 + 237 + before + hud.slash_font.columns('/').len() as u32;
+        touched.fill(gap, 768 - 28, 1, 7, WHITE);
+        for _ in 0..2 {
+            assert!(reader.observe_hud(&touched.frame()).hp_mp.is_err());
+        }
+        assert!(reader.knows_slash(), "learned from HP alone");
+        let clean = numbers(&hud, (1366, 768), "[712/1386]", "[671/1196]");
+        assert!(reader.observe_hud(&clean.frame()).hp_mp.is_err());
+        assert_eq!(
+            reader.observe_hud(&clean.frame()).hp_mp,
+            values(712, 1386, 671, 1196)
+        );
     }
 
     // A field reads only as the HUD could draw it. Fails if a leading zero, a comma, a value over

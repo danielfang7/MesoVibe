@@ -943,11 +943,12 @@ function shell(initial: Settings): void {
     }
   }
 
-  /** "a 7", "an 8", or "the digits 0 and 7". */
+  /** "a 7", "an 8", or "a digit it hasn't seen yet: 0, 4 or 5": the one it waits for is among them. */
   function digitsWanted(digits: string): string {
     const list = [...digits];
+    if (list.length === 0) return "the digits it needs";
     if (list.length === 1) return `${list[0] === "8" ? "an" : "a"} ${list[0]}`;
-    return `the digits ${list.slice(0, -1).join(", ")} and ${list.at(-1)}`;
+    return `a digit it hasn't seen yet: ${list.slice(0, -1).join(", ")} or ${list.at(-1)}`;
   }
 
   /** The map's name as MesoVibe last read it, or why it can't. */

@@ -203,8 +203,8 @@ impl<B: Backend> Runner<B> {
         self.hp_mp_state
     }
 
-    /// The digits the HP and MP numbers wait for, while they're missing: the ones the EXP field
-    /// hasn't shown yet.
+    /// While the HP and MP numbers wait for a digit, the digits the EXP field hasn't shown yet: the
+    /// one they wait for is among them, but its shape alone can't say which.
     pub fn hp_mp_missing(&self) -> Option<String> {
         (self.hp_mp_state == HpMpState::MissingDigits).then(|| {
             self.exp
@@ -1377,6 +1377,20 @@ mod tests {
             mp,
             max_mp: 1140,
             continuous,
+        }
+    }
+
+    // The digits the panel names while HP and MP wait for one are digits only, and only in that
+    // state. Fails if the EXP field's brackets or punctuation reach the panel, or the list shows
+    // while the numbers read or are covered.
+    #[test]
+    fn the_missing_digits_are_named_only_while_waiting_for_one() {
+        let mut runner = Runner::new(Fake::default());
+        runner.hp_mp_state = HpMpState::MissingDigits;
+        assert_eq!(runner.hp_mp_missing().as_deref(), Some("0123456789"));
+        for state in [HpMpState::Reading, HpMpState::Covered, HpMpState::Learning] {
+            runner.hp_mp_state = state;
+            assert_eq!(runner.hp_mp_missing(), None, "{state:?}");
         }
     }
 

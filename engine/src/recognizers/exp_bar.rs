@@ -2250,9 +2250,7 @@ mod tests {
         );
     }
 
-    /// `canvas`, the game's picture (768 lines, or a smaller Full Screen size), stretched to
-    /// `width` x `height` the way the game does. Only the rows the HUD's recovery needs are drawn,
-    /// to keep the tests quick.
+    /// Stretched Full Screen sizes the tests cover.
     const STRETCHED: [(u32, u32); 3] = [(1920, 1200), (2560, 1440), (1920, 1080)];
 
     #[test]

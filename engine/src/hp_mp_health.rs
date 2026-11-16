@@ -45,7 +45,7 @@ pub type FrameReading<'a> = (
 pub struct HpMpHealth {
     state: HpMpState,
     ever_read: bool,
-    /// How long the EXP bar has read since capture started.
+    /// How long the EXP bar has read with confirmed digits since capture started.
     exp_read_ms: u64,
     last_now: Option<u64>,
 }
@@ -92,7 +92,8 @@ impl HpMpHealth {
             }
             return self.state;
         };
-        if exp.is_ok() {
+        // Only confirmed readings count: before then the numbers can't be read at all.
+        if exp.as_ref().is_ok_and(|r| r.confirmed) {
             self.exp_read_ms = self.exp_read_ms.saturating_add(step);
         }
         self.state = match hp_mp {
@@ -250,5 +251,31 @@ mod tests {
         assert_eq!(health.observe(0, true, None, true), HpMpState::Learning);
         feed(&mut health, 250, 1, &EXP, &READ);
         assert_eq!(health.observe(500, true, None, true), HpMpState::Reading);
+    }
+
+    // Minutes of EXP readings whose digits aren't confirmed yet don't run the "not found" clock,
+    // since the numbers can't be read before then. Fails if the first covered frame after the
+    // digits are confirmed says "not found".
+    #[test]
+    fn unconfirmed_exp_readings_do_not_run_the_clock() {
+        let mut health = HpMpHealth::new();
+        let provisional = Ok(ExpReading {
+            confirmed: false,
+            ..EXP.unwrap()
+        });
+        let minute = 4 * 60;
+        let state = (0..4 * minute).fold(HpMpState::Off, |_, i| {
+            health.observe(
+                i * 250,
+                true,
+                Some((&provisional, &Err(HpMpUnreadable::NoHud))),
+                false,
+            )
+        });
+        assert_eq!(state, HpMpState::Learning);
+        assert_eq!(
+            feed(&mut health, 240_000, 1, &EXP, &Err(HpMpUnreadable::Garbled)),
+            HpMpState::Learning
+        );
     }
 }
