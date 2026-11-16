@@ -11,9 +11,9 @@
  * if plugins later run isolated in a Web Worker.
  */
 
-import type { Event, NoticeState } from "./generated/events.js";
+import type { Event, HpMpState, NoticeState } from "./generated/events.js";
 
-export type { Event, NoticeState } from "./generated/events.js";
+export type { Event, HpMpState, NoticeState } from "./generated/events.js";
 export { SCHEMA_VERSION } from "./generated/events.js";
 export { formatCompact, formatDigits, formatDuration, formatMinutes, formatPercent } from "./format.js";
 
@@ -156,14 +156,36 @@ export interface SessionSummary {
 }
 
 /**
- * How the engine is reading the pickup notices, and how many mesos amounts wait for a digit to be
- * learned before they're counted.
+ * The HP and MP numbers next to the EXP bar, as the engine read them: sent when any changed, and
+ * with `continuous` false when something may have happened unseen since the last reading (see
+ * {@link Event}). A plugin that starts mid-session didn't see the reading before its first one, so
+ * it takes that first one as its starting point whatever `continuous` says. MesoVibe only reads
+ * these numbers from the screen: a plugin can't drink a potion or send any input to the game (see
+ * Fair play in README.md).
+ *
+ * @experimental May change when potions are counted from the quick slots.
+ * @example
+ * onEvent(event) {
+ *   if (event.type === "HpMpChanged") {
+ *     context.render([{ kind: "stat", label: "HP", value: `${event.hp}/${event.max_hp}` }]);
+ *   }
+ * }
+ */
+export type HpMpChanged = Extract<Event, { type: "HpMpChanged" }>;
+
+/**
+ * How the engine is reading the pickup notices and the HP and MP numbers. `waitingMesos` is how many
+ * mesos amounts wait for a digit to be learned before they're counted; `hpMpMissing` names the
+ * digits the HP and MP numbers wait for an EXP gain to show, such as "7", while `hpMp` is
+ * `missing_digits`, and is null otherwise.
  *
  * @experimental May change before the Loot Tracker's first release.
  */
 export interface Readers {
   notices: NoticeState;
   waitingMesos: number;
+  hpMp: HpMpState;
+  hpMpMissing: string | null;
 }
 
 /**
@@ -211,7 +233,7 @@ export interface PluginContext {
 export interface Handlers {
   onEvent?(event: Event, atMs: number): void;
   onCapture?(state: CaptureState, atMs: number): void;
-  /** The pickup notices' state changed. @experimental */
+  /** How the pickup notices or the HP and MP numbers are read changed. @experimental */
   onReaders?(readers: Readers, atMs: number): void;
   onAction?(action: string, atMs: number): void;
   /** Once a second, for clocks and rates. */

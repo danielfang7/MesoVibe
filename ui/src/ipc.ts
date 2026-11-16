@@ -4,7 +4,7 @@
 // (./mock.ts), so every state can be looked at without the game. Release builds leave it out.
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import type { Event as GameEvent, NoticeState, SessionSummary } from "@mesovibe/sdk";
+import type { Event as GameEvent, HpMpState, NoticeState, SessionSummary } from "@mesovibe/sdk";
 
 /** A corner of the game area, for the mini-HUD (app/src/dock.rs). */
 export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -146,6 +146,12 @@ export interface Status {
   notices: NoticeState;
   /** Mesos amounts waiting for a digit to be learned before they're counted. */
   waitingMesos: number;
+  /** The HP and MP numbers this tick, when they were read. */
+  hpMp: { hp: number; maxHp: number; mp: number; maxMp: number } | null;
+  /** How the HP and MP numbers are being read. */
+  hpMpState: HpMpState;
+  /** While `missing_digits`: the digits the numbers wait for, such as "7". */
+  hpMpMissing: string | null;
   /** The map the player is on: null before one settled; no key when its name can't be read. */
   map: { key: string | null } | null;
   atMs: number;

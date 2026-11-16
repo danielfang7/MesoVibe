@@ -18,6 +18,7 @@ import type { Confirm } from "@mesovibe/sdk";
 
 import { h, icon } from "./dom.js";
 import type { GamePicture, Host } from "./ipc.js";
+import { readersChanged } from "./readers.js";
 
 /**
  * A name picture's scale, in the surrounding text's em per game pixel. The minimap's capitals are
@@ -104,7 +105,7 @@ export class PluginHost {
   view: ViewNode[] = [];
   /** The plugin's other pages, as it last drew them. */
   readonly pages: Partial<Record<PluginPage, ViewNode[]>> = {};
-  private readers: Readers = { notices: "off", waitingMesos: 0 };
+  private readers: Readers = { notices: "off", waitingMesos: 0, hpMp: "off", hpMpMissing: null };
   /** The pictures the plugin's views name, kept for drawing them. */
   readonly pictures: NamePictures;
 
@@ -172,9 +173,9 @@ export class PluginHost {
     this.post({ type: "capture", state, atMs: Date.now() });
   }
 
-  /** How the pickup notices are being read; sent on to the plugin when it changes. */
+  /** How the pickup notices and the HP and MP numbers are being read; sent on to the plugin when any of it changes. */
   setReaders(readers: Readers): void {
-    if (readers.notices === this.readers.notices && readers.waitingMesos === this.readers.waitingMesos) return;
+    if (!readersChanged(this.readers, readers)) return;
     this.readers = readers;
     this.post({ type: "readers", readers, atMs: Date.now() });
   }

@@ -237,9 +237,14 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     const opened = await page.until(mesos, "All time's mesos");
     await page.until(`((m) => m !== undefined && m !== ${JSON.stringify(opened)})(${mesos})`, "All time's mesos rising with the Loot tab open");
 
-    // What MesoVibe sees says how the notices are read and shows the map's name as read. Fails if
-    // either row is missing or the map row has no picture.
+    // What MesoVibe sees shows the HP and MP numbers as read, says how the notices are read and
+    // shows the map's name as read, and Reads lists the HP and MP numbers. Fails if a row is
+    // missing, the HP and MP row has no values, or the map row has no picture.
     await page.evaluate(`document.querySelector('[aria-label="What MesoVibe sees"]').click()`);
+    const hpMp = `document.querySelector('[data-key="sees-hp-mp"]')?.textContent`;
+    assert.match(await page.until(hpMp, "the HP and MP row"), /^HP and MPHP \d+\/1386 · MP \d+\/1140$/);
+    const reads = `[...document.querySelectorAll(".view p")].some((p) => p.textContent === "The HP and MP numbers next to the EXP bar.")`;
+    assert.equal(await page.evaluate(reads), true);
     const notices = `document.querySelector('[data-key="sees-notices"]')?.textContent`;
     assert.equal(await page.until(notices, "the notices row"), "Pickup noticesReading");
     await page.until(`document.querySelector('[data-key="sees-map"] .game-text')?.style.maskImage`, "the map row's picture");

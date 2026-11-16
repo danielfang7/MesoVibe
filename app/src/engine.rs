@@ -20,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mesovibe_engine::capture::{Backend, CaptureState, Grab};
 use mesovibe_engine::events::Event;
+use mesovibe_engine::hp_mp_health::HpMpState;
 use mesovibe_engine::notice_health::NoticeState;
 use mesovibe_engine::recognizers::chat::ChatUnreadable;
 use mesovibe_engine::recognizers::exp_bar::{Calibration, ExpBarReader, Unreadable};
@@ -117,6 +118,13 @@ pub struct Status {
     pub notices: NoticeState,
     /// Mesos amounts waiting for a digit to be learned before they're counted.
     pub waiting_mesos: usize,
+    /// The HP and MP numbers this tick, when they were read.
+    pub hp_mp: Option<HpMpReading>,
+    /// How the HP and MP numbers are being read: `off`, `learning`, `reading`, `covered`,
+    /// `not_found` or `missing_digits`.
+    pub hp_mp_state: HpMpState,
+    /// While `missing_digits`: the digits the numbers wait for an EXP gain to show, such as "7".
+    pub hp_mp_missing: Option<String>,
     /// The map the player is on: `None` before one settled; its key, or no key when its name
     /// can't be read.
     pub map: Option<MapStatus>,
@@ -145,6 +153,15 @@ pub struct Reading {
     pub pct_hundredths: u16,
     pub needed: Option<u64>,
     pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HpMpReading {
+    pub hp: u32,
+    pub max_hp: u32,
+    pub mp: u32,
+    pub max_mp: u32,
 }
 
 #[derive(Clone, Serialize)]
@@ -400,6 +417,9 @@ fn off_status() -> Status {
         stale: false,
         notices: NoticeState::Off,
         waiting_mesos: 0,
+        hp_mp: None,
+        hp_mp_state: HpMpState::Off,
+        hp_mp_missing: None,
         map: None,
         at_ms: now_ms(),
     }
@@ -456,6 +476,17 @@ fn status<B: Backend>(
         stale: tick.stale,
         notices: runner.notice_state(),
         waiting_mesos: runner.notice_reader().waiting_mesos(),
+        hp_mp: match tick.hp_mp {
+            Some(Ok(r)) => Some(HpMpReading {
+                hp: r.hp,
+                max_hp: r.max_hp,
+                mp: r.mp,
+                max_mp: r.max_mp,
+            }),
+            _ => None,
+        },
+        hp_mp_state: runner.hp_mp_state(),
+        hp_mp_missing: runner.hp_mp_missing(),
         map: runner.current_map().map(|key| MapStatus {
             key: key.map(str::to_string),
         }),

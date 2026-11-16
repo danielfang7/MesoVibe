@@ -10,6 +10,7 @@ import { append, h, icon, replace } from "./dom.js";
 import { connect } from "./ipc.js";
 import type { AppInfo, ChatChannel, ChatChannels, ChatColors, ChatLine, ChatPosition, Corner, Display, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
 import { PluginHost, confirmDialog, fill, namePicture, renderView } from "./plugins.js";
+import { readersOf } from "./readers.js";
 
 type ViewName = "session" | "loot" | "chat" | "sees" | "settings";
 
@@ -922,6 +923,33 @@ function shell(initial: Settings): void {
     }
   }
 
+  /** What What MesoVibe sees says about the HP and MP numbers: the values read, or why not. */
+  function hpMpLine(status: Status): string {
+    const r = status.hpMp;
+    if (r !== null) return `HP ${r.hp}/${r.maxHp} · MP ${r.mp}/${r.maxMp}`;
+    switch (status.hpMpState) {
+      case "off":
+        return "Not reading: capture is paused.";
+      case "learning":
+        return "Learning the digits from your EXP gains.";
+      case "reading":
+        return "Reading";
+      case "missing_digits":
+        return `Waiting for an EXP gain that shows ${digitsWanted(status.hpMpMissing ?? "")}.`;
+      case "covered":
+        return "Covered right now. Nothing to do.";
+      case "not_found":
+        return "Not found next to the EXP bar. Keep the bar at the bottom of the game in view.";
+    }
+  }
+
+  /** "a 7", "an 8", or "the digits 0 and 7". */
+  function digitsWanted(digits: string): string {
+    const list = [...digits];
+    if (list.length === 1) return `${list[0] === "8" ? "an" : "a"} ${list[0]}`;
+    return `the digits ${list.slice(0, -1).join(", ")} and ${list.at(-1)}`;
+  }
+
   /** The map's name as MesoVibe last read it, or why it can't. */
   function mapLine(status: Status): Node {
     if (status.map === null) return h("span", {}, "Looking for the minimap.");
@@ -954,6 +982,9 @@ function shell(initial: Settings): void {
           : h("p", { class: "state empty" }, "No picture yet. It appears while MesoVibe is reading the game."),
         h("p", { class: "text muted" }, "The exact rows MesoVibe reads, at the game's own size. This picture stays on this computer."),
         h("div", { class: "reading-box" }, h("span", { class: "label" }, "EXP bar"), h("span", { class: "number" }, box)),
+        reading && status
+          ? h("div", { class: "reading-box", attrs: { "data-key": "sees-hp-mp" } }, h("span", { class: "label" }, "HP and MP"), h("span", status.hpMp ? { class: "number" } : {}, hpMpLine(status)))
+          : null,
         reading && status ? h("div", { class: "reading-box", attrs: { "data-key": "sees-notices" } }, h("span", { class: "label" }, "Pickup notices"), h("span", {}, noticesLine(status))) : null,
         reading && status ? h("div", { class: "reading-box", attrs: { "data-key": "sees-map" } }, h("span", { class: "label" }, "Map name"), mapLine(status)) : null,
         h(
@@ -978,6 +1009,7 @@ function shell(initial: Settings): void {
         { class: "block" },
         h("h2", { class: "label" }, "Reads"),
         h("p", {}, "The EXP bar: your level, EXP and percent."),
+        h("p", {}, "The HP and MP numbers next to the EXP bar."),
         h("p", {}, "The pickup notices at the bottom right: the EXP, mesos and items you pick up."),
         h("p", {}, "The minimap's map name, as a picture."),
         h("p", {}, "The chat box: whisper, party and friend lines, as pictures."),
@@ -1200,7 +1232,7 @@ function shell(initial: Settings): void {
     if (status.exp?.confirmed) panel.lastReadAt = status.atMs;
     if (status.state !== "blocked") panel.helpOpen = false;
     tracker.setCapture(captureState(status));
-    tracker.setReaders({ notices: status.notices, waitingMesos: status.waitingMesos });
+    tracker.setReaders(readersOf(status));
     if (!trackerHasMap && status.map !== null) {
       trackerHasMap = true;
       tracker.event({ type: "MapChanged", map_key: status.map.key }, status.atMs);
