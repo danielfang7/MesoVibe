@@ -13,12 +13,18 @@ use crate::recognizers::notices::{Missed, Tab};
 /// `MapChanged`.
 /// 4: `ItemGained` gained `item_id`, `name` and `sell`, from the game data.
 /// 5: `ItemGained` gained `sell_min` and `sell_max`, for a name several items fit.
-pub const SCHEMA_VERSION: u32 = 5;
+/// 6: `HpMpChanged`, the HP and MP numbers next to the EXP bar.
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Events the engine emits after a confident read (below the confidence
 /// threshold a recognizer reports "unreadable" and no value event is sent).
 ///
 /// As JSON, an event is an object whose `type` names the variant, with its fields beside it.
+///
+/// The events of one engine tick always come in this order: the EXP bar's (`ExpChanged`, then
+/// `LevelUp`), the pickup notices' (`MesosGained`, `ItemGained`, `PartyBonus`, `NoticesMissed`),
+/// `MapChanged`, then `HpMpChanged`. So a plugin comparing two HP and MP readings can tell whether
+/// a level-up or a map change came between them.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(tag = "type")]
 pub enum Event {
@@ -98,6 +104,19 @@ pub enum Event {
         #[ts(inline)]
         reason: Missed,
     },
+    /// The HP and MP numbers next to the EXP bar, `HP[712/1386]` and `MP[675/1140]`: sent when
+    /// any of them changed, and when `continuous` is false. `continuous` is true only when the
+    /// engine read the numbers on the frame just before this one, so the change between the two
+    /// readings is all that happened. It's false on the first reading after the numbers couldn't
+    /// be read, after a pause in capture, a dark screen, a covered HUD, a new game size or a game
+    /// restart: something may have happened unseen, and a plugin measuring rises starts again.
+    HpMpChanged {
+        hp: u32,
+        max_hp: u32,
+        mp: u32,
+        max_mp: u32,
+        continuous: bool,
+    },
     /// A recognizer could not read its region confidently.
     Unreadable { recognizer: &'static str },
 }
@@ -118,6 +137,7 @@ mod tests {
             Event::export_to_string(&config).expect("Event exports"),
             crate::notice_health::NoticeState::export_to_string(&config)
                 .expect("NoticeState exports"),
+            crate::hp_mp_health::HpMpState::export_to_string(&config).expect("HpMpState exports"),
         ]
         .join("\n");
         // ts-rs starts with its own banner; keep only the declarations.
