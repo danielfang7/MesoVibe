@@ -338,6 +338,9 @@ impl<B: Backend> Runner<B> {
                                 if self.picture.is_some_and(|before| before != picture) {
                                     self.exp.recheck();
                                     self.notices.recheck();
+                                    // The numbers are drawn elsewhere now: having read them at the
+                                    // old size says nothing about whether they're found at this one.
+                                    self.hp_mp_health = HpMpHealth::new();
                                 }
                                 self.picture = Some(picture);
                                 let hud = self.exp.observe_hud(&frame);

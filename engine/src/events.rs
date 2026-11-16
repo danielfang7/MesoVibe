@@ -23,8 +23,9 @@ pub const SCHEMA_VERSION: u32 = 6;
 ///
 /// The events of one engine tick always come in this order: the EXP bar's (`ExpChanged`, then
 /// `LevelUp`), the pickup notices' (`MesosGained`, `ItemGained`, `PartyBonus`, `NoticesMissed`),
-/// `MapChanged`, then `HpMpChanged`. So a plugin comparing two HP and MP readings can tell whether
-/// a level-up or a map change came between them.
+/// `MapChanged`, then `HpMpChanged`. So a plugin comparing two HP and MP readings sees a level-up
+/// or a map change the engine read between them first. The numbers can read while the EXP field
+/// can't (a cursor over it): a level-up then shows as a higher max HP or MP before `LevelUp`.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(tag = "type")]
 pub enum Event {
@@ -107,7 +108,9 @@ pub enum Event {
     /// The HP and MP numbers next to the EXP bar, `HP[712/1386]` and `MP[675/1140]`: sent when
     /// any of them changed, and when `continuous` is false. `continuous` is true only when the
     /// engine read the numbers on the frame just before this one, so the change between the two
-    /// readings is all that happened. It's false on the first reading after the numbers couldn't
+    /// readings is all that happened. A frame the game hadn't redrawn yet doesn't break the chain
+    /// unless it lasts about two seconds: nothing on screen changed. It's false on the first
+    /// reading after the numbers couldn't
     /// be read, after a pause in capture, a dark screen, a covered HUD, a new game size or a game
     /// restart: something may have happened unseen, and a plugin measuring rises starts again.
     HpMpChanged {

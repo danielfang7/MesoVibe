@@ -674,7 +674,7 @@ definePlugin({
 
     let session: Session = newSession(startedAtMs, null);
     let capture: CaptureState = startCapture;
-    let readers: Readers = startReaders ?? { notices: "off", waitingMesos: 0 };
+    let readers: Readers = startReaders ?? { notices: "off", waitingMesos: 0, hpMp: "off", hpMpMissing: null };
     let learningSince: number | null = readers.notices === "learning" ? startedAtMs : null;
     /** The map the player is on: undefined until the engine says. */
     let map: string | null | undefined;

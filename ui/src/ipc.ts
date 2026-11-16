@@ -150,7 +150,7 @@ export interface Status {
   hpMp: { hp: number; maxHp: number; mp: number; maxMp: number } | null;
   /** How the HP and MP numbers are being read. */
   hpMpState: HpMpState;
-  /** While `missing_digits`: the digits the numbers wait for, such as "7". */
+  /** While `missing_digits`: the digits the EXP field hasn't shown yet ("7", "045"); the one the numbers wait for is among them. */
   hpMpMissing: string | null;
   /** The map the player is on: null before one settled; no key when its name can't be read. */
   map: { key: string | null } | null;

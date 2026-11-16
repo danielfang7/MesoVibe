@@ -123,7 +123,8 @@ pub struct Status {
     /// How the HP and MP numbers are being read: `off`, `learning`, `reading`, `covered`,
     /// `not_found` or `missing_digits`.
     pub hp_mp_state: HpMpState,
-    /// While `missing_digits`: the digits the numbers wait for an EXP gain to show, such as "7".
+    /// While `missing_digits`: the digits the EXP field hasn't shown yet, such as "7" or "045".
+    /// The one the numbers wait for is among them.
     pub hp_mp_missing: Option<String>,
     /// The map the player is on: `None` before one settled; its key, or no key when its name
     /// can't be read.
