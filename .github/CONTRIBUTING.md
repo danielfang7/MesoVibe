@@ -37,6 +37,8 @@ pnpm build
 - `pnpm test` includes a smoke test of the panel in headless Chrome. It is skipped when Chrome isn't installed; set `MESOVIBE_CHROME` to use a particular browser.
 - The SDK's event and reader-state types in `sdk/src/generated` are generated from `engine/src/events.rs`, `engine/src/notice_health.rs` and `engine/src/hp_mp_health.rs`. After changing any of them, run `MESOVIBE_UPDATE_SDK=1 cargo test -p mesovibe-engine events`.
 - Plugins may import only from `@mesovibe/sdk` and their own folder. `pnpm build` fails on any other import.
+- The potions the Session Tracker counts are kept by hand in `plugins/src/session-tracker/potions.ts`. Each shop price says where and when it was checked in the game; `pnpm test` checks the IDs, names and sell prices against `engine/data/items.tsv`.
+- `scripts/session-tracker-harness.mjs` runs the Session Tracker the way the app does. Its `synthetic` option wires in the stand-in potion counter from `scripts/fixtures`, for testing potion costs and views without the game.
 
 ## Pull requests
 

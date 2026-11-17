@@ -10,6 +10,10 @@
  * held: it joins the session if
  * EXP follows within five minutes on the same map, so a walk to the grinding map doesn't count as
  * play and an errand in town doesn't become a session.
+ *
+ * Potions drunk count on the map from the session's first EXP gain (a potion on the walk to a map
+ * isn't the grind's cost), measured over their own read time, the time the HP and MP numbers were
+ * read, so pot cost/hr leaves out a stretch where a potion couldn't have been seen.
  */
 
 import type { Event, NoticeState } from "@mesovibe/sdk";
@@ -43,6 +47,21 @@ export interface MapEntry {
   i?: ItemEntry[];
   /** The NPC value of the items picked up on it while the notices were read: loot/hr's share. */
   rv?: number;
+  /** Potions drunk on it, by potion. */
+  u?: PotCount[];
+  /** Time on it while potions were being counted: pot cost/hr's denominator. */
+  h?: number;
+  /** Part of `h` while heals that aren't potions may have hidden some. */
+  hm?: number;
+}
+
+/** One potion's uses, by its item ID in potions.ts. */
+export interface PotCount {
+  k: number;
+  /** Uses counted. */
+  c: number;
+  /** Rises that may have been this potion: shown apart, costing nothing. */
+  y?: number;
 }
 
 /** One kind of item picked up, by its key in the [`Catalog`]. */
@@ -104,6 +123,19 @@ export interface LootFields {
   missed?: true;
   /** A digit named by its shape turned out wrong: amounts counted with it may be wrong. */
   shapesWrong?: true;
+  /** Where each potion's count came from, by item ID: rises, its quick slot, or both in turn. */
+  ps?: Record<string, PotSource>;
+  /** A past session's pot cost at End, so a later price change never rewrites history. */
+  pt?: number;
+}
+
+/** Where a potion's count came from. */
+export type PotSource = "rises" | "slots" | "both";
+
+/** Whether potions were being counted during a step, and whether heals from others may hide some. */
+export interface PotTime {
+  counting: boolean;
+  healing: boolean;
 }
 
 /** How long held loot waits for EXP on its map. */
@@ -123,10 +155,18 @@ export function entryFor(loot: LootFields, key: string | null, level: number | n
 }
 
 /**
- * Adds `step` of play on `map`; `reading` when the pickup notices were being read. Before the map
- * is known the time waits, and goes to the first map known, so the maps add up to the session.
+ * Adds `step` of play on `map`; `reading` when the pickup notices were being read, `pots` when
+ * potions were being counted. Before the map is known the time waits, and goes to the first map
+ * known, so the maps add up to the session.
  */
-export function addTime(loot: LootFields, map: string | null | undefined, step: number, reading: boolean, level: number | null): void {
+export function addTime(
+  loot: LootFields,
+  map: string | null | undefined,
+  step: number,
+  reading: boolean,
+  level: number | null,
+  pots?: PotTime,
+): void {
   if (step <= 0) return;
   if (map === undefined) {
     loot.unplaced = (loot.unplaced ?? 0) + step;
@@ -136,6 +176,10 @@ export function addTime(loot: LootFields, map: string | null | undefined, step: 
   entry.p += step + (loot.unplaced ?? 0);
   delete loot.unplaced;
   if (reading) entry.l += step;
+  if (pots?.counting) {
+    entry.h = (entry.h ?? 0) + step;
+    if (pots.healing) entry.hm = (entry.hm ?? 0) + step;
+  }
   if (level !== null) entry.e = level;
 }
 
@@ -162,6 +206,49 @@ export function itemKey(event: Extract<Event, { type: "ItemGained" }>): string {
   if (event.item_id !== null) return `#${event.item_id}`;
   if (event.name !== null) return `=${event.name}`;
   return `?${event.tab ?? ""}`;
+}
+
+/** Adds `count` uses of potion `item`, or that many maybe uses, to `list`. */
+export function addPot(list: PotCount[], item: number, count: number, maybe: boolean): void {
+  let entry = list.find((e) => e.k === item);
+  if (entry === undefined) {
+    entry = { k: item, c: 0 };
+    list.push(entry);
+  }
+  if (maybe) entry.y = (entry.y ?? 0) + count;
+  else entry.c += count;
+}
+
+/** Adds every count in `from` to `list`. */
+function addPots(list: PotCount[], from: readonly PotCount[]): void {
+  for (const pot of from) {
+    addPot(list, pot.k, pot.c, false);
+    if (pot.y) addPot(list, pot.k, pot.y, true);
+  }
+}
+
+/**
+ * Counts a potion use on the map, and where its count came from. `started`: the session has its
+ * first EXP gain; before it nothing counts, so a potion drunk on the walk to a map, or in town,
+ * isn't the session's.
+ */
+export function addPotUse(
+  loot: LootFields,
+  use: { item: number; count: number; maybe: boolean; source: "rises" | "slots" },
+  map: string | null | undefined,
+  started: boolean,
+  level: number | null,
+): void {
+  if (!started || map === undefined || !(use.count > 0)) return;
+  addPot((entryFor(loot, map, level).u ??= []), use.item, use.count, use.maybe);
+  notePotSource(loot, use.item, use.source);
+}
+
+/** Records where a potion's count came from: a second kind makes it "both". */
+function notePotSource(loot: LootFields, item: number, source: "rises" | "slots"): void {
+  const sources = (loot.ps ??= {});
+  const was = sources[item];
+  sources[item] = was === undefined || was === source ? source : "both";
 }
 
 /** Whether held loot has anything in it. */
@@ -264,13 +351,21 @@ export function addPickup(
  * [`HOLD_MS`], and is dropped otherwise. The maps start afresh with the session's `lead` of play
  * (the session's clock restarts at its first gain, keeping a short lead).
  */
-export function start(loot: LootFields, map: string | null | undefined, lead: number, reading: boolean, level: number | null, atMs: number): void {
+export function start(
+  loot: LootFields,
+  map: string | null | undefined,
+  lead: number,
+  reading: boolean,
+  level: number | null,
+  atMs: number,
+  pots?: PotTime,
+): void {
   // A list, even empty, marks a session as one from after map and mesos tracking began.
   loot.maps = [];
   delete loot.unplaced;
   const held = loot.held;
   delete loot.held;
-  addTime(loot, map, lead, reading, level);
+  addTime(loot, map, lead, reading, level, pots);
   if (held !== undefined && held.map === map && map !== undefined && atMs - held.atMs <= HOLD_MS) {
     const entry = entryFor(loot, map, level);
     // Its mesos count in the totals, not in the rate: they came before the time measured.
@@ -339,7 +434,10 @@ export function reads(state: NoticeState): boolean {
   return state === "reading";
 }
 
-/** Adds `from`'s loot into `into`: Undo puts a session back, keeping pickups made since. */
+/**
+ * Adds `from`'s loot into `into`: Undo puts a session back, keeping pickups and potions since.
+ * Neither read time is added, so mesos/hr and pot cost/hr keep the same base after an Undo.
+ */
 export function mergeLoot(into: LootFields, from: LootFields): void {
   for (const entry of from.maps ?? []) {
     const target = entryFor(into, entry.k, entry.s);
@@ -350,6 +448,7 @@ export function mergeLoot(into: LootFields, from: LootFields): void {
     if (entry.sm) target.sm = (target.sm ?? 0) + entry.sm;
     if (entry.mi) target.mi = true;
     if (entry.pa) target.pa = true;
+    if (entry.u !== undefined) addPots((target.u ??= []), entry.u);
   }
   if (from.held !== undefined) {
     const map = from.held.map;
@@ -358,6 +457,10 @@ export function mergeLoot(into: LootFields, from: LootFields): void {
       target.m += from.held.mesos;
       for (const item of from.held.items ?? []) addCount((target.i ??= []), item.k, item.c);
     }
+  }
+  for (const [item, source] of Object.entries(from.ps ?? {})) {
+    if (source === "both") (into.ps ??= {})[item] = "both";
+    else notePotSource(into, Number(item), source);
   }
   if (from.missed) into.missed = true;
   if (from.shapesWrong) into.shapesWrong = true;
@@ -384,6 +487,10 @@ export function validMaps(value: unknown): MapEntry[] | undefined {
     const items = validItems(e.i);
     if (items.length > 0) entry.i = items;
     if (count(e.rv) && e.rv > 0) entry.rv = e.rv;
+    const pots = validPots(e.u);
+    if (pots.length > 0) entry.u = pots;
+    if (count(e.h) && e.h > 0) entry.h = e.h;
+    if (count(e.hm) && e.hm > 0) entry.hm = Math.min(e.hm, entry.h ?? 0);
     maps.push(entry);
   }
   return maps;
@@ -399,6 +506,31 @@ export function validItems(value: unknown): ItemEntry[] {
     if (typeof k === "string" && ITEM_KEY.test(k) && typeof c === "number" && Number.isInteger(c) && c > 0) addCount(items, k, c);
   }
   return items;
+}
+
+/** A saved list of potion counts, with anything malformed dropped. */
+export function validPots(value: unknown): PotCount[] {
+  if (!Array.isArray(value)) return [];
+  const whole = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
+  const pots: PotCount[] = [];
+  for (const raw of value) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const { k, c, y } = raw as Record<string, unknown>;
+    if (!whole(k) || k === 0 || !whole(c) || !(y === undefined || whole(y))) continue;
+    if (c > 0) addPot(pots, k, c, false);
+    if (y !== undefined && y > 0) addPot(pots, k, y, true);
+  }
+  return pots;
+}
+
+/** A saved record of where potion counts came from, with anything malformed dropped. */
+export function validPotSources(value: unknown): Record<string, PotSource> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const sources: Record<string, PotSource> = {};
+  for (const [item, source] of Object.entries(value)) {
+    if (/^[1-9]\d*$/.test(item) && (source === "rises" || source === "slots" || source === "both")) sources[item] = source;
+  }
+  return Object.keys(sources).length > 0 ? sources : undefined;
 }
 
 /** What an item key looks like: "#<item ID>", "=<name>" or "?<tab>" (itemKey). */

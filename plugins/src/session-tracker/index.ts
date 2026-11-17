@@ -9,11 +9,13 @@
 
 import { definePlugin, formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";
 import type { CaptureState, Cell, Readers, RowAction, SessionSummary, ViewNode } from "@mesovibe/sdk";
+import { wiredSource } from "./count-source.js";
 import {
   addCount,
   addExp,
   addItem,
   addPickup,
+  addPotUse,
   addTime,
   hasLoot,
   HOLD_MS,
@@ -31,8 +33,11 @@ import {
   validCatalog,
   validItems,
   validMaps,
+  validPotSources,
 } from "./loot.js";
-import type { Catalog, ItemEntry, ItemInfo, LootFields, MapEntry } from "./loot.js";
+import type { Catalog, ItemEntry, ItemInfo, LootFields, MapEntry, PotTime } from "./loot.js";
+import { potTotals } from "./pot-cost.js";
+import { allTimePotRows, netCell, potionsSection, potsLine } from "./potions-view.js";
 import {
   advance,
   compare,
@@ -121,6 +126,12 @@ function validLoot<T extends LootFields>(session: T): T {
     if (items.length > 0) session.held.items = items;
     else delete session.held.items;
   }
+  // A malformed potion field is dropped and the session kept.
+  const sources = validPotSources(session.ps);
+  if (sources === undefined) delete session.ps;
+  else session.ps = sources;
+  const mesos = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n >= 0;
+  if (!mesos(session.pt)) delete session.pt;
   return session;
 }
 
@@ -177,14 +188,25 @@ function summary(session: Session, atMs: number, readers: Readers): SessionSumma
   };
 }
 
+/**
+ * Keeps the session's potions with its past self: where each count came from, and the cost at
+ * today's prices, frozen so a later price change never rewrites it.
+ */
+function keepPots(past: Past, session: Session, catalog: Catalog): Past {
+  if (session.ps !== undefined) past.ps = { ...session.ps };
+  const totals = potTotals(past, catalog);
+  if (totals.readMs > 0 || totals.lines.length > 0) past.pt = totals.cost;
+  return past;
+}
+
 /** The session as history keeps it, loot included, when it's worth keeping. */
-function finishWithLoot(session: Session, atMs: number): Past | null {
+function finishWithLoot(session: Session, atMs: number, catalog: Catalog): Past | null {
   const past: Past | null = finish(session);
   if (past !== null) {
     if (session.maps !== undefined) past.maps = structuredClone(session.maps);
     if (session.missed) past.missed = true;
     if (session.shapesWrong) past.shapesWrong = true;
-    return past;
+    return keepPots(past, session, catalog);
   }
   // Loot for five minutes and no EXP: kept, as a session of its own.
   const held = session.held;
@@ -434,7 +456,14 @@ function lootPartial(loot: LootFields, catalog: Catalog): boolean {
  * All time: time played, mesos, item value and loot/hr over every session kept and the running
  * one, and the items picked up most. Empty until anything was picked up.
  */
-function allTimeView(session: Session, history: Past[], allTime: AllTime, catalog: Catalog, expanded: Set<string>): ViewNode[] {
+function allTimeView(
+  session: Session,
+  history: Past[],
+  allTime: AllTime,
+  catalog: Catalog,
+  expanded: Set<string>,
+  pots: boolean,
+): ViewNode[] {
   const running = session.expGained > 0 || hasLoot(session.held) ? [session] : [];
   // Oldest first, so ties in the item list go to the item picked up first.
   const sessions: (Past | Session)[] = [...[...history].reverse(), ...running];
@@ -452,6 +481,7 @@ function allTimeView(session: Session, history: Past[], allTime: AllTime, catalo
   ];
   if (items.length > 0) rows.push(["Item value", mesosText(itemsValue(items, catalog), partial || valueAtLeast(items, catalog), true)]);
   if (rate !== null) rows.push(["Loot/hr", formatCompact(rate)]);
+  if (pots) rows.push(...allTimePotRows(sessions, catalog, running[0] ?? null));
   const children: ViewNode[] = [{ kind: "keyValue", items: rows }];
   if (items.length > 0) children.push(...itemList(items, catalog, "all-time", expanded));
   return children;
@@ -494,6 +524,7 @@ function pastRow(past: Past, first: Map<string, number>): [Cell[], string[], Row
 /**
  * The Loot tab: All time on top, then each past session's loot, laid out like Past sessions: what
  * it picked up (mesos and items at NPC prices) and its loot/hr over the time pickups were read.
+ * With potions counted (`pots`), each also shows its net loot/hr and a line of its potions.
  * Sessions from before loot tracking aren't listed.
  */
 function lootView(
@@ -503,14 +534,22 @@ function lootView(
   catalog: Catalog,
   expanded: Set<string>,
   showMore: boolean,
+  pots: boolean,
 ): ViewNode[] {
   const first = firstPlayed(history, session);
   const tracked = history.filter((past) => past.maps !== undefined);
   const rows = tracked.slice(0, showMore ? SHOWN_MORE : SHOWN_HISTORY).map((past): [Cell[], string[]] => {
     const rate = lootRate(past);
+    const cells: Cell[] = [
+      pastMap(past, first).cell,
+      mesosText(lootValue(past, catalog), lootPartial(past, catalog), true),
+      rate === null ? null : formatCompact(rate),
+    ];
+    if (!pots) return [cells, pastLines(past)];
+    const line = potsLine(past, catalog);
     return [
-      [pastMap(past, first).cell, mesosText(lootValue(past, catalog), lootPartial(past, catalog), true), rate === null ? null : formatCompact(rate)],
-      pastLines(past),
+      [...cells, netCell(past, catalog)],
+      line === null ? pastLines(past) : [...pastLines(past), line],
     ];
   });
   const past: ViewNode[] =
@@ -519,8 +558,8 @@ function lootView(
       : [
           {
             kind: "table",
-            columns: ["Map", "Loot gained", "Loot/hr"],
-            numeric: [false, true, true],
+            columns: pots ? ["Map", "Loot gained", "Loot/hr", "Net/hr"] : ["Map", "Loot gained", "Loot/hr"],
+            numeric: pots ? [false, true, true, true] : [false, true, true],
             rows: rows.map(([cells]) => cells),
             details: rows.map(([, lines]) => lines),
           },
@@ -529,7 +568,7 @@ function lootView(
             : []),
         ];
   return [
-    { kind: "section", title: "All time", children: allTimeView(session, history, allTime, catalog, expanded) },
+    { kind: "section", title: "All time", children: allTimeView(session, history, allTime, catalog, expanded, pots) },
     { kind: "section", title: "Past sessions", children: past },
   ];
 }
@@ -549,6 +588,7 @@ function view(
   showMore: boolean,
   catalog: Catalog,
   expanded: Set<string>,
+  potions: ViewNode | null,
 ): ViewNode[] {
   const current: ViewNode[] = [];
   const left = toGo(session);
@@ -642,6 +682,7 @@ function view(
   return [
     ...(current.length === 0 ? [] : [{ kind: "section", title: "This session", children: current } as const]),
     ...(itemSection.length === 0 ? [] : [{ kind: "section", title: "Items", children: itemSection } as const]),
+    ...(potions === null ? [] : [potions]),
     { kind: "section", title: "Past sessions", children: past },
   ];
 }
@@ -669,12 +710,14 @@ definePlugin({
     };
     // A session still running when MesoVibe closed ends where it last moved: closing counts as
     // End.
-    const leftOver = saved.current === null ? null : finishWithLoot(saved.current, saved.current.lastAtMs);
+    const leftOver = saved.current === null ? null : finishWithLoot(saved.current, saved.current.lastAtMs, catalog);
     if (leftOver !== null) pushHistory(leftOver);
 
     let session: Session = newSession(startedAtMs, null);
     let capture: CaptureState = startCapture;
     let readers: Readers = startReaders ?? { notices: "off", waitingMesos: 0, hpMp: "off", hpMpMissing: null };
+    /** What counts potions, or null while nothing does: then none are counted or shown. */
+    const source = wiredSource();
     let learningSince: number | null = readers.notices === "learning" ? startedAtMs : null;
     /** The map the player is on: undefined until the engine says. */
     let map: string | null | undefined;
@@ -698,17 +741,24 @@ definePlugin({
     };
     const show = (atMs: number) => {
       context.setSummary(summary(session, atMs, readers));
-      context.render(view(session, history, capture, map, { readers, learningSince, atMs }, showMore, catalog, expanded));
-      context.render(lootView(session, history, allTime, catalog, expanded, lootMore), "loot");
+      const loot = lootShown(readers) ? lootRate(session) : null;
+      const potions = source === null ? null : potionsSection(session, catalog, source, readers, loot, atMs);
+      context.render(view(session, history, capture, map, { readers, learningSince, atMs }, showMore, catalog, expanded, potions));
+      context.render(lootView(session, history, allTime, catalog, expanded, lootMore, source !== null), "loot");
     };
     const remember = (kind: Undo["kind"], atMs: number) => {
       undo = { kind, session: structuredClone(session), history: history.slice(), allTime, until: atMs + UNDO_MS };
     };
+    /** Whether potions are being counted now: a source is wired in and the HP and MP numbers are read. */
+    const potTime = (atMs: number): PotTime | undefined =>
+      source === null || readers.hpMp !== "reading"
+        ? undefined
+        : { counting: true, healing: source.healing("hp", atMs) || source.healing("mp", atMs) };
     /** Moves the session's clock, giving the time played to the map the player is on. */
     const tick = (atMs: number) => {
       const before = session.activeMs;
       advance(session, atMs, capture === "capturing" && session.paused !== true);
-      addTime(session, map, session.activeMs - before, reads(readers.notices), session.last?.level ?? null);
+      addTime(session, map, session.activeMs - before, reads(readers.notices), session.last?.level ?? null, potTime(atMs));
     };
     persist(startedAtMs, leftOver !== null ? 0 : SAVE_EVERY_MS);
     show(startedAtMs);
@@ -716,6 +766,8 @@ definePlugin({
     return {
       onEvent(event, atMs) {
         tick(atMs);
+        // The source sees every event, paused or not, so it always knows the last reading.
+        const uses = source?.onEvent(event, atMs) ?? [];
         if (event.type === "ExpChanged" && session.paused) {
           // Paused, the bar is still followed: the strip's level stays true, and Resume counts only
           // what's gained after it. A level-up still counts, so the session's levels add up.
@@ -737,7 +789,7 @@ definePlugin({
             session.activeMs = lead;
             session.startLevel = before?.level ?? event.level;
             session.expLost = 0;
-            startLoot(session, map, lead, reads(readers.notices), event.level, atMs);
+            startLoot(session, map, lead, reads(readers.notices), event.level, atMs, potTime(atMs));
           }
           addExp(session, map, session.expGained - gainedBefore, event.level);
           // Saved on EXP changes too, at most every 5 s, so a close loses at most that.
@@ -758,6 +810,14 @@ definePlugin({
           show(atMs);
         } else if (!session.paused && event.type === "ItemGained") {
           addItem(session, catalog, event, map, session.expGained > 0, reads(readers.notices), atMs, session.last?.level ?? null);
+          unsaved = true;
+          persist(atMs, EXP_SAVE_EVERY_MS);
+          show(atMs);
+        }
+        // Potions drunk while paused aren't the session's. HP and MP readings come four times a
+        // second, so only a counted use redraws and saves; the 1 Hz tick does the rest.
+        if (uses.length > 0 && !session.paused) {
+          for (const use of uses) addPotUse(session, use, map, session.expGained > 0, session.last?.level ?? null);
           unsaved = true;
           persist(atMs, EXP_SAVE_EVERY_MS);
           show(atMs);
@@ -785,7 +845,7 @@ definePlugin({
         tick(atMs);
         if (action === "end") {
           // Saves the session to Past sessions and starts the next one at the next gain.
-          const past = finishWithLoot(session, atMs);
+          const past = finishWithLoot(session, atMs, catalog);
           if (past !== null) {
             const said = recap(session);
             remember("end", atMs);
@@ -808,11 +868,14 @@ definePlugin({
           // The clock above ran up to the press; from here nothing counts until Resume.
           if (session.expGained > 0 && session.paused !== true) {
             session.paused = true;
+            // No potion step spans the pause: its rise could be one drunk while paused.
+            source?.restart();
             persist(atMs, 0);
           }
         } else if (action === "resume") {
           if (session.paused) {
             delete session.paused;
+            source?.restart();
             persist(atMs, 0);
           }
         } else if (action.startsWith(DELETE_SESSION)) {
