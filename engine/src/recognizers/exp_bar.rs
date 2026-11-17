@@ -34,6 +34,7 @@
 //! ([`ExpBarReader::calibrate`]) stays as a fallback.
 
 use super::exp_table;
+use super::hp_mp::{self, HpMp, HpMpUnreadable, SlashLearner};
 use crate::events::Event;
 use crate::frame::Frame;
 use crate::glyph::{Atlas, Glyph, LearnError, Rect, cut, segment};
@@ -71,6 +72,25 @@ const EXP_TEXT: Area = Area {
     dx: 465,
     up: 28,
     width: 100,
+    height: 7,
+};
+/// The HP numbers, for example `[712/1386]`, on the EXP field's rows: from after the "HP" label,
+/// whose ink ends at dx 234, to before the "MP" label at dx 329. Measured on recorded captures
+/// (windowed 800x600, 1024x768 and 1366x768, on Windows and a Mac): the numbers start at dx 237
+/// whatever their length, and `[1386/1386]` ends at dx 297, so four-digit values leave 30 px. Even
+/// `[30000/30000]` would end near dx 310.
+const HP_TEXT: Area = Area {
+    dx: 236,
+    up: 28,
+    width: 92,
+    height: 7,
+};
+/// The MP numbers: from after the "MP" label, whose ink ends at dx 345, to before the "EXP." label.
+/// They start at dx 348; `[1140/1140]` ends at dx 408.
+const MP_TEXT: Area = Area {
+    dx: 347,
+    up: 28,
+    width: 91,
     height: 7,
 };
 /// The level digits on their orange tiles.
@@ -272,6 +292,13 @@ pub struct ExpReading {
     pub confirmed: bool,
 }
 
+/// What one pass over a frame's HUD read: the EXP bar, and the HP and MP numbers beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HudReading {
+    pub exp: Result<ExpReading, Unreadable>,
+    pub hp_mp: Result<HpMp, HpMpUnreadable>,
+}
+
 /// What the player read off the HUD, for typed calibration (the fallback).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypedReading {
@@ -374,6 +401,8 @@ pub struct ExpBarReader {
     /// Started from saved knowledge ([`ExpBarReader::from_knowledge`]) that hasn't read the HUD
     /// yet this session: how many frames in a row its shapes didn't fit.
     restored: Option<u32>,
+    /// The HP and MP numbers' slash, learned on screen each session and never saved.
+    slash: SlashLearner,
 }
 
 /// The first line of [`ExpBarReader::knowledge`]'s text. A reader refuses any other.
@@ -419,14 +448,48 @@ impl ExpBarReader {
         }
     }
 
+    /// Learns from a frame and reads its EXP bar: [`ExpBarReader::observe_hud`] without the HP and
+    /// MP numbers.
+    pub fn observe(&mut self, frame: &Frame) -> Result<ExpReading, Unreadable> {
+        self.observe_hud(frame).exp
+    }
+
     /// Learns from a frame and reads it. Call it on every frame: while EXP moves, the reader
     /// names the digit shapes itself, and later it follows level-ups and learns digits it hadn't
     /// seen.
-    pub fn observe(&mut self, frame: &Frame) -> Result<ExpReading, Unreadable> {
+    ///
+    /// The HP and MP numbers are read in the same pass, with the EXP field's digits, once those are
+    /// confirmed and checked this session, wherever the learned "EXP." label is found. They don't
+    /// need the EXP field itself to read: a cursor over it leaves them readable.
+    pub fn observe_hud(&mut self, frame: &Frame) -> HudReading {
         at_1x(frame, |frame, nominal| {
-            dark_if_hidden(self.observe_at(frame, nominal), frame, nominal)
+            let (exp, placed) = self.observe_at(frame, nominal);
+            let hp_mp = match placed {
+                None => Err(HpMpUnreadable::NoHud),
+                Some(_) if !self.learner.confirmed => Err(HpMpUnreadable::NoHud),
+                Some(_) if self.restored.is_some() => Err(HpMpUnreadable::Unchecked),
+                Some(layout) => hp_mp::read(
+                    frame,
+                    (layout.rect(HP_TEXT), layout.rect(MP_TEXT)),
+                    text_ink,
+                    &self.digits,
+                    &mut self.slash,
+                ),
+            };
+            HudReading {
+                exp: dark_if_hidden(exp, frame, nominal),
+                hp_mp,
+            }
         })
-        .and_then(|r| r)
+        .unwrap_or_else(|why| HudReading {
+            exp: Err(why),
+            hp_mp: Err(HpMpUnreadable::NoHud),
+        })
+    }
+
+    /// Whether the HP and MP numbers' slash has been learned this session.
+    pub fn knows_slash(&self) -> bool {
+        self.slash.is_learned()
     }
 
     /// What the reader has confirmed, as text to keep on the player's device so the next session
@@ -483,7 +546,13 @@ impl ExpBarReader {
         Some(reader)
     }
 
-    fn observe_at(&mut self, frame: &Frame, nominal: Layout) -> Result<ExpReading, Unreadable> {
+    /// Learns from and reads the EXP bar, and says where the learned "EXP." label was matched
+    /// exactly, which places the HP and MP numbers.
+    fn observe_at(
+        &mut self,
+        frame: &Frame,
+        nominal: Layout,
+    ) -> (Result<ExpReading, Unreadable>, Option<Layout>) {
         let mut found = self.find_label(frame, nominal);
         if self.restored.is_some() && found.is_none() && find_by_structure(frame, nominal).is_some()
         {
@@ -493,14 +562,15 @@ impl ExpBarReader {
             found = None;
         }
         let result = self.observe_found(frame, nominal, found);
+        let placed = found.and_then(|offset| nominal.shifted(offset));
         let Some(misses) = self.restored else {
-            return result;
+            return (result, placed);
         };
         let missed = match result {
             // The saved shapes read the HUD and the bar fits the EXP table: they're right.
             Ok(reading) if reading.needed.is_some() => {
                 self.restored = None;
-                return Ok(reading);
+                return (Ok(reading), placed);
             }
             // Read, but not provably right: shown unconfirmed, and no events.
             Ok(reading) => Ok(ExpReading {
@@ -509,14 +579,14 @@ impl ExpBarReader {
             }),
             Err(Unreadable::UnknownGlyph(_) | Unreadable::Garbled(_)) => result,
             // Covered, dark or elsewhere: no evidence either way.
-            Err(_) => return result,
+            Err(_) => return (result, placed),
         };
         if misses + 1 >= RESTORE_PATIENCE {
             *self = ExpBarReader::new();
         } else {
             self.restored = Some(misses + 1);
         }
-        missed
+        (missed, placed)
     }
 
     fn observe_found(
@@ -554,10 +624,14 @@ impl ExpBarReader {
     /// Shapes confirmed before are checked again the way saved ones are at the start of a session:
     /// readings with them are unconfirmed until one fits the EXP table, and they're dropped and
     /// learned again when the HUD is plainly there without the learned label, or when they keep
-    /// failing. Shapes still being learned start over.
+    /// failing. Shapes still being learned start over, and the HP and MP numbers' slash is learned
+    /// again.
     pub fn recheck(&mut self) {
         match self.learner.confirmed {
-            true => self.restored = self.restored.or(Some(0)),
+            true => {
+                self.restored = self.restored.or(Some(0));
+                self.slash = SlashLearner::default();
+            }
             false => *self = ExpBarReader::new(),
         }
     }
@@ -1475,6 +1549,8 @@ pub(crate) mod test_support {
     pub(crate) struct Hud {
         pub(crate) exp_font: Font,
         pub(crate) level_font: Font,
+        /// The HP and MP numbers' slash, the one glyph they have that the EXP field doesn't.
+        pub(crate) slash_font: Font,
         /// Varies the invented "EXP." label's pattern: a game update that redrew it.
         pub(crate) label: u32,
     }
@@ -1484,6 +1560,7 @@ pub(crate) mod test_support {
             Hud {
                 exp_font: Font::new(EXP_CHARS, 0),
                 level_font: Font::new(LEVEL_CHARS, 7),
+                slash_font: Font::new("/", 11),
                 label: 3,
             }
         }
@@ -1533,6 +1610,38 @@ pub(crate) mod test_support {
             c
         }
 
+        /// Adds the "HP" and "MP" labels (invented marks) and the two fields, such as `[712/1386]`,
+        /// where the HUD draws them: brackets yellow-green, the rest white.
+        pub(crate) fn draw_hp_mp(&self, c: &mut Canvas, hp: &str, mp: &str) {
+            let (left, bottom) = ((c.width - 800) / 2, c.height);
+            for (from, to) in [(220, 235), (329, 346)] {
+                for x in left + from..left + to {
+                    for y in bottom - 29..bottom - 21 {
+                        if (x + y) % 3 != 0 {
+                            c.set(x, y, WHITE);
+                        }
+                    }
+                }
+            }
+            for (field, dx) in [(hp, 237), (mp, 348)] {
+                let mut x = left + dx;
+                for ch in field.chars() {
+                    let font = if ch == '/' {
+                        &self.slash_font
+                    } else {
+                        &self.exp_font
+                    };
+                    let color = if matches!(ch, '[' | ']') {
+                        GREEN
+                    } else {
+                        WHITE
+                    };
+                    c.text(font, &ch.to_string(), x, bottom - 28, |_| color);
+                    x += font.columns(ch).len() as u32 + 1;
+                }
+            }
+        }
+
         pub(crate) fn draw_values(&self, level: u16, exp: u64, pct_hundredths: u16) -> Canvas {
             self.draw(
                 1366,
@@ -1549,6 +1658,25 @@ pub(crate) mod test_support {
                 &exp_text(r.exp, r.pct_hundredths),
                 &r.level.to_string(),
             )
+        }
+    }
+
+    /// A 768-line picture as the game stretches it to fill a `width` x `height` game area: only the
+    /// HUD's rows and a few above them, which is all the readers need.
+    pub(crate) fn stretched(canvas: &Canvas, width: u32, height: u32) -> Canvas {
+        let rgb: Vec<[u8; 3]> = canvas
+            .bgra
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| [p[2], p[1], p[0]])
+            .collect();
+        let from_row = height - (HUD_ROWS + 4) * height / canvas.height;
+        let bgra = unstretch::stretch(&rgb, canvas.width, width, height, from_row);
+        Canvas {
+            width,
+            height,
+            bgra,
         }
     }
 
@@ -2122,26 +2250,7 @@ mod tests {
         );
     }
 
-    /// `canvas`, the game's picture (768 lines, or a smaller Full Screen size), stretched to
-    /// `width` x `height` the way the game does. Only the rows the HUD's recovery needs are drawn,
-    /// to keep the tests quick.
-    fn stretched(canvas: &Canvas, width: u32, height: u32) -> Canvas {
-        let rgb: Vec<[u8; 3]> = canvas
-            .bgra
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|p| [p[2], p[1], p[0]])
-            .collect();
-        let from_row = height - (HUD_ROWS + 4) * height / canvas.height;
-        let bgra = unstretch::stretch(&rgb, canvas.width, width, height, from_row);
-        Canvas {
-            width,
-            height,
-            bgra,
-        }
-    }
-
+    /// Stretched Full Screen sizes the tests cover.
     const STRETCHED: [(u32, u32); 3] = [(1920, 1200), (2560, 1440), (1920, 1080)];
 
     #[test]

@@ -17,11 +17,13 @@ Every release lists its files' checksums in `SHA256SUMS`.
 
 MesoVibe only looks at the game window, through the operating system's screen capture. It never sends input to the game, never reads or writes the game's memory or files, never injects code, and never touches its network traffic. Changes that would do any of these are not accepted.
 
+MesoVibe reads your HP and MP numbers and never drinks a potion for you.
+
 MesoVibe is not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon.
 
 ## Project layout
 
-- [engine](engine/) - screen capture and the recognizers that read the game's EXP bar, chat, pickup notices and map name, plus the bundled item and map data in [engine/data](engine/data/)
+- [engine](engine/) - screen capture and the recognizers that read the game's EXP bar, HP and MP numbers, chat, pickup notices and map name, plus the bundled item and map data in [engine/data](engine/data/)
 - [app](app/) - the Tauri desktop app: windows, tray, settings, session storage and updates
 - [ui](ui/) - the panel, the mini-HUD and the chat overlay
 - [sdk](sdk/) - the plugin API, `@mesovibe/sdk`

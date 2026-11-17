@@ -12,6 +12,7 @@ pub mod events;
 pub mod frame;
 pub mod game_data;
 pub mod glyph;
+pub mod hp_mp_health;
 pub mod letterbox;
 pub mod lines;
 pub mod notice_health;

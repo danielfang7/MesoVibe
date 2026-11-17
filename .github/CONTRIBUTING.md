@@ -35,7 +35,7 @@ pnpm build
 ```
 
 - `pnpm test` includes a smoke test of the panel in headless Chrome. It is skipped when Chrome isn't installed; set `MESOVIBE_CHROME` to use a particular browser.
-- The SDK's event types in `sdk/src/generated` are generated from `engine/src/events.rs`. After changing that file, run `MESOVIBE_UPDATE_SDK=1 cargo test -p mesovibe-engine events`.
+- The SDK's event and reader-state types in `sdk/src/generated` are generated from `engine/src/events.rs`, `engine/src/notice_health.rs` and `engine/src/hp_mp_health.rs`. After changing any of them, run `MESOVIBE_UPDATE_SDK=1 cargo test -p mesovibe-engine events`.
 - Plugins may import only from `@mesovibe/sdk` and their own folder. `pnpm build` fails on any other import.
 
 ## Pull requests

@@ -4,6 +4,7 @@ pub mod chat;
 mod digit_shapes;
 pub mod exp_bar;
 pub mod exp_table;
+pub mod hp_mp;
 pub mod map_name;
 pub mod notices;
 

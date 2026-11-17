@@ -11,7 +11,7 @@
 // (chat.html) takes `grind`. During play, whisper, party and friend lines arrive every few
 // seconds, drawn here as pictures the way the host hands them over.
 // Release builds leave this file out (ipc.ts loads it only in development).
-import type { Event as GameEvent } from "@mesovibe/sdk";
+import { SCHEMA_VERSION, type Event as GameEvent } from "@mesovibe/sdk";
 
 import type { ChatChannel, ChatHost, ChatLine, ChatPosition, GamePicture, HudHost, HudSummary, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
 
@@ -127,7 +127,19 @@ export function mockHost(scenario: string): Host {
   const status = (): Status => {
     const now = Date.now();
     const t = now - started;
-    const base = { reading: !settings.safeMode, atMs: now, stale: false, chat: null, notices: "off" as const, waitingMesos: 0, map: null, fullScreen: false };
+    const base = {
+      reading: !settings.safeMode,
+      atMs: now,
+      stale: false,
+      chat: null,
+      notices: "off" as const,
+      waitingMesos: 0,
+      hpMp: null,
+      hpMpState: "off" as const,
+      hpMpMissing: null,
+      map: null,
+      fullScreen: false,
+    };
     if (!base.reading) return { ...base, state: "off", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
     const game = { width: 1366, height: 768, scale: 2 };
     if (scenario === "blocked") {
@@ -146,7 +158,7 @@ export function mockHost(scenario: string): Host {
     if (scenario === "dark") return darkStatus(started, game);
     if (scenario === "fullscreen") return fullScreenStatus(started);
     if (t < 4000) {
-      return { ...base, state: "capturing", game, exp: null, unreadable: "learning", error: null, chat: "reading", calibration: "learning", notices: "learning" };
+      return { ...base, state: "capturing", game, exp: null, unreadable: "learning", error: null, chat: "reading", calibration: "learning", notices: "learning", hpMpState: "learning" };
     }
     const pctHundredths = Math.round((exp * 10_000) / NEEDED);
     return {
@@ -154,6 +166,9 @@ export function mockHost(scenario: string): Host {
       state: "capturing",
       chat: "reading",
       notices: "reading",
+      // A potion every few seconds, spent again in between.
+      hpMp: { hp: 1386 - (Math.floor(t / 250) % 12) * 40, maxHp: 1386, mp: 1140 - (Math.floor(t / 250) % 9) * 16, maxMp: 1140 },
+      hpMpState: "reading",
       map: scenario === "loot" ? { key: lootMap(t) } : null,
       game,
       exp: { level, exp, pctHundredths, needed: NEEDED, confirmed: true },
@@ -208,7 +223,7 @@ export function mockHost(scenario: string): Host {
   let lastMap: string | null = null;
 
   return {
-    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: 5 }),
+    appInfo: async () => ({ version: "0.1.0-mock", os: "macos", eventSchema: SCHEMA_VERSION }),
     settings: async () => settings,
     startup: async () => startup,
     setStartup: async (on) => {
@@ -302,6 +317,9 @@ function darkStatus(started: number, game: Status["game"]): Status {
     calibration: "learning",
     notices: "reading",
     waitingMesos: 0,
+    hpMp: null,
+    hpMpState: "reading",
+    hpMpMissing: null,
     map: null,
   };
 }
@@ -358,6 +376,9 @@ export function mockHudHost(scenario: string): HudHost {
       fullScreen: false,
       notices: "reading" as const,
       waitingMesos: 0,
+      hpMp: null,
+      hpMpState: "reading" as const,
+      hpMpMissing: null,
       map: null,
     };
     if (scenario === "dark") return darkStatus(started, base.game);

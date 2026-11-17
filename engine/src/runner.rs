@@ -19,6 +19,11 @@
 //! differently, so the readers check what they learned before against it, and learn again if it
 //! no longer fits.
 //!
+//! The HP and MP numbers are read in the EXP bar's pass, so each frame's numbers come with that
+//! frame. `HpMpChanged` is `continuous` only when the frame just before also read them: any frame
+//! without a reading (covered, dark, a pause, a new size, a restart) breaks the chain, while a stale
+//! grab, which reads nothing new, leaves it as it was.
+//!
 //! A grab that brought no new frame is stale: the window stopped drawing (a Mac reports a
 //! minimized window's last picture). It isn't read. After
 //! [`STALE_AFTER`] of them in a row the engine pauses, and it keeps checking for a new frame each
@@ -30,16 +35,20 @@ use std::time::Instant;
 use crate::capture::{Backend, CaptureError, CaptureSignal, CaptureState, GameWindow, Grab};
 use crate::events::Event;
 use crate::game_data;
+use crate::hp_mp_health::{HpMpHealth, HpMpState};
 use crate::letterbox;
 use crate::notice_health::{NoticeHealth, NoticeState};
 use crate::recognizers::chat::{self, ChatReader, ChatReading, ChatUnreadable};
 use crate::recognizers::exp_bar::{self, ExpBarReader, ExpReading, Unreadable};
+use crate::recognizers::hp_mp::{HpMp, HpMpUnreadable};
 use crate::recognizers::map_name::{MapFollower, MapName};
 use crate::recognizers::notices::{self, Notice, NoticeReader, NoticeReading, NoticeUnreadable};
 use crate::unstretch::NATIVE_HEIGHT;
 
 /// The name the EXP bar reader goes by in [`Event::Unreadable`].
 pub const EXP_BAR: &str = "exp_bar";
+/// The name the HP and MP reader goes by in [`Event::Unreadable`].
+pub const HP_MP: &str = "hp_mp";
 
 /// Grabs in a row with no new frame before the engine pauses: 2 s at 4 Hz.
 pub const STALE_AFTER: u32 = 8;
@@ -60,6 +69,9 @@ pub struct Tick {
     pub window: Option<GameWindow>,
     /// The EXP bar this tick: `None` unless capturing.
     pub exp: Option<Result<ExpReading, Unreadable>>,
+    /// The HP and MP numbers this tick, read in the EXP bar's pass: `None` unless a fresh frame
+    /// was read.
+    pub hp_mp: Option<Result<HpMp, HpMpUnreadable>>,
     /// New chat lines this tick: `None` unless capturing. Chat stays out of `events`, so plugins
     /// never see it.
     pub chat: Option<Result<ChatReading, ChatUnreadable>>,
@@ -92,6 +104,13 @@ pub struct Runner<B> {
     confirmed: Option<ExpReading>,
     /// Whether the EXP bar read last tick, so a covered bar is reported once, not every tick.
     readable: bool,
+    /// The HP and MP numbers read on the last fresh frame, or `None` when that frame didn't read
+    /// them, or capture stopped since: what makes the next reading continuous.
+    hp_mp: Option<HpMp>,
+    /// Whether the HP and MP numbers read since they were last reported unreadable.
+    hp_mp_readable: bool,
+    hp_mp_health: HpMpHealth,
+    hp_mp_state: HpMpState,
     /// What the engine last saw, for the "What MesoVibe sees" panel and the recorder.
     last_grab: Option<Grab>,
     /// Whether that was a whole frame, read for the map's name rather than the usual strip.
@@ -133,6 +152,10 @@ impl<B: Backend> Runner<B> {
             map: MapFollower::new(),
             confirmed: None,
             readable: false,
+            hp_mp: None,
+            hp_mp_readable: false,
+            hp_mp_health: HpMpHealth::new(),
+            hp_mp_state: HpMpState::Off,
             last_grab: None,
             last_whole: false,
             stale: 0,
@@ -175,6 +198,24 @@ impl<B: Backend> Runner<B> {
         self.notice_state
     }
 
+    /// How the HP and MP numbers are being read, as of the last tick.
+    pub fn hp_mp_state(&self) -> HpMpState {
+        self.hp_mp_state
+    }
+
+    /// While the HP and MP numbers wait for a digit, the digits the EXP field hasn't shown yet: the
+    /// one they wait for is among them, but its shape alone can't say which.
+    pub fn hp_mp_missing(&self) -> Option<String> {
+        (self.hp_mp_state == HpMpState::MissingDigits).then(|| {
+            self.exp
+                .missing()
+                .exp
+                .into_iter()
+                .filter(char::is_ascii_digit)
+                .collect()
+        })
+    }
+
     /// The map the player is on: `None` before one settled, `Some(None)` for a map whose name
     /// can't be read, else its key.
     pub fn current_map(&self) -> Option<Option<&str>> {
@@ -206,6 +247,8 @@ impl<B: Backend> Runner<B> {
             self.notices.restart();
             self.map = MapFollower::new();
             self.readable = false;
+            self.hp_mp = None;
+            self.hp_mp_readable = false;
             self.stale = 0;
         }
         // Another size (in or out of Full Screen, say) has bars of its own, if any, and its own
@@ -234,6 +277,7 @@ impl<B: Backend> Runner<B> {
             state: self.state,
             window: found,
             exp: None,
+            hp_mp: None,
             chat: None,
             notices: None,
             map: None,
@@ -294,9 +338,11 @@ impl<B: Backend> Runner<B> {
                                 if self.picture.is_some_and(|before| before != picture) {
                                     self.exp.recheck();
                                     self.notices.recheck();
+                                    self.hp_mp_health.new_picture();
                                 }
                                 self.picture = Some(picture);
-                                let reading = self.exp.observe(&frame);
+                                let hud = self.exp.observe_hud(&frame);
+                                let reading = hud.exp;
                                 // Another of the game's sizes scaled up: read at it from the next
                                 // frame, which is grabbed with the rows it needs.
                                 if let Some(lines) = exp_bar::other_source(&frame, &reading) {
@@ -316,7 +362,10 @@ impl<B: Backend> Runner<B> {
                                     });
                                     tick.map = Some(map);
                                 }
+                                let hp_mp = self.hp_mp_events(&hud.hp_mp, dark);
+                                tick.events.extend(hp_mp);
                                 tick.exp = Some(reading);
+                                tick.hp_mp = Some(hud.hp_mp);
                                 tick.chat = Some(self.chat.observe(&frame));
                                 tick.notices = Some(notices);
                             }
@@ -336,6 +385,11 @@ impl<B: Backend> Runner<B> {
         // Not reading: pickups may come and go unseen until it reads again.
         if self.state != CaptureState::Capturing {
             self.notices.reset();
+        }
+        // A tick that read no frame, other than a stale grab while capturing, may have missed a
+        // change: the next reading isn't continuous.
+        if self.state != CaptureState::Capturing || (tick.hp_mp.is_none() && !tick.stale) {
+            self.hp_mp = None;
         }
         debug_assert!(tick.events.is_empty() || self.state.emits_events());
         tick.state = self.state;
@@ -359,7 +413,40 @@ impl<B: Backend> Runner<B> {
             self.notices.confirmed(),
             gained,
         );
+        let read = tick.exp.as_ref().zip(tick.hp_mp.as_ref());
+        let confirmed = self.exp.calibration() == exp_bar::Calibration::Confirmed;
+        self.hp_mp_state = self.hp_mp_health.observe(now, capturing, read, confirmed);
         tick
+    }
+
+    /// The events a frame's HP and MP reading brings: `HpMpChanged` when the numbers changed or the
+    /// reading isn't continuous, and `Unreadable` once when they stop reading. As for the EXP bar,
+    /// a dark screen or a reader still learning isn't "can't see the numbers".
+    fn hp_mp_events(&mut self, reading: &Result<HpMp, HpMpUnreadable>, dark: bool) -> Vec<Event> {
+        let before = self.hp_mp.take();
+        match reading {
+            Ok(r) => {
+                self.hp_mp = Some(*r);
+                self.hp_mp_readable = true;
+                if before == Some(*r) {
+                    return Vec::new();
+                }
+                vec![Event::HpMpChanged {
+                    hp: r.hp,
+                    max_hp: r.max_hp,
+                    mp: r.mp,
+                    max_mp: r.max_mp,
+                    continuous: before.is_some(),
+                }]
+            }
+            Err(HpMpUnreadable::Unchecked | HpMpUnreadable::LearningSlash) => Vec::new(),
+            Err(_) if dark => Vec::new(),
+            Err(_) if self.hp_mp_readable => {
+                self.hp_mp_readable = false;
+                vec![Event::Unreadable { recognizer: HP_MP }]
+            }
+            Err(_) => Vec::new(),
+        }
     }
 
     fn events_for(&mut self, reading: &Result<ExpReading, Unreadable>) -> Vec<Event> {
@@ -1251,5 +1338,222 @@ mod tests {
         );
         // What the reader learned carries over: it reads at once.
         assert!(matches!(tick.exp, Some(Ok(r)) if r.confirmed));
+    }
+
+    /// The HUD at `exp` in a `width` x `height` game area, with HP `[hp/1386]` and MP
+    /// `[mp/1140]`.
+    fn hud_hp_at(hud: &Hud, (width, height): (u32, u32), exp: u64, hp: u32, mp: u32) -> Canvas {
+        let field = exp_bar::exp_text(exp, pct_of(exp, NEEDED_41));
+        let mut canvas = hud.draw(width, height, &field, "41");
+        hud.draw_hp_mp(
+            &mut canvas,
+            &format!("[{hp}/1386]"),
+            &format!("[{mp}/1140]"),
+        );
+        canvas
+    }
+
+    fn hud_hp(hud: &Hud, exp: u64, hp: u32, mp: u32) -> Canvas {
+        hud_hp_at(hud, (1366, 768), exp, hp, mp)
+    }
+
+    /// The HP and MP events of a tick.
+    fn hp_mp_events(tick: &Tick) -> Vec<Event> {
+        tick.events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::HpMpChanged { .. } | Event::Unreadable { recognizer: HP_MP }
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn changed(hp: u32, mp: u32, continuous: bool) -> Event {
+        Event::HpMpChanged {
+            hp,
+            max_hp: 1386,
+            mp,
+            max_mp: 1140,
+            continuous,
+        }
+    }
+
+    // The digits the panel names while HP and MP wait for one are digits only, and only in that
+    // state. Fails if the EXP field's brackets or punctuation reach the panel, or the list shows
+    // while the numbers read or are covered.
+    #[test]
+    fn the_missing_digits_are_named_only_while_waiting_for_one() {
+        let mut runner = Runner::new(Fake::default());
+        runner.hp_mp_state = HpMpState::MissingDigits;
+        assert_eq!(runner.hp_mp_missing().as_deref(), Some("0123456789"));
+        for state in [HpMpState::Reading, HpMpState::Covered, HpMpState::Learning] {
+            runner.hp_mp_state = state;
+            assert_eq!(runner.hp_mp_missing(), None, "{state:?}");
+        }
+    }
+
+    // HP and MP reach plugins when they change, and `continuous` is true only when the frame just
+    // before read them too. Fails if a reading after a covered HUD, a dark screen, a pause, a
+    // window closed or reopened, a game restart or a new size claims to follow on (a plugin would
+    // count what happened unseen as one rise), or a stale grab breaks the chain.
+    #[test]
+    fn hp_and_mp_changes_say_whether_they_follow_on() {
+        let hud = Hud::new();
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            ..Fake::default()
+        });
+        let mut seen = Vec::new();
+        for &exp in &GRIND {
+            runner.backend_mut().canvas = Some(hud_hp(&hud, exp, 700, 600));
+            seen.extend(hp_mp_events(&runner.tick()));
+        }
+        assert_eq!(seen, [changed(700, 600, false)], "the first reading");
+        let last = *GRIND.last().unwrap();
+        let show = |runner: &mut Runner<Fake>, hp: u32, mp: u32| {
+            runner.backend_mut().canvas = Some(hud_hp(&hud, last, hp, mp));
+            hp_mp_events(&runner.tick())
+        };
+        assert_eq!(show(&mut runner, 700, 600), [], "unchanged");
+        assert_eq!(show(&mut runner, 540, 600), [changed(540, 600, true)]);
+
+        // A stale grab reads nothing and keeps the chain.
+        runner.backend_mut().frozen = true;
+        let tick = runner.tick();
+        assert_eq!((tick.hp_mp, hp_mp_events(&tick)), (None, vec![]));
+        runner.backend_mut().frozen = false;
+        assert_eq!(show(&mut runner, 380, 600), [changed(380, 600, true)]);
+
+        // Covered: reported once; the next reading starts a new chain, even unchanged.
+        let mut covered = hud_hp(&hud, last, 380, 600);
+        covered.fill(283 + 430, 768 - 34, 40, 14, DARK);
+        runner.backend_mut().canvas = Some(covered);
+        let unreadable = Event::Unreadable { recognizer: HP_MP };
+        assert_eq!(hp_mp_events(&runner.tick()), [unreadable]);
+        assert_eq!(hp_mp_events(&runner.tick()), []);
+        assert_eq!(
+            show(&mut runner, 380, 600),
+            [changed(380, 600, false)],
+            "after covered"
+        );
+
+        // A map change's fade to black isn't "can't see", but it breaks the chain.
+        runner.backend_mut().canvas = Some(Canvas::new(1366, 768));
+        assert_eq!(hp_mp_events(&runner.tick()), []);
+        assert_eq!(
+            show(&mut runner, 380, 600),
+            [changed(380, 600, false)],
+            "after dark"
+        );
+
+        // Minimized, then back.
+        runner.backend_mut().window = Some(GameWindow {
+            minimized: true,
+            ..GAME
+        });
+        runner.tick();
+        runner.backend_mut().window = Some(GAME);
+        assert_eq!(
+            show(&mut runner, 380, 600),
+            [changed(380, 600, false)],
+            "after a pause"
+        );
+
+        // Frames stopped coming long enough to pause, then came back.
+        runner.backend_mut().frozen = true;
+        for _ in 0..STALE_AFTER + 1 {
+            runner.tick();
+        }
+        runner.backend_mut().frozen = false;
+        let back = show(&mut runner, 380, 600);
+        assert_eq!(back, [changed(380, 600, false)], "after frames stopped");
+
+        // The window closed and opened again, and then a restarted game.
+        runner.backend_mut().window = None;
+        runner.tick();
+        runner.backend_mut().window = Some(GAME);
+        assert_eq!(
+            show(&mut runner, 380, 600),
+            [changed(380, 600, false)],
+            "reopened"
+        );
+        runner.backend_mut().window = Some(GameWindow { id: 8, ..GAME });
+        assert_eq!(
+            show(&mut runner, 380, 600),
+            [changed(380, 600, false)],
+            "restarted"
+        );
+
+        // Another size: the shapes are checked again and the slash learned again first.
+        let size = (1024, 768);
+        runner.backend_mut().window = Some(GameWindow {
+            id: 8,
+            width: 1024,
+            ..GAME
+        });
+        let mut after = Vec::new();
+        for _ in 0..3 {
+            runner.backend_mut().canvas = Some(hud_hp_at(&hud, size, last, 380, 600));
+            after.extend(hp_mp_events(&runner.tick()));
+        }
+        assert_eq!(after, [changed(380, 600, false)], "after a new size");
+    }
+
+    // A tick's events come in one order (the EXP bar's, the pickups', the map's, then HP and
+    // MP's), as the SDK promises plugins. Fails if HpMpChanged ever comes before an event of the
+    // same tick that it should follow.
+    #[test]
+    fn a_ticks_events_come_in_a_fixed_order() {
+        use crate::recognizers::map_name::test_support::Minimap;
+        let rank = |e: &Event| match e {
+            Event::ExpChanged { .. } => 0,
+            Event::LevelUp { .. } => 1,
+            Event::Unreadable { recognizer } if *recognizer == EXP_BAR => 1,
+            Event::MesosGained { .. }
+            | Event::ItemGained { .. }
+            | Event::PartyBonus { .. }
+            | Event::NoticesMissed { .. } => 2,
+            Event::MapChanged { .. } => 3,
+            Event::HpMpChanged { .. } | Event::Unreadable { .. } => 4,
+        };
+        let hud = Hud::new();
+        let on_map = |name: &str, exp: u64, hp: u32| {
+            let mut canvas = hud_hp(&hud, exp, hp, 600);
+            Minimap::new("Victoria Road", name).draw(&mut canvas);
+            canvas
+        };
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            ..Fake::default()
+        });
+        let mut ticks = Vec::new();
+        for (i, &exp) in GRIND.iter().enumerate() {
+            runner.backend_mut().canvas = Some(on_map("Forest I", exp, 900 - i as u32));
+            ticks.push(runner.tick().events);
+        }
+        // A map change: dark, then the new map, with EXP and HP moving on every frame.
+        runner.backend_mut().canvas = Some(Canvas::new(1366, 768));
+        ticks.push(runner.tick().events);
+        let last = *GRIND.last().unwrap();
+        for i in 1..=6 {
+            runner.backend_mut().canvas = Some(on_map("Henesys", last + 21 * i, 800 - i as u32));
+            ticks.push(runner.tick().events);
+        }
+        for events in &ticks {
+            let ranks: Vec<u8> = events.iter().map(rank).collect();
+            assert!(ranks.is_sorted(), "{events:?}");
+        }
+        let has = |events: &Vec<Event>, f: fn(&Event) -> bool| events.iter().any(f);
+        let hp = |e: &Event| matches!(e, Event::HpMpChanged { .. });
+        let exp = |e: &Event| matches!(e, Event::ExpChanged { .. });
+        let map = |e: &Event| matches!(e, Event::MapChanged { .. });
+        assert!(ticks.iter().any(|t| has(t, hp) && has(t, exp)));
+        assert!(
+            ticks.iter().any(|t| has(t, hp) && has(t, map)),
+            "a tick with a map change and HP: {ticks:?}"
+        );
     }
 }
