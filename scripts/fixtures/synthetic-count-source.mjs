@@ -2,7 +2,7 @@
 // scripts/session-tracker-harness.mjs. It counts the simplest way there is, so tests can say
 // exactly what was drunk:
 // - HpMpChanged: a rise of exactly k x 160 HP since the last reading is k Meat, of k x 150 MP is
-//   k Lemon, when the reading is continuous and no restart came between.
+//   k Lemon, when the reading is continuous.
 // - { type: "TestMaybe", item, count }: that many maybe uses of the potion.
 // - { type: "TestHealing", resource, on }: heals from others on or off for "hp" or "mp".
 
@@ -29,9 +29,6 @@ export function wiredSource() {
       if (hp > 0 && hp % 160 === 0) uses.push({ item: MEAT, count: hp / 160, maybe: false, source: "rises" });
       if (mp > 0 && mp % 150 === 0) uses.push({ item: LEMON, count: mp / 150, maybe: false, source: "rises" });
       return uses;
-    },
-    restart() {
-      last = null;
     },
     healing: (resource) => healing[resource],
     amounts: (item) => (item === MEAT ? [160] : [150]),

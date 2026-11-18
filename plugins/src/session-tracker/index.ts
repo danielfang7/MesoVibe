@@ -814,8 +814,10 @@ definePlugin({
           persist(atMs, EXP_SAVE_EVERY_MS);
           show(atMs);
         }
-        // Potions drunk while paused aren't the session's. HP and MP readings come four times a
-        // second, so only a counted use redraws and saves; the 1 Hz tick does the rest.
+        // Potions drunk while paused aren't the session's: the source still sees those readings,
+        // so the first change after Resume is measured from the last one while paused. HP and MP
+        // readings come four times a second, so only a counted use redraws and saves; the 1 Hz
+        // tick does the rest.
         if (uses.length > 0 && !session.paused) {
           for (const use of uses) addPotUse(session, use, map, session.expGained > 0, session.last?.level ?? null);
           unsaved = true;
@@ -868,14 +870,11 @@ definePlugin({
           // The clock above ran up to the press; from here nothing counts until Resume.
           if (session.expGained > 0 && session.paused !== true) {
             session.paused = true;
-            // No potion step spans the pause: its rise could be one drunk while paused.
-            source?.restart();
             persist(atMs, 0);
           }
         } else if (action === "resume") {
           if (session.paused) {
             delete session.paused;
-            source?.restart();
             persist(atMs, 0);
           }
         } else if (action.startsWith(DELETE_SESSION)) {

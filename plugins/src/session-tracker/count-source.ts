@@ -25,10 +25,12 @@ export interface PotUse {
 }
 
 export interface CountSource {
-  /** Takes every engine event, in order, and returns the potion uses it found in it. */
+  /**
+   * Takes every engine event, in order, paused or not, and returns the potion uses it found in it.
+   * It reports uses only from times the HP and MP numbers were read, since pot cost/hr divides by
+   * that time.
+   */
   onEvent(event: Event, atMs: number): PotUse[];
-  /** Forgets the last reading, so no step spans a pause. */
-  restart(): void;
   /**
    * Whether heals that aren't potions (a Heal, Drain, MP Eater) may be hiding uses of this
    * resource's potion now, so its count is a lower bound.

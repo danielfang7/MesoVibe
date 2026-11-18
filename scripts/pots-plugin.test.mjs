@@ -242,12 +242,16 @@ test("HP and MP readings redraw nothing until a potion is counted", () => {
 });
 
 // Pot cost/hr's time grows only while the HP and MP numbers are read: five minutes at full HP
-// count five minutes, and covered numbers or a pause add none. Fails if covered or paused time
-// thins out pot cost/hr.
+// count five minutes, and no other reading state or a pause adds any. Fails if that time thins
+// out pot cost/hr.
 test("potions' read time grows only while HP and MP are read and the session isn't paused", () => {
   const { send, sent, now } = play({ seconds: 300 });
-  send({ type: "readers", readers: { ...READING, hpMp: "covered" }, atMs: now });
-  for (let s = 1; s <= 60; s++) send(tick(now + s * 1000));
+  // Ten seconds in each state that isn't reading, a minute in all.
+  const states = ["covered", "learning", "not_found", "missing_digits", "off", "covered"];
+  states.forEach((hpMp, i) => {
+    send({ type: "readers", readers: { ...READING, hpMp }, atMs: now + i * 10_000 });
+    for (let s = 1; s <= 10; s++) send(tick(now + i * 10_000 + s * 1000));
+  });
   send({ type: "readers", readers: READING, atMs: now + 60_000 });
   send(action("pause", now + 60_000));
   for (let s = 61; s <= 120; s++) send(tick(now + s * 1000));
@@ -259,19 +263,18 @@ test("potions' read time grows only while HP and MP are read and the session isn
   assert.equal(entry.p, 420_000, "covered time is still play");
 });
 
-// No potion is counted across a pause, nor while paused. Fails if the first reading after Resume
-// is compared with the last one before Pause, or a potion drunk while paused counts.
-test("a pause counts no potion across it or during it", () => {
+// A potion drunk while paused isn't counted, and one drunk right after Resume is, even when it's
+// the first change since Resume. Fails if paused uses count, or Resume forgets the last reading so
+// the first rise after it becomes the baseline and is lost.
+test("a pause counts no potion during it, and the first one after it", () => {
   const { send, sent, now } = play({ seconds: 120 });
   send(action("pause", now + 1_000));
-  send(hpMp(660, 500, now + 2_000));
   // The source counts this rise and the maybe use; the paused session must not.
-  send(hpMp(820, 500, now + 2_500));
+  send(hpMp(660, 500, now + 2_000));
   send(event({ type: "TestMaybe", item: MEAT, count: 1 }, now + 2_600));
   send(action("resume", now + 3_000));
-  send(hpMp(820, 500, now + 4_000));
   assert.equal(potTable(sent), undefined);
-  send(hpMp(980, 500, now + 5_000));
+  send(hpMp(820, 500, now + 5_000));
   assert.deepEqual(potTable(sent).rows, [["Meat", "×1", "80"]]);
 });
 
@@ -383,6 +386,13 @@ test("saves keep potion fields, and drop a malformed one with the session kept",
   ]);
   const again = startWith(saved);
   assert.equal(lootTable(again.sent).details[0].at(-1), "Pots 1.55K: Meat ×10, Lemon ×5", "a session left running ends with its potions");
+
+  // Maybe uses survive too, so the cost keeps its "+" after a restart.
+  const maybe = grind();
+  maybe.send(event({ type: "TestMaybe", item: MEAT, count: 2 }, maybe.now));
+  maybe.send(action("end", maybe.now));
+  const reloaded = startWith(JSON.parse(JSON.stringify(last(maybe.sent, "save").data)));
+  assert.equal(lootTable(reloaded.sent).details[0].at(-1), "Pots 1.55K+: Meat ×10, Lemon ×5");
 
   const bad = pastSession(T0);
   bad.maps[0].u = [{ k: "Meat", c: 1 }, null, { k: MEAT, c: -2 }];
