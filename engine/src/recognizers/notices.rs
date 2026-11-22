@@ -972,9 +972,10 @@ enum Gain {
 
 /// The EXP gained from `before` to `now`, across a level-up when the level's EXP needed is known.
 fn gained(before: &ExpReading, now: &ExpReading) -> Option<u64> {
+    let (from, to) = (before.exp?, now.exp?);
     match (before.level, now.level) {
-        (a, b) if a == b => now.exp.checked_sub(before.exp),
-        (Some(a), Some(b)) if b == a + 1 => Some(before.needed?.checked_sub(before.exp)? + now.exp),
+        (a, b) if a == b => to.checked_sub(from),
+        (Some(a), Some(b)) if b == a + 1 => Some(before.needed?.checked_sub(from)? + to),
         _ => None,
     }
 }
@@ -1903,6 +1904,13 @@ impl NoticeReader {
         let Some(now) = hud.filter(|r| r.confirmed) else {
             return Gain::Unknown;
         };
+        // Late in a level the HUD shows only the percent, and an EXP worked out from it is too
+        // rough to check EXP lines against or learn digits from. Nothing is judged until the
+        // EXP shows again, and the gain is counted from there.
+        if !now.exp_shown {
+            self.hud = None;
+            return Gain::Unknown;
+        }
         let gain = self.hud.as_ref().and_then(|before| gained(before, now));
         self.hud = Some(*now);
         gain.map_or(Gain::Restart, Gain::Gained)
@@ -2246,7 +2254,8 @@ pub(crate) mod test_support {
         pub(crate) fn hud(&self) -> ExpReading {
             ExpReading {
                 level: Some(41),
-                exp: self.exp,
+                exp: Some(self.exp),
+                exp_shown: true,
                 pct_hundredths: pct_of(self.exp, NEEDED_41),
                 needed: Some(NEEDED_41),
                 confirmed: true,
@@ -2839,6 +2848,57 @@ mod tests {
             ],
         );
         assert_eq!(notices(&short), [Notice::Exp(21)]);
+        assert!(short.iter().any(|r| r.missed == Some(Missed::ExpShort)));
+    }
+
+    // Late in a level the HUD shows only the percent, and the EXP worked out from it moves in
+    // steps of what a hundredth of a percent is worth. Fails if EXP lines are checked against it
+    // and reported missed, or if they aren't checked again once the HUD shows the EXP.
+    #[test]
+    fn exp_lines_are_not_checked_against_an_exp_worked_out_from_the_percent() {
+        let mut game = Game::new(Scene::Rock);
+        let mut reader = confirmed_reader(&mut game);
+        let quiet = || (Vec::new(), 0);
+        let steps = vec![
+            quiet(),
+            one(&exp("21"), 21),
+            quiet(),
+            quiet(),
+            quiet(),
+            one(&exp("43"), 43),
+            quiet(),
+            quiet(),
+            quiet(),
+        ];
+        let hidden: Vec<NoticeReading> = steps
+            .into_iter()
+            .map(|(arrive, gained)| {
+                let arrive: Vec<(&str, [u8; 3])> =
+                    arrive.iter().map(|(t, c)| (t.as_str(), *c)).collect();
+                let canvas = game.next(&arrive, gained);
+                let worked_out = ExpReading {
+                    exp: Some(game.exp / 100 * 100),
+                    exp_shown: false,
+                    ..game.hud()
+                };
+                reader.observe(&canvas.frame(), Some(&worked_out)).unwrap()
+            })
+            .collect();
+        assert_eq!(notices(&hidden), [Notice::Exp(21), Notice::Exp(43)]);
+        assert!(hidden.iter().all(|r| r.missed.is_none()), "{hidden:?}");
+        // The EXP shows again: a line short of the HUD's gain is noticed.
+        let short = run(
+            &mut game,
+            &mut reader,
+            vec![
+                quiet(),
+                quiet(),
+                one(&exp("21"), 64),
+                quiet(),
+                quiet(),
+                quiet(),
+            ],
+        );
         assert!(short.iter().any(|r| r.missed == Some(Missed::ExpShort)));
     }
 

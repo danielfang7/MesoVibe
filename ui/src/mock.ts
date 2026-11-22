@@ -171,7 +171,7 @@ export function mockHost(scenario: string): Host {
       hpMpState: "reading",
       map: scenario === "loot" ? { key: lootMap(t) } : null,
       game,
-      exp: { level, exp, pctHundredths, needed: NEEDED, confirmed: true },
+      exp: { level, exp, expShown: true, pctHundredths, needed: NEEDED, confirmed: true },
       unreadable: null,
       error: null,
       calibration: "confirmed",
@@ -197,6 +197,7 @@ export function mockHost(scenario: string): Host {
         type: "ExpChanged",
         level,
         exp,
+        exp_shown: true,
         pct_hundredths: Math.round((exp * 10_000) / NEEDED),
         needed: NEEDED,
       };
@@ -392,7 +393,7 @@ export function mockHudHost(scenario: string): HudHost {
     return {
       ...base,
       state: "capturing",
-      exp: { level: 42, exp: 230_640, pctHundredths: 6462, needed: NEEDED, confirmed: true },
+      exp: { level: 42, exp: 230_640, expShown: true, pctHundredths: 6462, needed: NEEDED, confirmed: true },
       unreadable: null,
       error: null,
       calibration: "confirmed",
