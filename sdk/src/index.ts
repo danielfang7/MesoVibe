@@ -134,6 +134,11 @@ export interface SessionSummary {
   minutesToLevel: number | null;
   /** EXP left to the next level; null when the level's size isn't known. */
   expToGo: number | null;
+  /**
+   * `expToGo` was worked out from the percent, which the HUD shows alone late in a level, so it
+   * can be off by up to a hundredth of a percent's worth: show it as approximate.
+   */
+  expToGoApprox: boolean;
   /** Time played while capturing, in milliseconds. */
   activeMs: number;
   /**

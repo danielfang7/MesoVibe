@@ -653,7 +653,7 @@ function shell(initial: Settings): void {
     // it; after, the Session view lists it with the session's other numbers.
     const left = summary?.expToGo ?? null;
     toGo.hidden = left === null || (summary?.expGained ?? 0) > 0;
-    toGoNumber.textContent = left === null ? "" : formatDigits(left);
+    toGoNumber.textContent = left === null ? "" : `${summary?.expToGoApprox ? "≈" : ""}${formatDigits(left)}`;
 
     const notice = panel.notice;
     const undoHadFocus = noticeSlot.contains(document.activeElement);
