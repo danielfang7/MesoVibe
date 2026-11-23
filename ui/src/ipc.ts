@@ -122,7 +122,10 @@ export type State = "off" | "no_game" | "capturing" | "paused" | "blocked";
 
 export interface Reading {
   level: number | null;
-  exp: number;
+  /** Late in a level the HUD shows only the percent: then worked out from it (`expShown` false),
+   * or `null` when the level's EXP needed isn't known. */
+  exp: number | null;
+  expShown: boolean;
   pctHundredths: number;
   needed: number | null;
   confirmed: boolean;

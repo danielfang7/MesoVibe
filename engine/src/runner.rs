@@ -701,6 +701,7 @@ mod tests {
             Some(&Event::ExpChanged {
                 level: Some(41),
                 exp: last,
+                exp_shown: true,
                 pct_hundredths: pct_of(last, NEEDED_41),
                 needed: Some(NEEDED_41),
             })
@@ -1209,6 +1210,7 @@ mod tests {
             Some(&Event::ExpChanged {
                 level: Some(41),
                 exp: last,
+                exp_shown: true,
                 pct_hundredths: pct_of(last, NEEDED_41),
                 needed: Some(NEEDED_41),
             })
@@ -1234,7 +1236,7 @@ mod tests {
         runner.backend_mut().canvas = Some(full_screen(&hud, last));
         let tick = runner.tick();
         assert!(
-            matches!(tick.exp, Some(Ok(r)) if r.exp == last),
+            matches!(tick.exp, Some(Ok(r)) if r.exp == Some(last)),
             "{:?}",
             tick.exp
         );
@@ -1256,7 +1258,7 @@ mod tests {
         let tick = runner.tick();
         assert_eq!(tick.window.map(|w| w.height), Some(768));
         assert!(
-            matches!(tick.exp, Some(Ok(r)) if r.exp == last + 21),
+            matches!(tick.exp, Some(Ok(r)) if r.exp == Some(last + 21)),
             "{:?}",
             tick.exp
         );
@@ -1295,6 +1297,7 @@ mod tests {
             Some(&Event::ExpChanged {
                 level: Some(41),
                 exp: last,
+                exp_shown: true,
                 pct_hundredths: pct_of(last, NEEDED_41),
                 needed: Some(NEEDED_41),
             })
@@ -1308,7 +1311,7 @@ mod tests {
         let tick = runner.tick();
         assert_eq!(tick.source, 768);
         assert!(
-            matches!(tick.exp, Some(Ok(r)) if r.exp == last + 21),
+            matches!(tick.exp, Some(Ok(r)) if r.exp == Some(last + 21)),
             "{:?}",
             tick.exp
         );

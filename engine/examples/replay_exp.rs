@@ -112,9 +112,14 @@ fn describe(r: &ExpReading) -> String {
     let level = r.level.map_or("?".to_string(), |l| l.to_string());
     let needed = r.needed.map_or(String::new(), |n| format!("  of {n}"));
     let mark = if r.confirmed { "" } else { "  (unconfirmed)" };
+    // `~` marks an EXP worked out from the percent, when the HUD shows only that.
+    let exp = match (r.exp, r.exp_shown) {
+        (Some(exp), true) => exp.to_string(),
+        (Some(exp), false) => format!("~{exp}"),
+        (None, _) => "hidden".to_string(),
+    };
     format!(
-        "level {level}  exp {}  {}.{:02}%{needed}{mark}",
-        r.exp,
+        "level {level}  exp {exp}  {}.{:02}%{needed}{mark}",
         r.pct_hundredths / 100,
         r.pct_hundredths % 100
     )
@@ -154,6 +159,8 @@ fn main() -> ExitCode {
     }
 
     let (mut total, mut confirmed, mut unconfirmed) = (0, 0, 0);
+    // Confirmed readings of the percent alone, and how many of them had an EXP worked out.
+    let (mut percent_alone, mut worked_out) = (0, 0);
     // (frame label, frame number) of the first reading and the first confirmed one.
     let mut first_reading: Option<(String, usize)> = None;
     let mut first_confirmed: Option<(String, usize)> = None;
@@ -213,26 +220,37 @@ fn main() -> ExitCode {
                         continue;
                     }
                     confirmed += 1;
+                    if !r.exp_shown {
+                        percent_alone += 1;
+                        worked_out += usize::from(r.exp.is_some());
+                    }
                     first_confirmed.get_or_insert((label.clone(), total));
                     gate_frames += 1;
                     gate_read += 1;
+                    // The EXP when both readings have one, else the percent.
+                    let fell = previous.is_some_and(|p| match (p.exp, r.exp) {
+                        (Some(before), Some(now)) => now < before,
+                        _ => r.pct_hundredths < p.pct_hundredths,
+                    });
                     if let Some(p) = previous
-                        && r.exp < p.exp
+                        && fell
                         && !matches!((p.level, r.level), (Some(a), Some(b)) if b > a)
                     {
                         violations.push(format!(
-                            "{label}: EXP fell from {} to {} without a level-up (a death?)",
-                            p.exp, r.exp
+                            "{label}: the bar fell from {} to {} without a level-up (a death?)",
+                            describe(&p),
+                            describe(&r)
                         ));
                     }
                     if let Some(level) = r.level
                         && let Some(&needed) = args.needed.get(&level)
+                        && let Some(exp) = r.exp.filter(|_| r.exp_shown)
                     {
-                        let expected = (r.exp * 20_000 + needed) / (2 * needed);
+                        let expected = (exp * 20_000 + needed) / (2 * needed);
                         if expected != u64::from(r.pct_hundredths) {
                             violations.push(format!(
-                                "{label}: {} / {needed} is {expected} hundredths, the bar says {}",
-                                r.exp, r.pct_hundredths
+                                "{label}: {exp} / {needed} is {expected} hundredths, the bar says {}",
+                                r.pct_hundredths
                             ));
                         }
                     }
@@ -261,6 +279,11 @@ fn main() -> ExitCode {
     }
 
     println!("\n{total} frames: {confirmed} read and confirmed, {unconfirmed} read unconfirmed");
+    if percent_alone > 0 {
+        println!(
+            "  {percent_alone} confirmed readings of the percent alone, {worked_out} with an EXP worked out"
+        );
+    }
     if let Some((label, n)) = &first_reading {
         println!("  first reading at frame {n} ({label})");
     }

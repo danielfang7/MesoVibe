@@ -144,9 +144,14 @@ mod live {
                         confirmed += usize::from(r.confirmed);
                         let level = r.level.map_or("?".to_string(), |l| l.to_string());
                         let mark = if r.confirmed { "" } else { "  (unconfirmed)" };
+                        // `~` marks an EXP worked out from the percent, when the HUD hides it.
+                        let exp = match (r.exp, r.exp_shown) {
+                            (Some(exp), true) => exp.to_string(),
+                            (Some(exp), false) => format!("~{exp}"),
+                            (None, _) => "hidden".to_string(),
+                        };
                         format!(
-                            "level {level}  EXP {}  {}.{:02}%{mark}",
-                            r.exp,
+                            "level {level}  EXP {exp}  {}.{:02}%{mark}",
                             r.pct_hundredths / 100,
                             r.pct_hundredths % 100
                         )
@@ -347,6 +352,7 @@ mod strip {
                 Some(Ok(r)) => serde_json::json!({
                     "level": r.level,
                     "exp": r.exp,
+                    "expShown": r.exp_shown,
                     "pctHundredths": r.pct_hundredths,
                     "confirmed": r.confirmed,
                 }),
