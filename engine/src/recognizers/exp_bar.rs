@@ -419,10 +419,40 @@ pub struct ExpBarReader {
     restored: Option<u32>,
     /// The HP and MP numbers' slash, learned on screen each session and never saved.
     slash: SlashLearner,
-    /// What confirmed readings of the full field said of the EXP table this session, by level:
-    /// the row when the bar fitted it, `None` when it didn't. The percent alone can't check the
-    /// table, so it goes by these, and by the table at a level not seen in full.
-    checked: Vec<(u16, Option<u64>)>,
+    /// What confirmed readings of the full field said of the EXP table this session, by level.
+    /// The percent alone can't check the table, so it goes by these, and by the table at a level
+    /// not seen in full.
+    checked: Vec<RowCheck>,
+}
+
+/// What confirmed readings of the full field said of the EXP table at one level this session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RowCheck {
+    level: u16,
+    /// The table's row while the bar fits it; `None` once it doesn't.
+    needed: Option<u64>,
+    /// A reading (EXP, percent) that didn't fit the row the bar had fitted. One such reading is
+    /// left out as a misread (a field partly covered can read as a smaller EXP); a second,
+    /// different one disproves the row.
+    miss: Option<(u64, u16)>,
+}
+
+impl RowCheck {
+    /// Takes one more confirmed reading of the full field at this level: the row it fitted, if
+    /// any, and its EXP and percent.
+    fn see(&mut self, fitted: Option<u64>, at: (u64, u16)) {
+        match (self.needed, fitted) {
+            (_, Some(needed)) => {
+                self.needed = Some(needed);
+                self.miss = None;
+            }
+            (Some(_), None) => match self.miss {
+                Some(before) if before != at => self.needed = None,
+                _ => self.miss = Some(at),
+            },
+            (None, None) => {}
+        }
+    }
 }
 
 /// The first line of [`ExpBarReader::knowledge`]'s text. A reader refuses any other.
@@ -456,11 +486,6 @@ struct Learner {
 /// How many new fields in a row the HUD alone must single out the same naming before it's
 /// confirmed. A margin against a wrong naming that happens to fit the evidence so far.
 const CONFIRM_AFTER: usize = 3;
-
-/// How far, in hundredths, the percent alone may rise from the last reading for a digit first
-/// seen in it to be learned ([`ExpBarReader::learn_unseen_digit`]): 1%, far more than a second's
-/// grinding late in a level, where the HUD hides the EXP.
-const MAX_UNSEEN_RISE: u16 = 100;
 
 impl ExpBarReader {
     pub fn new() -> Self {
@@ -1026,14 +1051,14 @@ impl ExpBarReader {
     }
 
     /// Learns a digit shape that turned up after calibration, when exactly one unnamed digit
-    /// makes the bar fit the EXP needed of the last reading without the EXP falling. When the
-    /// HUD shows only the percent, nothing ties the digits to EXP needed, so the shape is learned
-    /// only as the one digit still unnamed, which it must be. It must also be the percent's last
-    /// digit alone, the level's tiles the same, and the percent must hold or rise by at most
-    /// [`MAX_UNSEEN_RISE`], so nothing else drawn there is learned as that digit. With two digits
-    /// unnamed, a death costing under 0.1% could leave only the wrong one fitting.
+    /// makes the bar fit the EXP needed of the last reading without the EXP falling. The percent
+    /// alone never teaches one: nothing in it can tell a digit from something drawn over one (the
+    /// game's cursor, a stray pixel), so a shape first seen there waits for the full field.
     fn learn_unseen_digit(&mut self, frame: &Frame, layout: Layout) -> bool {
         let Some(last) = self.last.filter(|_| self.learner.confirmed) else {
+            return false;
+        };
+        let Some(needed) = last.needed else {
             return false;
         };
         let Ok(found) = segment(frame, layout.rect(EXP_TEXT), text_ink) else {
@@ -1048,22 +1073,8 @@ impl ExpBarReader {
         let [glyph] = unknown[..] else {
             return false;
         };
-        let same_tiles = self.last_tiles.is_some()
-            && self.last_tiles == glyphs(frame, layout.rect(LEVEL_TEXT), level_ink);
-        // The percent alone: `[`, the whole percent, the point, two digits, `%]`. The unknown
-        // shape may only be the last digit.
-        let last_digit = found.len() >= 6
-            && found
-                .first()
-                .is_some_and(|(_, g)| self.digits.name(g) == Some('['))
-            && found
-                .iter()
-                .enumerate()
-                .all(|(i, (_, g))| (g == glyph) == (i == found.len() - 3));
-        let missing = self.digits.missing(DIGITS);
-        let only_missing = missing.len() == 1;
         let mut fitting = Vec::new();
-        for digit in missing {
+        for digit in self.digits.missing(DIGITS) {
             let mut atlas = self.digits.clone();
             if atlas
                 .learn(std::slice::from_ref(glyph), &digit.to_string())
@@ -1072,23 +1083,10 @@ impl ExpBarReader {
                 continue;
             }
             let text: Option<String> = found.iter().map(|(_, g)| atlas.name(g)).collect();
-            let fit = match text.as_deref().and_then(parse_exp_text) {
-                Some((Some(exp), pct)) => last.needed.is_some_and(|needed| {
-                    last.exp.is_some_and(|before| exp >= before) && fits(exp, pct, needed)
-                }),
-                Some((None, pct)) => {
-                    only_missing
-                        && last_digit
-                        && same_tiles
-                        && (last.pct_hundredths..=last.pct_hundredths + MAX_UNSEEN_RISE)
-                            .contains(&pct)
-                        && last
-                            .needed
-                            .is_none_or(|needed| exp_range(pct, needed).is_some())
-                }
-                None => false,
-            };
-            if fit {
+            if let Some((Some(exp), pct)) = text.as_deref().and_then(parse_exp_text)
+                && last.exp.is_some_and(|before| exp >= before)
+                && fits(exp, pct, needed)
+            {
                 fitting.push(atlas);
             }
         }
@@ -1139,11 +1137,18 @@ impl ExpBarReader {
         // The full field checks the table's EXP needed for its level; the percent alone goes by
         // that check, so a row the bar didn't fit stays unused whatever the tiles did between.
         if let Some(level) = reading.level {
-            let seen = self.checked.iter().position(|&(l, _)| l == level);
+            let seen = self.checked.iter().position(|c| c.level == level);
+            let at = (reading.exp.unwrap_or_default(), reading.pct_hundredths);
             match (reading.exp_shown && reading.confirmed, seen) {
-                (true, Some(i)) => self.checked[i].1 = reading.needed,
-                (true, None) => self.checked.push((level, reading.needed)),
-                (false, Some(i)) if !reading.exp_shown => reading.needed = self.checked[i].1,
+                (true, Some(i)) => self.checked[i].see(reading.needed, at),
+                (true, None) => self.checked.push(RowCheck {
+                    level,
+                    needed: reading.needed,
+                    miss: None,
+                }),
+                (false, Some(i)) if !reading.exp_shown => {
+                    reading.needed = self.checked[i].needed;
+                }
                 (false, _) => {}
             }
         }
@@ -1603,20 +1608,17 @@ impl Climb {
 
     /// Adds a field of the percent alone: the glyphs of its whole percent and of its two
     /// decimals. Once the climb names the digits and a few new fields agree, the names of
-    /// [`Climb::shapes`] in order. Garbled when the field holds an eleventh shape.
+    /// [`Climb::shapes`] in order. A field with an eleventh shape means one of the ten held was
+    /// something drawn over a digit (the game's cursor): the climb starts over from that field.
     fn add(&mut self, whole: &[Glyph], frac: &[Glyph]) -> Result<Option<String>, Unreadable> {
         let mut shapes = self.shapes.clone();
-        let mut number = |glyph: &Glyph| match shapes.iter().position(|s| s == glyph) {
-            Some(i) => Ok(i),
-            None if shapes.len() < DIGITS.len() => {
-                shapes.push(glyph.clone());
-                Ok(shapes.len() - 1)
+        let field = match number_field(&mut shapes, whole, frac) {
+            Some(field) => field,
+            None => {
+                *self = Climb::default();
+                shapes.clear();
+                number_field(&mut shapes, whole, frac).ok_or(Unreadable::Garbled(Field::Exp))?
             }
-            None => Err(Unreadable::Garbled(Field::Exp)),
-        };
-        let field = PctField {
-            whole: whole.iter().map(&mut number).collect::<Result<_, _>>()?,
-            frac: frac.iter().map(&mut number).collect::<Result<_, _>>()?,
         };
         if self.last.as_ref() == Some(&field) {
             return Ok(None);
@@ -1724,6 +1726,23 @@ impl Climb {
             ..Climb::default()
         };
     }
+}
+
+/// Numbers a field's glyphs as indexes into `shapes`, adding the new ones: `None` when that
+/// would make more than ten.
+fn number_field(shapes: &mut Vec<Glyph>, whole: &[Glyph], frac: &[Glyph]) -> Option<PctField> {
+    let mut number = |glyph: &Glyph| match shapes.iter().position(|s| s == glyph) {
+        Some(i) => Some(i),
+        None if shapes.len() < DIGITS.len() => {
+            shapes.push(glyph.clone());
+            Some(shapes.len() - 1)
+        }
+        None => None,
+    };
+    Some(PctField {
+        whole: whole.iter().map(&mut number).collect::<Option<_>>()?,
+        frac: frac.iter().map(&mut number).collect::<Option<_>>()?,
+    })
 }
 
 /// What a step from `before` to `now` within one whole percent shows: the shape in the first
@@ -2710,11 +2729,15 @@ mod tests {
         assert!(events_between(None, &r).is_empty(), "no EXP to report");
     }
 
-    // A digit the full field never showed turns up in the percent alone. Fails if it isn't
-    // learned from the percent's last place, or if it's learned where a death could fool it: a
-    // fall, or a place where another digit moves the percent by more than a death costs.
+    // Value: protects=a shape first seen in the percent alone is never named from it;
+    // fails_when=a stray pixel over the last digit (the game's cursor) is learned as the missing
+    // digit; why_new=the percent alone can't tell a digit from something drawn over one;
+    // seam=none; no_claim=none
+    // A digit the full field never showed turns up in the percent alone, or something is drawn
+    // over the percent's last digit. Fails if either is learned as the missing digit from the
+    // percent, or if the digit isn't learned once the full field shows it.
     #[test]
-    fn a_digit_first_seen_in_the_percent_alone_is_learned_from_its_last_place() {
+    fn a_shape_first_seen_in_the_percent_alone_waits_for_the_full_field() {
         let hud = Hud::new();
         let mut reader = ExpBarReader::new();
         let no_seven = |e: u64| !exp_text(e, pct_of(e, NEEDED_41)).contains('7');
@@ -2731,21 +2754,91 @@ mod tests {
                 .map(|r| r.pct_hundredths)
         };
         let unknown = Err(Unreadable::UnknownGlyph(Field::Exp));
-        assert_eq!(observe(&mut reader, 6698), Ok(6698));
-        assert_eq!(
-            observe(&mut reader, 6702),
-            unknown,
-            "a 7 in the whole percent"
-        );
-        assert_eq!(
-            observe(&mut reader, 6697),
-            unknown,
-            "the percent would fall"
-        );
         assert_eq!(observe(&mut reader, 6694), Ok(6694));
-        assert_eq!(observe(&mut reader, 6697), Ok(6697));
+        // The game's cursor over the last digit: one more white pixel inside the 4.
+        let mut covered = hud.draw_pct(41, 6694);
+        let x = 283
+            + 468
+            + "[66.9"
+                .chars()
+                .map(|c| hud.exp_font.columns(c).len() as u32 + 1)
+                .sum::<u32>();
+        let (px, py) = (x..x + 5)
+            .flat_map(|px| (740..747).map(move |py| (px, py)))
+            .find(|&(px, py)| covered.get(px, py) == DARK)
+            .expect("a gap inside the 4");
+        covered.set(px, py, WHITE);
+        assert_eq!(
+            reader.observe(&covered.frame()).map(|r| r.pct_hundredths),
+            unknown
+        );
+        assert_eq!(observe(&mut reader, 6697), unknown, "a real 7 waits too");
+        assert_eq!(reader.missing().exp, ['7']);
+        // The full field shows a 7: learned from the bar, which checks it.
+        let exp = (217_200..).find(|&e| !no_seven(e)).unwrap();
+        let full = reader
+            .observe(&hud.draw_values(41, exp, pct_of(exp, NEEDED_41)).frame())
+            .unwrap();
+        assert_eq!(full.exp, Some(exp));
         assert!(reader.missing().exp.is_empty());
-        assert_eq!(observe(&mut reader, 6702), Ok(6702));
+        assert_eq!(observe(&mut reader, 6697), Ok(6697));
+    }
+
+    // Value: protects=one full field off the table doesn't undo a row that fitted, and two
+    // different ones do; fails_when=one odd frame blanks the EXP for the rest of the level, or a
+    // wrong row survives; why_new=the disproved-row test starts from no row; seam=none;
+    // no_claim=none
+    // Fails if one full field the table doesn't fit (a field partly covered, read as a smaller
+    // EXP) stops the percent alone using a row earlier fields fitted, or if two different such
+    // fields don't.
+    #[test]
+    fn one_full_field_off_the_table_doesnt_undo_a_row_that_fitted() {
+        let hud = Hud::new();
+        let mut reader = ExpBarReader::new();
+        feed(&hud, &mut reader, 41, NEEDED_41, &GRIND);
+        let odd = reader
+            .observe(&hud.draw_values(41, 166, 9261).frame())
+            .unwrap();
+        assert_eq!((odd.level, odd.needed), (Some(41), None));
+        let alone = reader.observe(&hud.draw_pct(41, 9262).frame()).unwrap();
+        assert_eq!(
+            alone.needed,
+            Some(NEEDED_41),
+            "one odd frame isn't evidence"
+        );
+        let again = reader
+            .observe(&hud.draw_values(41, 170, 9263).frame())
+            .unwrap();
+        assert_eq!(again.needed, None);
+        let alone = reader.observe(&hud.draw_pct(41, 9264).frame()).unwrap();
+        assert_eq!(
+            (alone.needed, alone.exp),
+            (None, None),
+            "two different ones are"
+        );
+    }
+
+    // Value: protects=one odd shape early in a climb doesn't stop it naming the digits;
+    // fails_when=an 11th shape is refused for good; why_new=the climb tests feed only clean
+    // shapes; seam=none; no_claim=none
+    // Fails if something drawn over the percent once, before all ten digits showed, keeps the
+    // climb from ever naming them.
+    #[test]
+    fn an_odd_shape_early_in_a_climb_doesnt_stop_it() {
+        let shape = |d: u16| Glyph::from_rows(4, vec![u32::from(d) + 1, 0b1001]).unwrap();
+        let odd = Glyph::from_rows(4, vec![0b1111, 0b0110]).unwrap();
+        let field = |pct: u16| [pct / 1000, pct / 100 % 10, pct / 10 % 10, pct % 10].map(shape);
+        let mut climb = Climb::default();
+        let first = field(9206);
+        let _ = climb.add(&[odd, first[1].clone()], &first[2..]);
+        let named = (9207..9999).find_map(|pct| {
+            let d = field(pct);
+            climb.add(&d[..2], &d[2..]).ok().flatten()
+        });
+        let names = named.expect("named despite the odd shape");
+        for (glyph, name) in climb.shapes.iter().zip(names.chars()) {
+            assert_eq!(*glyph, shape(name.to_digit(10).unwrap() as u16));
+        }
     }
 
     // Started late in a level, the HUD only ever shows the percent. Fails if its climb doesn't
