@@ -419,6 +419,10 @@ pub struct ExpBarReader {
     restored: Option<u32>,
     /// The HP and MP numbers' slash, learned on screen each session and never saved.
     slash: SlashLearner,
+    /// What confirmed readings of the full field said of the EXP table this session, by level:
+    /// the row when the bar fitted it, `None` when it didn't. The percent alone can't check the
+    /// table, so it goes by these, and by the table at a level not seen in full.
+    checked: Vec<(u16, Option<u64>)>,
 }
 
 /// The first line of [`ExpBarReader::knowledge`]'s text. A reader refuses any other.
@@ -1132,15 +1136,16 @@ impl ExpBarReader {
             reading.level = Some(level);
             reading.needed = Some(needed);
         }
-        // The percent alone can't check the table's EXP needed; the full field at the same level
-        // could. So while the tiles are unchanged, it keeps the last reading's, and a table row
-        // the bar didn't fit stays unused.
-        if !reading.exp_shown
-            && !tiles_changed
-            && let Some(last) = self.last
-            && last.level == reading.level
-        {
-            reading.needed = last.needed;
+        // The full field checks the table's EXP needed for its level; the percent alone goes by
+        // that check, so a row the bar didn't fit stays unused whatever the tiles did between.
+        if let Some(level) = reading.level {
+            let seen = self.checked.iter().position(|&(l, _)| l == level);
+            match (reading.exp_shown && reading.confirmed, seen) {
+                (true, Some(i)) => self.checked[i].1 = reading.needed,
+                (true, None) => self.checked.push((level, reading.needed)),
+                (false, Some(i)) if !reading.exp_shown => reading.needed = self.checked[i].1,
+                (false, _) => {}
+            }
         }
         self.last_tiles = tiles;
     }
@@ -2551,7 +2556,8 @@ mod tests {
     // EXP; fails_when=the percent alone brings back the table's EXP needed and an EXP made from it;
     // why_new=other percent-only tests use levels the table gets right; seam=none; no_claim=none
     // Fails if the percent alone trusts the table's EXP needed for a level whose full field didn't
-    // fit it, and reports an EXP worked out from that wrong row.
+    // fit it, and reports an EXP worked out from that wrong row, including after one frame whose
+    // level tiles looked different (a cursor over them).
     #[test]
     fn a_table_row_the_full_field_disproved_is_not_trusted_for_the_percent_alone() {
         let hud = Hud::new();
@@ -2579,6 +2585,34 @@ mod tests {
             (Some(44), None, None)
         );
         assert!(events_between(Some(&full), &alone).is_empty());
+        // One frame with other tiles, then the level's own again: still the full field's verdict.
+        let _ = reader.observe(&hud.draw_pct(45, pct_of(396_050, needed)).frame());
+        let back = reader
+            .observe(&hud.draw_pct(44, pct_of(396_100, needed)).frame())
+            .unwrap();
+        assert_eq!((back.level, back.needed, back.exp), (Some(44), None, None));
+    }
+
+    // Value: protects=the table's EXP needed works the EXP out at a level with no full field seen
+    // this session; fails_when=a restart late in a level shows no EXP; why_new=the disproved-row
+    // test covers only a level the full field contradicted; seam=none; no_claim=the table's accuracy
+    // A session that starts late in a level sees only the percent. Fails if the table's EXP needed
+    // isn't used there, as the player chose, or if a row the full field fitted isn't kept.
+    #[test]
+    fn a_level_never_seen_in_full_works_the_exp_out_from_the_table() {
+        let hud = Hud::new();
+        let kept = confirmed_knowledge(&hud);
+        let mut reader = ExpBarReader::from_knowledge(&kept).unwrap();
+        let needed_44 = exp_table::needed(44).unwrap();
+        let alone = reader
+            .observe(&hud.draw_pct(44, pct_of(396_000, needed_44)).frame())
+            .unwrap();
+        assert!(alone.confirmed && !alone.exp_shown);
+        assert_eq!((alone.level, alone.needed), (Some(44), Some(needed_44)));
+        assert_eq!(
+            alone.exp.map(|e| pct_of(e, needed_44)),
+            Some(pct_of(396_000, needed_44))
+        );
     }
 
     // Value: protects=with two digits never seen, a small fall in the percent teaches no digit;
