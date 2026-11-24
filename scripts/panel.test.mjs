@@ -183,6 +183,8 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
       await page.evaluate(textOf("settings-startup-note")),
       /waits in the menu bar.+quit from its menu bar icon\. Off, closing the panel quits MesoVibe\.$/,
     );
+    // About credits the game data, including what Meat and Lemon restore.
+    assert.match(await page.evaluate("document.body.innerText"), /OSMS Data Explorer.+what Meat and Lemon restore\./);
     assert.deepEqual(page.errors, []);
     page.close();
   });

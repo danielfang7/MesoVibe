@@ -4,39 +4,13 @@
 // and a session left running when the app closed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import vm from "node:vm";
 
-const REPO = fileURLToPath(new URL("../", import.meta.url));
-const esbuild = createRequire(join(REPO, "plugins", "package.json"))("esbuild");
+import { bundleTracker, run as runBundle } from "./session-tracker-harness.mjs";
 
-const bundle = (
-  await esbuild.build({
-    entryPoints: [join(REPO, "plugins/src/session-tracker/index.ts")],
-    bundle: true,
-    write: false,
-    format: "esm",
-    platform: "browser",
-    target: "es2022",
-    alias: { "@mesovibe/sdk": join(REPO, "sdk/src/index.ts") },
-    logLevel: "silent",
-  })
-).outputFiles[0].text;
+const bundle = await bundleTracker();
 
 /** Starts the plugin; returns a function to send it a message and the messages it sent. */
-function run() {
-  const sent = [];
-  const scope = { postMessage: (message) => sent.push(structuredClone(message)), onmessage: null };
-  scope.globalThis = scope;
-  for (const name of ["structuredClone", "Date", "Intl", "Math", "JSON", "Number", "Array", "Object", "String"]) {
-    scope[name] = globalThis[name];
-  }
-  vm.createContext(scope);
-  vm.runInContext(bundle, scope);
-  return { send: (data) => scope.onmessage({ data }), sent };
-}
+const run = () => runBundle(bundle);
 
 const last = (sent, type) => sent.filter((m) => m.type === type).at(-1);
 const NEEDED = 356_916;
