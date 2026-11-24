@@ -2548,6 +2548,41 @@ mod tests {
         assert!(reader.missing().exp.is_empty());
     }
 
+    // The game's cursor over a learned digit in a high place, where only that digit fits. Fails
+    // if the covered shape is learned in place of the shape the reader already knows.
+    #[test]
+    fn a_stray_pixel_over_a_learned_digit_changes_nothing_learned() {
+        let hud = Hud::new();
+        let mut reader = ExpBarReader::new();
+        let no_seven = |e: u64| !exp_text(e, pct_of(e, NEEDED_41)).contains('7');
+        let exps: Vec<u64> = (0..400)
+            .map(|i| 130_000 + i * 113)
+            .filter(|&e| no_seven(e))
+            .take(30)
+            .collect();
+        feed(&hud, &mut reader, 41, NEEDED_41, &exps);
+        assert_eq!(reader.missing().exp, ['7']);
+        // One more white pixel inside the 3 of 136,100[41.98%], its only 3.
+        let pct = pct_of(136_100, NEEDED_41);
+        let mut covered = hud.draw_values(41, 136_100, pct);
+        let x = 283 + 468 + hud.exp_font.columns('1').len() as u32 + 1;
+        let width = hud.exp_font.columns('3').len() as u32;
+        let (px, py) = (x..x + width)
+            .flat_map(|px| (740..747).map(move |py| (px, py)))
+            .find(|&(px, py)| covered.get(px, py) == DARK)
+            .expect("a gap inside the 3");
+        covered.set(px, py, WHITE);
+        assert_eq!(
+            reader.observe(&covered.frame()),
+            Err(Unreadable::UnknownGlyph(Field::Exp))
+        );
+        assert_eq!(reader.missing().exp, ['7']);
+        let clean = reader
+            .observe(&hud.draw_values(41, 136_100, pct).frame())
+            .unwrap();
+        assert_eq!(clean.exp, Some(136_100));
+    }
+
     // The percent alone, late in a level.
 
     // Fails if the percent alone doesn't read with the digits learned from the full field, if
