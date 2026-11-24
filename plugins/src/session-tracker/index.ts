@@ -32,6 +32,7 @@ import {
   totalMesos,
   validCatalog,
   validItems,
+  validLedger,
   validMaps,
   validPotSources,
 } from "./loot.js";
@@ -132,6 +133,10 @@ function validLoot<T extends LootFields>(session: T): T {
   else session.ps = sources;
   const mesos = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n >= 0;
   if (!mesos(session.pt)) delete session.pt;
+  // A malformed meso ledger is dropped and the session kept; its mesos fall back to the notices.
+  const ledger = validLedger(session.lg);
+  if (ledger === undefined) delete session.lg;
+  else session.lg = ledger;
   return session;
 }
 

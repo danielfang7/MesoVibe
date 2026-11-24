@@ -53,6 +53,10 @@ export interface MapEntry {
   h?: number;
   /** Part of `h` while heals that aren't potions may have hidden some. */
   hm?: number;
+  /** Mesos picked up on it by the meso ledger: rises between two readings with only this map played. */
+  fm?: number;
+  /** Play time between those readings: the map's exact mesos/hr's denominator. */
+  ft?: number;
 }
 
 /** One potion's uses, by its item ID in potions.ts. */
@@ -127,6 +131,8 @@ export interface LootFields {
   ps?: Record<string, PotSource>;
   /** A past session's pot cost at End, so a later price change never rewrites history. */
   pt?: number;
+  /** The meso ledger, from the meso totals read in the inventory and shop windows. */
+  lg?: Ledger;
 }
 
 /** Where a potion's count came from. */
@@ -434,6 +440,259 @@ export function reads(state: NoticeState): boolean {
   return state === "reading";
 }
 
+/** Where a trusted meso total was read: the inventory window or an NPC shop's. */
+export type MesoSource = "inventory" | "shop";
+
+/**
+ * A session's meso ledger: what the meso totals read in the inventory and shop windows say the
+ * session earned. Totals reach it already trusted (read the same in several frames), so it only
+ * decides what each change between two of them counts as. Saved with short keys; sessions saved
+ * before it have none.
+ *
+ * Profit is mesos picked up plus what shops paid. Mesos spent (potions, gear, a taxi) show on their
+ * own and are never taken from profit: potions count as a cost when they're drunk, and buying gear
+ * isn't a loss of the grind. A rise too big to be farming, like a storage withdrawal, a trade or a
+ * misread, is held out of profit until the player counts it.
+ */
+export interface Ledger {
+  /** The balance the next change is measured from, or null at the start of a segment. */
+  b: number | null;
+  /** When that balance was read (wall clock), for the held-rise check. */
+  ba: number;
+  /** The session's play time when it was read, for Profit/hr's clock. */
+  bp: number;
+  /** The session's first balance, or null before one. */
+  ob: number | null;
+  /** Trusted totals read this session. */
+  n: number;
+  /** Mesos picked up: rises between readings on maps where the session gained EXP. */
+  pu: number;
+  /** Mesos shops paid: rises read in a shop, or after time away from the grind. */
+  so: number;
+  /** Mesos spent: every fall. */
+  sp: number;
+  /** Held rises the player counted. */
+  ct: number;
+  /** Held rises not counted yet, oldest first: [amount, when read]. */
+  ho: [number, number][];
+  /** Play time between readings, pauses left out: Profit/hr's clock. */
+  pt: number;
+  /** When an ended session stops waiting for its close-out reading (wall clock). */
+  co?: number;
+}
+
+/** What the session did between the last trusted total and this one. */
+export interface SinceReading {
+  /** The session's play time now, pauses left out. */
+  playMs: number;
+  /**
+   * The one map played since the last reading (null: a map whose name couldn't be read), or
+   * undefined when several were, so the change can't be given to one map.
+   */
+  map: string | null | undefined;
+  /**
+   * Time went to something other than the grind since the last reading: a map where the session
+   * gained no EXP (a town), or a pause. A rise then is what a shop paid, never mesos picked up.
+   */
+  away: boolean;
+}
+
+/** What one reading did, for the panel's notices. */
+export type LedgerChange =
+  | { kind: "opening"; total: number }
+  | { kind: "picked" | "sold" | "spent" | "held"; amount: number }
+  | { kind: "same" };
+
+/** A rise outside a shop is held when it's more than this... */
+export const HOLD_MIN = 50_000;
+/** ...and more than this many mesos an hour since the last reading: faster than any farming. */
+export const HOLD_PER_HOUR = 3_000_000;
+/** How long an ended session waits for the reading that adds its sales. */
+export const CLOSE_OUT_MS = 30 * 60_000;
+/** A balance read longer ago than this shows as stale. */
+export const STALE_MS = 15 * 60_000;
+
+function newLedger(): Ledger {
+  return { b: null, ba: 0, bp: 0, ob: null, n: 0, pu: 0, so: 0, sp: 0, ct: 0, ho: [], pt: 0 };
+}
+
+/** Whether a rise outside a shop is too big to be farming. */
+function tooBig(ledger: Ledger, rise: number, atMs: number): boolean {
+  const hours = Math.max(0, atMs - ledger.ba) / 3_600_000;
+  return rise > Math.max(HOLD_MIN, HOLD_PER_HOUR * hours);
+}
+
+/** Moves the balance to `total`, read at `atMs` with `playMs` of the session played. */
+function rebase(ledger: Ledger, total: number, atMs: number, playMs: number): void {
+  ledger.b = total;
+  ledger.ba = atMs;
+  ledger.bp = playMs;
+  ledger.n += 1;
+  if (ledger.ob === null) ledger.ob = total;
+}
+
+/**
+ * Counts a trusted meso total read during the session. The first one of a segment only sets the
+ * balance. After that a fall is spent; a rise read in a shop is what the shop paid; any other rise
+ * is held when it's too big to be farming, else it's what a shop paid after time away from the
+ * grind, or mesos picked up, which go to the one map played since the last reading.
+ */
+export function addReading(loot: LootFields, total: number, source: MesoSource, atMs: number, since: SinceReading): LedgerChange {
+  const ledger = (loot.lg ??= newLedger());
+  const before = ledger.b;
+  if (before === null) {
+    rebase(ledger, total, atMs, since.playMs);
+    return { kind: "opening", total };
+  }
+  const played = Math.max(0, since.playMs - ledger.bp);
+  const delta = total - before;
+  let change: LedgerChange;
+  if (delta < 0) {
+    ledger.sp += -delta;
+    change = { kind: "spent", amount: -delta };
+  } else if (delta === 0) {
+    change = { kind: "same" };
+  } else if (source === "shop") {
+    ledger.so += delta;
+    change = { kind: "sold", amount: delta };
+  } else if (tooBig(ledger, delta, atMs)) {
+    ledger.ho.push([delta, atMs]);
+    change = { kind: "held", amount: delta };
+  } else if (since.away) {
+    ledger.so += delta;
+    change = { kind: "sold", amount: delta };
+  } else {
+    ledger.pu += delta;
+    change = { kind: "picked", amount: delta };
+  }
+  // A stretch on one grinding map is that map's exact mesos/hr, whatever the change was.
+  if (!since.away && since.map !== undefined && source === "inventory") {
+    const entry = entryFor(loot, since.map, null);
+    if (change.kind === "picked") entry.fm = (entry.fm ?? 0) + change.amount;
+    entry.ft = (entry.ft ?? 0) + played;
+  }
+  ledger.pt += played;
+  rebase(ledger, total, atMs, since.playMs);
+  return change;
+}
+
+/**
+ * Takes a trusted total read in the five minutes before the session's first EXP gain as its
+ * opening balance, so a player who just checked their inventory in town isn't asked again. False
+ * when it's older than that.
+ */
+export function openWith(loot: LootFields, total: number, readAtMs: number, startAtMs: number): boolean {
+  if (startAtMs - readAtMs > HOLD_MS) return false;
+  const ledger = (loot.lg = newLedger());
+  rebase(ledger, total, readAtMs, 0);
+  return true;
+}
+
+/**
+ * Starts a new segment: the EXP side started a new baseline (another character, a restarted game),
+ * so the next total sets the balance again rather than counting as a change. What's counted stays.
+ */
+export function restartSegment(loot: LootFields): void {
+  if (loot.lg !== undefined) loot.lg.b = null;
+}
+
+/** Ends the session: it waits [`CLOSE_OUT_MS`] for a reading that adds what was sold after End. */
+export function waitForCloseOut(loot: LootFields, atMs: number): void {
+  if (loot.lg !== undefined && loot.lg.b !== null) loot.lg.co = atMs + CLOSE_OUT_MS;
+}
+
+/** Stops waiting for the close-out: the next session's first EXP gain, or MesoVibe quitting. */
+export function stopCloseOut(loot: LootFields): void {
+  if (loot.lg !== undefined) delete loot.lg.co;
+}
+
+/**
+ * The close-out: the first trusted total read after End, within [`CLOSE_OUT_MS`]. The time since
+ * End wasn't play, so a rise is what shops paid (held when it's too big and not read in a shop), a
+ * fall is spent, and Profit/hr's clock doesn't move. Null when nothing is waiting for it.
+ */
+export function closeOut(loot: LootFields, total: number, source: MesoSource, atMs: number): LedgerChange | null {
+  const ledger = loot.lg;
+  if (ledger?.co === undefined) return null;
+  const due = ledger.co;
+  delete ledger.co;
+  if (atMs > due || ledger.b === null) return null;
+  const delta = total - ledger.b;
+  let change: LedgerChange;
+  if (delta < 0) {
+    ledger.sp += -delta;
+    change = { kind: "spent", amount: -delta };
+  } else if (delta === 0) {
+    change = { kind: "same" };
+  } else if (source !== "shop" && tooBig(ledger, delta, atMs)) {
+    ledger.ho.push([delta, atMs]);
+    change = { kind: "held", amount: delta };
+  } else {
+    ledger.so += delta;
+    change = { kind: "sold", amount: delta };
+  }
+  rebase(ledger, total, atMs, ledger.bp);
+  return change;
+}
+
+/** Counts the held rise at `index` into profit; its amount and when it was read, for Undo. */
+export function countHeld(loot: LootFields, index: number): [number, number] | null {
+  const held = loot.lg?.ho.splice(index, 1)[0];
+  if (held === undefined || loot.lg === undefined) return null;
+  loot.lg.ct += held[0];
+  return held;
+}
+
+/** Undoes [`countHeld`]: the rise is held again, in its place by when it was read. */
+export function uncountHeld(loot: LootFields, held: [number, number]): void {
+  const ledger = loot.lg;
+  if (ledger === undefined) return;
+  ledger.ct = Math.max(0, ledger.ct - held[0]);
+  const at = ledger.ho.findIndex(([, atMs]) => atMs > held[1]);
+  ledger.ho.splice(at === -1 ? ledger.ho.length : at, 0, held);
+}
+
+/** Profit: mesos picked up, what shops paid, and the held rises counted. */
+export function ledgerProfit(ledger: Ledger): number {
+  return ledger.pu + ledger.so + ledger.ct;
+}
+
+/** Profit/hr, over play time between readings, or null without two readings a minute apart. */
+export function ledgerRate(ledger: Ledger): number | null {
+  if (ledger.n < 2 || ledger.pt < MESOS_RATE_MS) return null;
+  return (ledgerProfit(ledger) * 3_600_000) / ledger.pt;
+}
+
+/** A map's exact mesos/hr from the ledger, or null with under a minute of readings on it alone. */
+export function fieldRate(entry: MapEntry): number | null {
+  const time = entry.ft ?? 0;
+  return time >= MESOS_RATE_MS ? ((entry.fm ?? 0) * 3_600_000) / time : null;
+}
+
+/** Whether the last balance is older than [`STALE_MS`]. */
+export function ledgerStale(ledger: Ledger, atMs: number): boolean {
+  return ledger.b !== null && atMs - ledger.ba > STALE_MS;
+}
+
+/**
+ * Adds `from`'s ledger into `into` on Undo. The mesos counted since add up; play time doesn't, as
+ * with the other rates, and the session no longer waits to close out. When totals were read since,
+ * their balance was timed on the other session's clock, so the next total starts a new segment
+ * rather than being measured against it; otherwise the balance from before stays.
+ */
+function mergeLedger(into: LootFields, from: Ledger): void {
+  const target = (into.lg ??= newLedger());
+  target.pu += from.pu;
+  target.so += from.so;
+  target.sp += from.sp;
+  target.ct += from.ct;
+  target.n += from.n;
+  target.ho.push(...from.ho);
+  if (target.ob === null) target.ob = from.ob;
+  if (from.b !== null) target.b = null;
+  delete target.co;
+}
+
 /**
  * Adds `from`'s loot into `into`: Undo puts a session back, keeping pickups since and potions
  * counted since. A potion counts only once a session has EXP, so one drunk after End and before
@@ -451,7 +710,9 @@ export function mergeLoot(into: LootFields, from: LootFields): void {
     if (entry.mi) target.mi = true;
     if (entry.pa) target.pa = true;
     if (entry.u !== undefined) addPots((target.u ??= []), entry.u);
+    if (entry.fm) target.fm = (target.fm ?? 0) + entry.fm;
   }
+  if (from.lg !== undefined) mergeLedger(into, from.lg);
   if (from.held !== undefined) {
     const map = from.held.map;
     if (map !== undefined) {
@@ -493,9 +754,45 @@ export function validMaps(value: unknown): MapEntry[] | undefined {
     if (pots.length > 0) entry.u = pots;
     if (count(e.h) && e.h > 0) entry.h = e.h;
     if (count(e.hm) && e.hm > 0) entry.hm = Math.min(e.hm, entry.h ?? 0);
+    if (count(e.ft) && e.ft > 0) {
+      entry.ft = e.ft;
+      if (count(e.fm) && e.fm > 0) entry.fm = e.fm;
+    }
     maps.push(entry);
   }
   return maps;
+}
+
+/**
+ * A saved meso ledger, or undefined when it's malformed: the session then keeps everything else,
+ * and its mesos show as estimates from the pickup notices.
+ */
+export function validLedger(value: unknown): Ledger | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const l = value as Record<string, unknown>;
+  const count = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+  const balance = (n: unknown): n is number | null => n === null || count(n);
+  if (![l.ba, l.bp, l.n, l.pu, l.so, l.sp, l.ct, l.pt].every(count) || !balance(l.b) || !balance(l.ob)) return undefined;
+  if (!Array.isArray(l.ho)) return undefined;
+  const ho: [number, number][] = [];
+  for (const raw of l.ho) {
+    if (Array.isArray(raw) && raw.length === 2 && count(raw[0]) && raw[0] > 0 && count(raw[1])) ho.push([raw[0], raw[1]]);
+  }
+  const ledger: Ledger = {
+    b: l.b as number | null,
+    ba: l.ba as number,
+    bp: l.bp as number,
+    ob: l.ob as number | null,
+    n: l.n as number,
+    pu: l.pu as number,
+    so: l.so as number,
+    sp: l.sp as number,
+    ct: l.ct as number,
+    ho,
+    pt: l.pt as number,
+  };
+  if (count(l.co)) ledger.co = l.co;
+  return ledger;
 }
 
 /** A saved item list, with anything malformed dropped. */

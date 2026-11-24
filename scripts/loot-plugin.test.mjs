@@ -775,3 +775,172 @@ test("malformed items and catalog entries in a save are dropped", () => {
     ],
   ]);
 });
+
+// The meso ledger: what the meso totals read from the inventory and shop windows say a session
+// earned. These tests drive its arithmetic directly with trusted totals, since no reader sends
+// them yet.
+const MIN = 60_000;
+const grinding = (playMs, map = "aaaa") => ({ playMs, map, away: false });
+const ledgerOf = (fields) => fields.lg;
+
+// The first total only sets the balance; a later rise on the one grinding map is mesos picked up,
+// given to that map with the play time between the two readings. Fails if the opening total counts
+// as profit, or the map's exact mesos/hr uses the wrong mesos or time.
+test("a rise between two readings on one grinding map is mesos picked up, and that map's rate", () => {
+  const fields = {};
+  assert.deepEqual(loot.addReading(fields, 1_000_000, "inventory", T0, grinding(0)), { kind: "opening", total: 1_000_000 });
+  assert.equal(loot.ledgerRate(ledgerOf(fields)), null, "one reading has no rate");
+  assert.deepEqual(loot.addReading(fields, 1_050_000, "inventory", T0 + 30 * MIN, grinding(30 * MIN)), { kind: "picked", amount: 50_000 });
+  assert.equal(loot.ledgerProfit(ledgerOf(fields)), 50_000);
+  assert.equal(loot.ledgerRate(ledgerOf(fields)), 100_000);
+  const map = fields.maps.find((m) => m.k === "aaaa");
+  assert.deepEqual([map.fm, map.ft], [50_000, 30 * MIN]);
+  assert.equal(loot.fieldRate(map), 100_000);
+});
+
+// A sale read in a shop is profit as what shops paid; a fall is spent and never taken from profit,
+// so restocking potions doesn't make a map look worse. Fails if a purchase lowers profit, or a
+// sale is counted as mesos picked up.
+test("shop sales count in profit, and spending shows apart", () => {
+  const fields = {};
+  loot.addReading(fields, 1_000_000, "inventory", T0, grinding(0));
+  assert.deepEqual(loot.addReading(fields, 1_188_450, "shop", T0 + 20 * MIN, { playMs: 20 * MIN, map: undefined, away: true }), { kind: "sold", amount: 188_450 });
+  assert.deepEqual(loot.addReading(fields, 1_092_450, "shop", T0 + 21 * MIN, { playMs: 21 * MIN, map: undefined, away: true }), { kind: "spent", amount: 96_000 });
+  const ledger = ledgerOf(fields);
+  assert.deepEqual([ledger.pu, ledger.so, ledger.sp], [0, 188_450, 96_000]);
+  assert.equal(loot.ledgerProfit(ledger), 188_450);
+  assert.equal(fields.maps, undefined, "a stretch away from the grind is no map's rate");
+});
+
+// Without a shop reading, a rise after time in town or across a pause is what a shop paid, not
+// mesos picked up, so it never raises a map's mesos/hr. Fails if it counts as picked up or goes
+// to a map.
+test("a rise after time away from the grind counts as sold", () => {
+  const fields = {};
+  loot.addReading(fields, 500_000, "inventory", T0, grinding(0));
+  assert.deepEqual(loot.addReading(fields, 540_000, "inventory", T0 + 40 * MIN, { playMs: 25 * MIN, map: "aaaa", away: true }), { kind: "sold", amount: 40_000 });
+  assert.equal(ledgerOf(fields).pu, 0);
+  assert.equal(fields.maps, undefined);
+  assert.equal(ledgerOf(fields).pt, 25 * MIN, "Profit/hr's clock leaves the pause out");
+});
+
+// A rise outside a shop above both 50,000 mesos and 3,000,000 an hour since the last reading is held
+// out of profit; counting it adds it, and Undo holds it again. Fails if a bound moves, a held rise
+// counts before the player says so, or Undo loses it.
+test("a rise too big to be farming is held until counted", () => {
+  const bounds = [
+    [50_000, 1_000, "picked"],
+    [50_001, 1_000, "held"],
+    [3_000_000, 60 * MIN, "picked"],
+    [3_000_001, 60 * MIN, "held"],
+  ];
+  for (const [rise, after, kind] of bounds) {
+    const fields = {};
+    loot.addReading(fields, 1_000_000, "inventory", T0, grinding(0));
+    const change = loot.addReading(fields, 1_000_000 + rise, "inventory", T0 + after, grinding(after));
+    assert.equal(change.kind, kind, `${rise} after ${after} ms`);
+  }
+  const fields = {};
+  loot.addReading(fields, 1_000_000, "inventory", T0, grinding(0));
+  loot.addReading(fields, 6_000_000, "inventory", T0 + 10 * MIN, grinding(10 * MIN));
+  const ledger = ledgerOf(fields);
+  assert.equal(loot.ledgerProfit(ledger), 0);
+  assert.deepEqual(ledger.ho, [[5_000_000, T0 + 10 * MIN]]);
+  const counted = loot.countHeld(fields, 0);
+  assert.equal(loot.ledgerProfit(ledger), 5_000_000);
+  loot.uncountHeld(fields, counted);
+  assert.equal(loot.ledgerProfit(ledger), 0);
+  assert.deepEqual(ledger.ho, [[5_000_000, T0 + 10 * MIN]]);
+  assert.equal(
+    loot.addReading(fields, 9_000_000, "shop", T0 + 11 * MIN, { playMs: 11 * MIN, map: undefined, away: true }).kind,
+    "sold",
+    "a rise read in a shop is never held",
+  );
+});
+
+// When the EXP side starts a new baseline (another character), the next total opens a new segment:
+// the jump between characters counts as nothing, and what was earned stays. Fails if the jump
+// counts or the earlier profit is lost.
+test("a new segment doesn't count the jump between characters", () => {
+  const fields = {};
+  loot.addReading(fields, 2_000_000, "inventory", T0, grinding(0));
+  loot.addReading(fields, 2_030_000, "inventory", T0 + 10 * MIN, grinding(10 * MIN));
+  loot.restartSegment(fields);
+  assert.deepEqual(loot.addReading(fields, 40_000_000, "inventory", T0 + 12 * MIN, grinding(12 * MIN)), { kind: "opening", total: 40_000_000 });
+  loot.addReading(fields, 40_010_000, "inventory", T0 + 22 * MIN, grinding(22 * MIN));
+  const ledger = ledgerOf(fields);
+  assert.equal(loot.ledgerProfit(ledger), 40_000);
+  assert.equal(ledger.pt, 20 * MIN, "the gap between segments isn't on the clock");
+});
+
+// A total read in the five minutes before the first EXP gain opens the session, so the player isn't
+// asked again; an older one doesn't. Fails if the window is off by a millisecond either way.
+test("a total from the five minutes before the first kill opens the session", () => {
+  const fresh = {};
+  assert.equal(loot.openWith(fresh, 1_204_330, T0 - 5 * MIN, T0), true);
+  assert.equal(ledgerOf(fresh).ob, 1_204_330);
+  assert.equal(loot.addReading(fresh, 1_224_330, "inventory", T0 + 10 * MIN, grinding(10 * MIN)).kind, "picked");
+  const stale = {};
+  assert.equal(loot.openWith(stale, 1_204_330, T0 - 5 * MIN - 1, T0), false);
+  assert.equal(stale.lg, undefined);
+});
+
+// After End the session waits 30 minutes for a reading that adds what was sold, without moving
+// Profit/hr's clock; later, or after the wait is stopped, a reading closes nothing. Fails if a late
+// reading lands in the old session, or the sale changes the clock.
+test("the close-out adds sales within 30 minutes of End", () => {
+  const ended = () => {
+    const fields = {};
+    loot.addReading(fields, 1_000_000, "inventory", T0, grinding(0));
+    loot.addReading(fields, 1_100_000, "inventory", T0 + 30 * MIN, grinding(30 * MIN));
+    loot.waitForCloseOut(fields, T0 + 31 * MIN);
+    return fields;
+  };
+  const inTime = ended();
+  assert.deepEqual(loot.closeOut(inTime, 1_228_400, "inventory", T0 + 61 * MIN), { kind: "sold", amount: 128_400 });
+  assert.equal(loot.ledgerProfit(ledgerOf(inTime)), 228_400);
+  assert.equal(ledgerOf(inTime).pt, 30 * MIN);
+  assert.equal(loot.closeOut(inTime, 1_300_000, "inventory", T0 + 62 * MIN), null, "only one close-out");
+  const late = ended();
+  assert.equal(loot.closeOut(late, 1_228_400, "inventory", T0 + 61 * MIN + 1), null);
+  assert.equal(loot.ledgerProfit(ledgerOf(late)), 100_000);
+  const stopped = ended();
+  loot.stopCloseOut(stopped);
+  assert.equal(loot.closeOut(stopped, 1_228_400, "inventory", T0 + 40 * MIN), null);
+});
+
+// Undo of End adds the mesos counted since and keeps the clock, and a balance read on the other
+// session's clock starts a new segment. Fails if the mesos are lost, time is added, or the next
+// total is measured against the wrong balance.
+test("Undo merges the ledger without mixing clocks", () => {
+  const into = {};
+  loot.addReading(into, 1_000_000, "inventory", T0, grinding(0));
+  loot.addReading(into, 1_100_000, "inventory", T0 + 30 * MIN, grinding(30 * MIN));
+  loot.waitForCloseOut(into, T0 + 31 * MIN);
+  const since = {};
+  loot.addReading(since, 1_120_000, "inventory", T0 + 31 * MIN, grinding(0));
+  loot.addReading(since, 1_125_000, "inventory", T0 + 32 * MIN, grinding(MIN));
+  loot.mergeLoot(into, since);
+  const ledger = ledgerOf(into);
+  assert.equal(loot.ledgerProfit(ledger), 105_000);
+  assert.equal(ledger.pt, 30 * MIN);
+  assert.equal(ledger.co, undefined, "the session runs again");
+  assert.equal(loot.addReading(into, 1_200_000, "inventory", T0 + 40 * MIN, grinding(39 * MIN)).kind, "opening");
+});
+
+// A malformed saved ledger is dropped with the session kept, and a good one survives a save and
+// load. Fails if a bad value throws or a good ledger loses a field.
+test("a saved ledger is kept when valid and dropped when not", () => {
+  const fields = {};
+  loot.addReading(fields, 1_000_000, "inventory", T0, grinding(0));
+  loot.addReading(fields, 6_000_000, "inventory", T0 + 10 * MIN, grinding(10 * MIN));
+  loot.waitForCloseOut(fields, T0 + 11 * MIN);
+  const saved = JSON.parse(JSON.stringify(fields.lg));
+  assert.deepEqual(loot.validLedger(saved), fields.lg);
+  for (const bad of [null, 5, [], { ...saved, pu: -1 }, { ...saved, b: "a lot" }, { ...saved, ho: 3 }]) {
+    assert.equal(loot.validLedger(bad), undefined, JSON.stringify(bad));
+  }
+  assert.deepEqual(loot.validLedger({ ...saved, ho: [[5, T0], [-1, T0], "x"] }).ho, [[5, T0]]);
+  const maps = loot.validMaps([{ k: "aaaa", p: 1, x: 0, m: 0, r: 0, l: 0, s: null, e: null, fm: 50_000, ft: 30 * MIN }]);
+  assert.deepEqual([maps[0].fm, maps[0].ft], [50_000, 30 * MIN]);
+});
