@@ -2,7 +2,8 @@
  * What a session's potions cost, and pot cost/hr. A potion bought costs its shop price; one picked
  * up during the session costs what an NPC shop would have paid for it, since that's what drinking
  * it gave up. Potions stack, so which ones were drunk isn't known: the first uses, up to the number
- * picked up, are taken as the picked-up ones, which makes the cost a lower bound.
+ * picked up, are taken as the picked-up ones, the cheapest way to price them. A pickup whose notice
+ * was missed is priced as bought, though, so the cost can also come out a little high.
  */
 
 import { MESOS_RATE_MS, sessionItems } from "./loot.js";

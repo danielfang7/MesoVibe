@@ -141,16 +141,20 @@ test("potions cost their shop price, and pot cost/hr is over the time they were 
 });
 
 // The headline is pot cost/hr in one stat in every state, so the panel doesn't jump, and it never
-// waits on the pickup notices. Fails if a state draws another kind of node or label, shows a rate
-// before a minute, or depends on loot/hr being known.
+// waits on the pickup notices. Until there's a rate, a visible line under it says why (a stat's
+// detail is only a tooltip). Fails if a state draws another kind of node or label, shows a rate
+// before a minute, hides why in the tooltip, or depends on loot/hr being known.
 test("the headline is pot cost/hr in every state, with or without loot/hr", () => {
   const early = play({ seconds: 40, meat: [20] });
-  assert.deepEqual(headline(early.sent), { kind: "stat", label: "Pot cost/hr", value: null, detail: "Pot cost/hr shows after a minute." });
+  assert.deepEqual(headline(early.sent), { kind: "stat", label: "Pot cost/hr", value: null });
+  assert.deepEqual(potions(early.sent).children[1], { kind: "empty", text: "Pot cost/hr shows after a minute." });
   assert.deepEqual(potTable(early.sent).details, [["+160 HP each"]], "no uses/hr before a minute either");
   const learning = grind({ readers: { ...READING, notices: "learning" } });
   assert.deepEqual(headline(learning.sent), { kind: "stat", label: "Pot cost/hr", value: "9.3K", detail: "9,300 mesos on potions per hour" });
+  assert.equal(potions(learning.sent).children[1].kind, "table", "no waiting line once there's a rate");
   const none = play({ seconds: 120 });
-  assert.deepEqual(headline(none.sent), { kind: "stat", label: "Pot cost/hr", value: "0", detail: "No potions used yet" });
+  assert.deepEqual(headline(none.sent), { kind: "stat", label: "Pot cost/hr", value: "0" });
+  assert.deepEqual(potions(none.sent).children[1], { kind: "empty", text: "No potions used yet." });
   assert.equal(potTable(none.sent), undefined);
 });
 
@@ -273,7 +277,7 @@ test("a pause counts no potion during it, and the first one after it", () => {
 test("potions before the first EXP gain aren't counted", () => {
   const { send, sent, now } = play({ seconds: 120, meat: [5] });
   assert.equal(potTable(sent), undefined);
-  assert.deepEqual(headline(sent).detail, "No potions used yet");
+  assert.ok(potLines(sent).includes("No potions used yet."));
   send(action("end", now));
   assert.equal(last(sent, "save").data.history[0].maps[0].u, undefined);
 });
@@ -351,12 +355,91 @@ test("Undo after End keeps potions counted in its window", () => {
   send(action("end", now));
   send(exp(233_843, now + 1_000));
   send(hpMp(660, 500, now + 1_500));
+  // A maybe use in the window comes back too, so the cost stays a lower bound.
+  send(event({ type: "TestMaybe", item: 2010005, count: 1 }, now + 1_600));
   send(action("undo-end", now + 2_000));
   assert.deepEqual(potTable(sent).rows[0], ["Meat", "×11", "880"]);
+  assert.deepEqual(potTable(sent).details[1], ["+150 MP each · 30/hr · +1 maybe"]);
+  assert.equal(headline(sent).value, "9.78K+");
   send(action("end", now + 2_000));
   const entry = last(sent, "save").data.history[0].maps[0];
   assert.equal(entry.h, 600_000);
   assert.deepEqual(entry.u[0], { k: MEAT, c: 11 });
+  assert.deepEqual(entry.u[1], { k: 2010005, c: 5, y: 1 });
+});
+
+// Undo of Reset puts the session back with its potions and any counted since, as Undo of End
+// does. Fails if Reset's Undo loses the potions or adds the window's time to pot cost/hr.
+test("Undo after Reset puts its potions back", () => {
+  const { send, sent, now } = grind();
+  send(action("reset", now));
+  assert.equal(potions(sent), undefined, "a reset session has no potions to show");
+  send(exp(233_843, now + 1_000));
+  send(hpMp(660, 500, now + 1_500));
+  send(action("undo-reset", now + 2_000));
+  assert.deepEqual(potTable(sent).rows, [
+    ["Meat", "×11", "880"],
+    ["Lemon", "×5", "750"],
+  ]);
+  send(action("end", now + 2_000));
+  const entry = last(sent, "save").data.history[0].maps[0];
+  assert.equal(entry.h, 600_000);
+  assert.deepEqual(entry.u, [
+    { k: MEAT, c: 11 },
+    { k: 2010005, c: 5 },
+  ]);
+});
+
+// A potion counted from rises and its quick slot saves as "both", and the footnote drops "going up".
+// Fails if one way overwrites the other, Undo loses its window's source, or slots are ignored.
+test("a potion counted from its quick slot too is saved as counted both ways", () => {
+  const { send, sent, now } = grind();
+  send(event({ type: "TestSlot", item: MEAT, count: 1 }, now));
+  assert.deepEqual(potTable(sent).rows[0], ["Meat", "×11", "880"]);
+  assert.deepEqual(potions(sent).children.at(-1), { kind: "text", text: "Only Meat and Lemon are counted.", variant: "muted" });
+  send(action("end", now));
+  assert.deepEqual(last(sent, "save").data.history[0].ps, { [MEAT]: "both", 2010005: "rises" });
+  // Lemon counted from its slot in the Undo window comes back counted both ways too.
+  send(exp(233_843, now + 1_000));
+  send(event({ type: "TestSlot", item: 2010005, count: 1 }, now + 1_500));
+  send(action("undo-end", now + 2_000));
+  send(action("end", now + 2_000));
+  assert.deepEqual(last(sent, "save").data.history[0].ps, { [MEAT]: "both", 2010005: "both" });
+});
+
+// A counted potion saves the session within five seconds, as an EXP change does, so closing
+// MesoVibe loses at most that. Fails if a potion waits for the 30-second save.
+test("a counted potion is saved within five seconds", () => {
+  const { send, sent, now } = play({ seconds: 120 });
+  const saves = () => sent.filter((m) => m.type === "save").length;
+  // Ticks with no gain until the next save, so the potion comes a second after one.
+  let at = now;
+  const before = saves();
+  while (saves() === before && at < now + 60_000) send(tick((at += 1000)));
+  send(hpMp(660, 500, (at += 1000)));
+  for (let i = 0; i < 5; i++) send(tick((at += 1000)));
+  assert.deepEqual(last(sent, "save").data.current.maps[0].u, [{ k: MEAT, c: 1 }]);
+});
+
+// A potion raised by a recovery skill lists each amount, and one with none uses its own amount.
+// Fails if the amounts are joined wrongly or the line goes blank.
+test("a potion's line lists each amount it's counted at", () => {
+  const amounts = (at) => [
+    event({ type: "TestAmounts", item: MEAT, amounts: [160, 240] }, at),
+    event({ type: "TestAmounts", item: 2010005, amounts: [] }, at),
+  ];
+  const { sent } = grind({ also: { 300: amounts } });
+  assert.deepEqual(potTable(sent).details, [["+160 and +240 HP each · 60/hr"], ["+150 MP each · 30/hr"]]);
+});
+
+// A save from a newer build can count a potion this one doesn't know: it's left out, and the
+// tracker still starts. Fails if an unknown potion stops the tracker or shows up priced.
+test("a saved potion this build doesn't know is left out", () => {
+  const newer = pastSession(T0);
+  newer.maps[0].u.push({ k: 2000004, c: 3 });
+  const { sent } = startWith({ version: 1, history: [newer], current: null });
+  assert.equal(lootTable(sent).details[0].at(-1), "Pots 800: Meat ×10");
+  assert.equal(allTime(sent)["Pot cost"], "800");
 });
 
 // Potion fields survive a save and a restart; a malformed one is dropped and the session kept.

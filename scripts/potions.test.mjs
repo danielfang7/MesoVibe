@@ -9,7 +9,8 @@ import { POTIONS } from "../plugins/src/session-tracker/potions.ts";
 
 const items = readFileSync(new URL("../engine/data/items.tsv", import.meta.url), "utf8")
   .trim()
-  .split("\n")
+  // Git on Windows may check the file out with CRLF line endings.
+  .split(/\r?\n/)
   .slice(1)
   .map((line) => {
     const [id, tab, sell, , name] = line.split("\t");

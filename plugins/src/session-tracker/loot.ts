@@ -435,8 +435,10 @@ export function reads(state: NoticeState): boolean {
 }
 
 /**
- * Adds `from`'s loot into `into`: Undo puts a session back, keeping pickups and potions since.
- * Neither read time is added, so mesos/hr and pot cost/hr keep the same base after an Undo.
+ * Adds `from`'s loot into `into`: Undo puts a session back, keeping pickups since and potions
+ * counted since. A potion counts only once a session has EXP, so one drunk after End and before
+ * the next gain isn't brought back. Neither read time is added, so mesos/hr and pot cost/hr keep
+ * the same base after an Undo.
  */
 export function mergeLoot(into: LootFields, from: LootFields): void {
   for (const entry of from.maps ?? []) {

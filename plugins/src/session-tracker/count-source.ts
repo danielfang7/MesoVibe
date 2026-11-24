@@ -4,7 +4,7 @@
  * prices them and shows them, the same way whichever source found them.
  *
  * No source is wired in yet, so nothing is counted and the Potions section and the Loot tab's
- * Net/hr column stay hidden. The tests wire in a stand-in source to check the accounting and the
+ * potion lines stay hidden. The tests wire in a stand-in source to check the accounting and the
  * views.
  */
 
