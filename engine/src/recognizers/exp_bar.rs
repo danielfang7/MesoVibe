@@ -293,7 +293,8 @@ pub struct ExpReading {
     pub level: Option<u16>,
     /// EXP into the current level. When the HUD shows only the percent, the EXP that percent
     /// allows at the level's EXP needed, so off by less than one hundredth of a percent's worth:
-    /// the last reading's EXP while the percent still allows it, else the middle of the range.
+    /// the last EXP at the same level while the percent still allows it, else the middle of the
+    /// range.
     /// `None` when the HUD shows only the percent and EXP needed isn't known.
     pub exp: Option<u64>,
     /// Whether the HUD showed the EXP. False when it showed only the percent, as it does late in
@@ -409,6 +410,10 @@ pub struct ExpBarReader {
     learner: Learner,
     /// The last reading `observe` returned, for level-ups and new digits.
     last: Option<ExpReading>,
+    /// The last reading with an EXP, which a reading of the percent alone carries on from. Kept
+    /// apart from `last`: a frame with the level tiles hidden (the cursor over them) has no level
+    /// and so no EXP, and carrying on from it would restart the EXP at the middle of the range.
+    last_exp: Option<ExpReading>,
     /// The level tiles' glyphs in the last frame `observe` read. They change at a level-up and
     /// not at a death, though the EXP falls at both.
     last_tiles: Option<Vec<Glyph>>,
@@ -675,7 +680,10 @@ impl ExpBarReader {
         }
         let mut reading = result?;
         self.follow_level(frame, layout, &mut reading);
-        estimate(&mut reading, self.last.as_ref());
+        estimate(&mut reading, self.last_exp.as_ref());
+        if reading.exp.is_some() {
+            self.last_exp = Some(reading);
+        }
         self.last = Some(reading);
         Ok(reading)
     }
@@ -703,7 +711,7 @@ impl ExpBarReader {
             let offset = self.find_label(frame, nominal).unwrap_or(self.offset);
             let result = match nominal.shifted(offset) {
                 Some(layout) => self.read_at(frame, layout).map(|mut reading| {
-                    estimate(&mut reading, self.last.as_ref());
+                    estimate(&mut reading, self.last_exp.as_ref());
                     reading
                 }),
                 None => Err(Unreadable::HudNotFound),
@@ -1302,7 +1310,7 @@ fn fell(before: &ExpReading, now: &ExpReading) -> bool {
 }
 
 /// Works out the EXP of a reading whose HUD showed only the percent, when EXP needed is known:
-/// of the values the percent allows, the one nearest the last reading's EXP at the same EXP
+/// of the values the percent allows, the one nearest the last EXP at the same level and EXP
 /// needed, else the middle one. So the EXP holds while the percent does, carries on from the
 /// last EXP shown, and moves only as far as a new percent makes it.
 fn estimate(reading: &mut ExpReading, last: Option<&ExpReading>) {
@@ -1316,7 +1324,7 @@ fn estimate(reading: &mut ExpReading, last: Option<&ExpReading>) {
         return;
     };
     let before = last
-        .filter(|last| last.needed == reading.needed)
+        .filter(|last| last.level == reading.level && last.needed == reading.needed)
         .and_then(|last| last.exp);
     reading.exp = Some(match before {
         Some(exp) => exp.clamp(lo, hi),
@@ -2569,6 +2577,25 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::LevelUp { .. }))
         );
+    }
+
+    // A frame with the cursor over the level tiles has no level, so no EXP. Fails if the EXP after
+    // it restarts at the middle of the percent's range, which the Session Tracker logs as EXP lost.
+    #[test]
+    fn a_frame_with_the_level_hidden_leaves_the_worked_out_exp_where_it_was() {
+        let hud = Hud::new();
+        let mut reader = ExpBarReader::new();
+        feed(&hud, &mut reader, 41, NEEDED_41, &GRIND);
+        let last = *GRIND.last().unwrap();
+        let pct = pct_of(last, NEEDED_41);
+        let before = reader.observe(&hud.draw_pct(41, pct).frame()).unwrap();
+        assert_eq!(before.exp, Some(last));
+        let mut cursor = hud.draw_pct(41, pct);
+        cursor.fill(283 + 46, 768 - 24, 23, 13, WHITE);
+        let hidden = reader.observe(&cursor.frame()).unwrap();
+        assert_eq!((hidden.level, hidden.exp), (None, None));
+        let after = reader.observe(&hud.draw_pct(41, pct).frame()).unwrap();
+        assert_eq!(after, before);
     }
 
     // Value: protects=a table row the full field disproved stays untrusted once the HUD hides the
