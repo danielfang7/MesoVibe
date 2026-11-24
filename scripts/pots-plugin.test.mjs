@@ -140,14 +140,15 @@ test("potions cost their shop price, and pot cost/hr is over the time they were 
   assert.equal(allTime(sent)["Pot cost"], "1.55K", "All time counts the running session's potions");
 });
 
-// The headline is pot cost/hr in one stat in every state, so the panel doesn't jump, and it never
-// waits on the pickup notices. Until there's a rate, a visible line under it says why (a stat's
-// detail is only a tooltip). Fails if a state draws another kind of node or label, shows a rate
-// before a minute, hides why in the tooltip, or depends on loot/hr being known.
+// Pot cost/hr is one stat in every state, with a visible line saying why there's no rate yet.
+// Fails if a state changes the node, shows a rate early, or the line is missing, hidden or untrue.
 test("the headline is pot cost/hr in every state, with or without loot/hr", () => {
   const early = play({ seconds: 40, meat: [20] });
   assert.deepEqual(headline(early.sent), { kind: "stat", label: "Pot cost/hr", value: null });
   assert.deepEqual(potions(early.sent).children[1], { kind: "empty", text: "Pot cost/hr shows after a minute." });
+  // While HP and MP aren't read the minute never comes, and the reading line says why.
+  const unread = play({ seconds: 40, meat: [20], readers: { ...READING, hpMp: "learning" } });
+  assert.deepEqual(potLines(unread.sent), ["Learning your HP and MP digits from your EXP gains."]);
   assert.deepEqual(potTable(early.sent).details, [["+160 HP each"]], "no uses/hr before a minute either");
   const learning = grind({ readers: { ...READING, notices: "learning" } });
   assert.deepEqual(headline(learning.sent), { kind: "stat", label: "Pot cost/hr", value: "9.3K", detail: "9,300 mesos on potions per hour" });
@@ -437,6 +438,8 @@ test("a potion's line lists each amount it's counted at", () => {
 test("a saved potion this build doesn't know is left out", () => {
   const newer = pastSession(T0);
   newer.maps[0].u.push({ k: 2000004, c: 3 });
+  // No saved cost, so the cost shown is worked out from the counts.
+  delete newer.pt;
   const { sent } = startWith({ version: 1, history: [newer], current: null });
   assert.equal(lootTable(sent).details[0].at(-1), "Pots 800: Meat ×10");
   assert.equal(allTime(sent)["Pot cost"], "800");

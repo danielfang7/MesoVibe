@@ -3,8 +3,8 @@
  * line and All time rows. They show only once a count source is wired in.
  *
  * The Potions section's headline is always pot cost/hr, one `stat` in the same place, so the panel
- * doesn't jump as it changes from "?" to a rate; until there's a rate, a line under it says why. A
- * stat's detail is only a tooltip, so nothing the player needs goes there.
+ * doesn't jump as it changes from "?" to a rate; while there's no rate or no potion yet, a line
+ * under it says so. A stat's detail is only a tooltip, so nothing the player needs goes there.
  *
  * No net (loot minus pot cost) is shown: loot/hr comes from the pickup notices, which miss pickups
  * on busy maps, so a net built on it would read too low. Net comes back once mesos are read from
@@ -65,9 +65,15 @@ function headline(totals: PotTotals): ViewNode {
   };
 }
 
-/** The line under the headline while there's no rate to show, or null once there is. */
-function waitingLine(totals: PotTotals): ViewNode | null {
-  if (potRate(totals) === null) return { kind: "empty", text: "Pot cost/hr shows after a minute." };
+/**
+ * The line under the headline: why there's no rate yet, or that no potion has been used. Before a
+ * minute it shows only while the HP and MP numbers are read; otherwise the reading line says why,
+ * and the minute wouldn't come.
+ */
+function waitingLine(totals: PotTotals, readers: Readers): ViewNode | null {
+  if (potRate(totals) === null) {
+    return readers.hpMp === "reading" ? { kind: "empty", text: "Pot cost/hr shows after a minute." } : null;
+  }
   if (totals.lines.length === 0) return { kind: "empty", text: "No potions used yet." };
   return null;
 }
@@ -116,7 +122,7 @@ export function potionsSection(
   const totals = potTotals(session, catalog);
   const healing = source.healing("hp", atMs) || source.healing("mp", atMs);
   const children: ViewNode[] = [headline(totals)];
-  const waiting = waitingLine(totals);
+  const waiting = waitingLine(totals, readers);
   if (waiting !== null) children.push(waiting);
   if (totals.lines.length > 0) children.push(potTable(totals, source));
   // At most two lines about why counts may be off, the reading first.
