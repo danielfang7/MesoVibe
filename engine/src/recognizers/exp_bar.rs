@@ -2650,6 +2650,8 @@ mod tests {
         cursor.fill(283 + 46, 768 - 24, 23, 13, WHITE);
         let hidden = reader.observe(&cursor.frame()).unwrap();
         assert_eq!((hidden.level, hidden.exp), (None, None));
+        // `read`, which learns nothing, carries on from the same EXP.
+        assert_eq!(reader.read(&hud.draw_pct(41, pct).frame()), Ok(before));
         let after = reader.observe(&hud.draw_pct(41, pct).frame()).unwrap();
         assert_eq!(after, before);
     }
@@ -2704,13 +2706,12 @@ mod tests {
         let mut reader = ExpBarReader::new();
         feed(&hud, &mut reader, 41, NEEDED_41, &GRIND);
         let needed_44 = exp_table::needed(44).unwrap();
-        let misread = reader
-            .observe(
-                &hud.draw_values(44, 30_000, pct_of(300_000, needed_44))
-                    .frame(),
-            )
-            .unwrap();
-        assert_eq!((misread.level, misread.needed), (Some(44), None));
+        let covered = hud.draw_values(44, 30_000, pct_of(300_000, needed_44));
+        // The cursor held still over it: the same misread twice is still one misread.
+        for _ in 0..2 {
+            let misread = reader.observe(&covered.frame()).unwrap();
+            assert_eq!((misread.level, misread.needed), (Some(44), None));
+        }
         let pct = pct_of(300_500, needed_44);
         let alone = reader.observe(&hud.draw_pct(44, pct).frame()).unwrap();
         assert!(alone.confirmed && !alone.exp_shown);
