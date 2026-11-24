@@ -434,11 +434,11 @@ pub struct ExpBarReader {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RowCheck {
     level: u16,
-    /// The table's row while the bar fits it; `None` once it doesn't.
+    /// The table's row until the bar is shown not to fit it; `None` after that.
     needed: Option<u64>,
-    /// A reading (EXP, percent) that didn't fit the row the bar had fitted. One such reading is
-    /// left out as a misread (a field partly covered can read as a smaller EXP); a second,
-    /// different one disproves the row.
+    /// A reading (EXP, percent) that didn't fit the row. One such reading is left out as a
+    /// misread (a field partly covered can read as a smaller EXP), even the level's first; a
+    /// second, different one disproves the row.
     miss: Option<(u64, u16)>,
 }
 
@@ -1158,11 +1158,17 @@ impl ExpBarReader {
             let at = (reading.exp.unwrap_or_default(), reading.pct_hundredths);
             match (reading.exp_shown && reading.confirmed, seen) {
                 (true, Some(i)) => self.checked[i].see(reading.needed, at),
-                (true, None) => self.checked.push(RowCheck {
-                    level,
-                    needed: reading.needed,
-                    miss: None,
-                }),
+                // A level seen for the first time starts from the table's row, so a first reading
+                // that doesn't fit it is one misread, not yet proof.
+                (true, None) => {
+                    let mut check = RowCheck {
+                        level,
+                        needed: exp_table::needed(level),
+                        miss: None,
+                    };
+                    check.see(reading.needed, at);
+                    self.checked.push(check);
+                }
                 (false, Some(i)) if !reading.exp_shown => {
                     reading.needed = self.checked[i].needed;
                 }
@@ -2648,19 +2654,20 @@ mod tests {
         assert_eq!(after, before);
     }
 
-    // Value: protects=a table row the full field disproved stays untrusted once the HUD hides the
-    // EXP; fails_when=the percent alone brings back the table's EXP needed and an EXP made from it;
-    // why_new=other percent-only tests use levels the table gets right; seam=none; no_claim=none
-    // Fails if the percent alone trusts the table's EXP needed for a level whose full field didn't
-    // fit it, and reports an EXP worked out from that wrong row, including after one frame whose
-    // level tiles looked different (a cursor over them).
+    // Fails if the percent alone trusts the table's EXP needed for a level whose full field
+    // disproved it, including after one frame whose level tiles looked different (a cursor).
     #[test]
     fn a_table_row_the_full_field_disproved_is_not_trusted_for_the_percent_alone() {
         let hud = Hud::new();
         let mut reader = ExpBarReader::new();
         feed(&hud, &mut reader, 41, NEEDED_41, &GRIND);
-        // Level 44 needs 400,000 here, not the table's 428,280.
+        // Level 44 needs 400,000 here, not the table's 428,280. One full field off the row could
+        // be a misread; a second, different one disproves it.
         let needed = 400_000;
+        let _ = reader.observe(
+            &hud.draw_values(44, 299_000, pct_of(299_000, needed))
+                .frame(),
+        );
         let full = reader
             .observe(
                 &hud.draw_values(44, 300_000, pct_of(300_000, needed))
@@ -2687,6 +2694,28 @@ mod tests {
             .observe(&hud.draw_pct(44, pct_of(396_100, needed)).frame())
             .unwrap();
         assert_eq!((back.level, back.needed, back.exp), (Some(44), None, None));
+    }
+
+    // A level's first full field is a misread: partly covered, it reads as a smaller EXP. Fails
+    // if the percent alone after it shows no EXP for the rest of the level.
+    #[test]
+    fn a_misread_first_full_field_at_a_level_doesnt_blank_the_percent_alone() {
+        let hud = Hud::new();
+        let mut reader = ExpBarReader::new();
+        feed(&hud, &mut reader, 41, NEEDED_41, &GRIND);
+        let needed_44 = exp_table::needed(44).unwrap();
+        let misread = reader
+            .observe(
+                &hud.draw_values(44, 30_000, pct_of(300_000, needed_44))
+                    .frame(),
+            )
+            .unwrap();
+        assert_eq!((misread.level, misread.needed), (Some(44), None));
+        let pct = pct_of(300_500, needed_44);
+        let alone = reader.observe(&hud.draw_pct(44, pct).frame()).unwrap();
+        assert!(alone.confirmed && !alone.exp_shown);
+        assert_eq!((alone.level, alone.needed), (Some(44), Some(needed_44)));
+        assert_eq!(alone.exp.map(|e| pct_of(e, needed_44)), Some(pct));
     }
 
     // Value: protects=the table's EXP needed works the EXP out at a level with no full field seen
