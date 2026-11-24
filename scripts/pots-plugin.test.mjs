@@ -1,6 +1,6 @@
 // The Session Tracker's potion accounting and views, with a stand-in count source wired in
-// (scripts/fixtures/synthetic-count-source.mjs): uses per map, their cost, pot cost/hr and net
-// loot/hr, the Potions section, the Loot tab's Net/hr, saves and Undo. Also checks that the
+// (scripts/fixtures/synthetic-count-source.mjs): uses per map, their cost, pot cost/hr, the
+// Potions section, the Loot tab's pots lines, saves and Undo. Also checks that the
 // plugin as shipped, with no source wired in, counts and shows no potions.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -103,7 +103,7 @@ const startWith = (saved) => {
 };
 
 // With no count source wired in, as shipped, nothing about potions shows or is saved. Fails if
-// the Potions section or the Net/hr column appears before anything counts potions, or a session
+// the Potions section appears before anything counts potions, or a session
 // saves read time that would later read as "no potions used".
 test("as shipped, no potions are counted or shown", () => {
   const { send, sent, now } = play({ bundle: shipped, meat: every(30, 60, 600) });
@@ -118,11 +118,11 @@ test("as shipped, no potions are counted or shown", () => {
 });
 
 // Potions count at their shop price, and pot cost/hr is over the time the HP and MP numbers were
-// read, so net loot/hr subtracts like for like. Fails if a use is lost, priced wrong, the rate
-// uses the wrong time, or All time leaves out the running session's potions.
-test("potions cost their shop price, and net loot/hr is loot/hr minus pot cost/hr", () => {
+// read. Fails if a use is lost, priced wrong, the rate uses the wrong time, or All time leaves out
+// the running session's potions.
+test("potions cost their shop price, and pot cost/hr is over the time they were counted", () => {
   const { sent } = grind();
-  assert.deepEqual(headline(sent), { kind: "stat", label: "Net loot/hr", value: "8.7K", detail: "18K loot/hr − 9.3K on potions" });
+  assert.deepEqual(headline(sent), { kind: "stat", label: "Pot cost/hr", value: "9.3K", detail: "9,300 mesos on potions per hour" });
   const table = potTable(sent);
   assert.deepEqual(table.columns, ["Item", "Used", "Cost"]);
   assert.deepEqual(table.rows, [
@@ -140,29 +140,30 @@ test("potions cost their shop price, and net loot/hr is loot/hr minus pot cost/h
   assert.equal(allTime(sent)["Pot cost"], "1.55K", "All time counts the running session's potions");
 });
 
-// The headline stays one stat in one place in every state, so the panel doesn't jump. Fails if a
-// state draws another kind of node, or shows a rate before a minute.
-test("the headline is a stat before a minute, without loot/hr, and with net", () => {
+// The headline is pot cost/hr in one stat in every state, so the panel doesn't jump, and it never
+// waits on the pickup notices. Fails if a state draws another kind of node or label, shows a rate
+// before a minute, or depends on loot/hr being known.
+test("the headline is pot cost/hr in every state, with or without loot/hr", () => {
   const early = play({ seconds: 40, meat: [20] });
-  assert.deepEqual(headline(early.sent), { kind: "stat", label: "Net loot/hr", value: null, detail: "Net loot/hr shows after a minute." });
+  assert.deepEqual(headline(early.sent), { kind: "stat", label: "Pot cost/hr", value: null, detail: "Pot cost/hr shows after a minute." });
   assert.deepEqual(potTable(early.sent).details, [["+160 HP each"]], "no uses/hr before a minute either");
   const learning = grind({ readers: { ...READING, notices: "learning" } });
-  assert.deepEqual(headline(learning.sent), { kind: "stat", label: "Pot cost/hr", value: "9.3K", detail: "Net shows with loot/hr" });
+  assert.deepEqual(headline(learning.sent), { kind: "stat", label: "Pot cost/hr", value: "9.3K", detail: "9,300 mesos on potions per hour" });
   const none = play({ seconds: 120 });
-  assert.deepEqual(headline(none.sent), { kind: "stat", label: "Net loot/hr", value: "18K", detail: "No potions used yet" });
+  assert.deepEqual(headline(none.sent), { kind: "stat", label: "Pot cost/hr", value: "0", detail: "No potions used yet" });
   assert.equal(potTable(none.sent), undefined);
 });
 
-// Maybe uses cost nothing, so the cost is a lower bound and net an upper one; heals from others
-// say so too. Fails if a maybe use is priced, or net claims to be exact when it can't be.
-test("maybe uses and heals from others make net an upper bound", () => {
+// Maybe uses cost nothing, so the cost is a lower bound; heals from others say potions may be
+// undercounted. Fails if a maybe use is priced, or the cost claims to be exact when it can't be.
+test("maybe uses make pot cost a lower bound, and heals from others say so", () => {
   const { send, sent, now } = grind();
   send(event({ type: "TestMaybe", item: MEAT, count: 2 }, now));
   assert.deepEqual(headline(sent), {
     kind: "stat",
-    label: "Net loot/hr",
-    value: "8.7K",
-    detail: "At most: 18K loot/hr − 9.3K+ on potions",
+    label: "Pot cost/hr",
+    value: "9.3K+",
+    detail: "At least 9,300 mesos on potions per hour",
   });
   assert.deepEqual(potTable(sent).rows[0], ["Meat", "×10", "800"]);
   assert.deepEqual(potTable(sent).details[0], ["+160 HP each · 60/hr · +2 maybe"]);
@@ -171,34 +172,23 @@ test("maybe uses and heals from others make net an upper bound", () => {
   assert.deepEqual(potLines(sent), ["Some healing isn't from potions (a Heal, Drain or MP Eater), so potions may be undercounted."]);
 });
 
-// Time when heals from others may have hidden potions keeps net an upper bound after they stop,
-// and with no potion counted yet. Fails if that time isn't kept, or net then claims to be exact.
-test("heals from others keep net an upper bound after they stop", () => {
+// Time when heals from others may have hidden potions is saved with the session after the heals
+// stop, for a net that comes back with inventory mesos. Fails if that time isn't kept, or the
+// healing line stays after the heals stop.
+test("heal time from others is kept after the heals stop", () => {
   const heal = (on) => (at) => [event({ type: "TestHealing", resource: "hp", on }, at)];
-  const none = play({ seconds: 120, also: { 60: heal(true) } });
-  assert.deepEqual(headline(none.sent), { kind: "stat", label: "Net loot/hr", value: "18K", detail: "At most: no potions counted yet" });
   const { send, sent, now } = grind({ also: { 100: heal(true), 200: heal(false) } });
   assert.deepEqual(potLines(sent), [], "the healing line goes when the heals stop");
-  assert.deepEqual(headline(sent), { kind: "stat", label: "Net loot/hr", value: "8.7K", detail: "At most: 18K loot/hr − 9.3K on potions" });
   send(action("end", now));
   assert.equal(last(sent, "save").data.history[0].maps[0].hm, 100_000);
 });
 
-// Spending more on potions than picking up shows a negative net in plain text, never an error
-// color. Fails if it's clamped to zero or loses its sign.
-test("net below zero shows with a minus sign", () => {
-  const { sent } = play({ meat: every(20, 20, 600), lemon: every(10, 20, 600) });
-  assert.deepEqual(headline(sent), { kind: "stat", label: "Net loot/hr", value: "−23.4K", detail: "more spent on potions than picked up" });
-});
-
-// A Lemon picked up this session is worth what a shop pays for it, not what a shop charges, and
-// it may still be in the bag, so net is at most what's shown. Fails if a pickup with no item ID
+// A Lemon picked up this session is worth what a shop pays for it, not what a shop charges. Fails if a pickup with no item ID
 // isn't matched by name, every use is priced as picked up, or more are than were drunk.
 test("a potion picked up this session costs its NPC sell price", () => {
   const { sent } = play({ lemon: [60, 180], also: { 100: (at) => [lemonPickup(1, at)] } });
   assert.deepEqual(potTable(sent).rows, [["Lemon", "×2", "165"]]);
   assert.deepEqual(potTable(sent).details, [["+150 MP each · 12/hr", "1 picked up, at NPC sell price"]]);
-  assert.match(headline(sent).detail, /^At most: /);
   // Picking up more than were drunk prices only the ones drunk.
   const more = play({ lemon: [60], also: { 30: (at) => [lemonPickup(3, at)] } });
   assert.deepEqual(potTable(more.sent).rows, [["Lemon", "×1", "15"]]);
@@ -300,13 +290,12 @@ test("each potion counts on its map, and the session adds the maps up", () => {
     { k: "bbbb", u: [{ k: MEAT, c: 5 }], h: 300_000 },
   ]);
   assert.equal(lootTable(sent).details[0].at(-1), "Pots 800: Meat ×10");
-  assert.equal(lootTable(sent).rows[0][3], "13.2K");
 });
 
-// End keeps the session's potions with their cost frozen, and the Loot tab shows its net loot/hr
-// and a pots line. Fails if the Net/hr column, the line or All time's rows are missing or wrong, or
-// the next session shows a Potions section before its first gain.
-test("an ended session shows its net loot/hr and potions in the Loot tab", () => {
+// End keeps the session's potions with their cost frozen, and the Loot tab shows a pots line with
+// no Net column. Fails if the line or All time's rows are missing or wrong, a Net column comes
+// back, or the next session shows a Potions section before its first gain.
+test("an ended session shows its potions in the Loot tab", () => {
   const { send, sent, now } = grind();
   send(action("end", now));
   const past = last(sent, "save").data.history[0];
@@ -314,13 +303,13 @@ test("an ended session shows its net loot/hr and potions in the Loot tab", () =>
   assert.deepEqual(past.ps, { [MEAT]: "rises", 2010005: "rises" });
   assert.equal(potions(sent), undefined, "the next session's Potions section waits for its first gain");
   const table = lootTable(sent);
-  assert.deepEqual(table.columns, ["Map", "Loot gained", "Loot/hr", "Net/hr"]);
-  assert.deepEqual(table.rows[0].slice(1), ["3K", "18K", "8.7K"]);
+  assert.deepEqual(table.columns, ["Map", "Loot gained", "Loot/hr"]);
+  assert.deepEqual(table.rows[0].slice(1), ["3K", "18K"]);
   assert.equal(table.details[0].at(-1), "Pots 1.55K: Meat ×10, Lemon ×5");
   const figures = allTime(sent);
   assert.equal(figures["Pots counted for"], "10m");
   assert.equal(figures["Pot cost"], "1.55K");
-  assert.equal(figures["Net loot/hr"], "8.7K");
+  assert.equal(figures["Net loot/hr"], undefined);
 });
 
 // Maybe uses leave a past session's pot cost a lower bound, in its pots line and in All time.
@@ -338,24 +327,21 @@ test("a past session's cost keeps its + for maybe uses", () => {
 test("a past session keeps the cost it was saved with", () => {
   const { sent } = startWith({ version: 1, history: [{ ...pastSession(T0), pt: 1_000 }], current: null });
   assert.equal(lootTable(sent).details[0].at(-1), "Pots 1K: Meat ×10");
-  assert.equal(lootTable(sent).rows[0][3], "12K");
 });
 
-// Sessions saved before potions were counted have no pot time: Net/hr says "—", and All time's net
-// covers only the sessions that counted potions, saying how long that was. Fails if old sessions
-// count as having used no potions, which would inflate net.
-test("sessions without potion counts show — and stay out of All time's net", () => {
+// Sessions saved before potions were counted have no pot time: no pots line, and All time's pot
+// rows cover only the sessions that counted potions, saying how long that was. Fails if old
+// sessions count as having used no potions.
+test("sessions without potion counts have no pots line and stay out of All time's pot rows", () => {
   const old = pastSession(T0 - 7_200_000, { pots: false, mesos: 60_000 });
   const { sent } = startWith({ version: 1, history: [pastSession(T0), old], current: null });
-  assert.deepEqual(
-    lootTable(sent).rows.map((row) => row[3]),
-    ["13.2K", "—"],
-  );
+  const details = lootTable(sent).details;
+  assert.equal(details[0].at(-1), "Pots 800: Meat ×10");
+  assert.ok(!details[1].some((line) => line.startsWith("Pots")), "the old session has no pots line");
   const figures = allTime(sent);
   assert.equal(figures["Loot/hr"], "189K", "loot/hr covers both");
   assert.equal(figures["Pots counted for"], "10m");
   assert.equal(figures["Pot cost"], "800");
-  assert.equal(figures["Net loot/hr"], "13.2K", "net covers only the session that counted potions");
 });
 
 // Undo of End puts the session back with the potions counted since, and no extra read time.
@@ -402,14 +388,12 @@ test("saves keep potion fields, and drop a malformed one with the session kept",
   const broken = startWith({ version: 1, history: [bad], current: null });
   const table = lootTable(broken.sent);
   assert.equal(table.rows.length, 1, "the session is kept");
-  assert.equal(table.rows[0][3], "—");
   assert.equal(table.details[0].some((line) => line.startsWith("Pots")), false);
 
   // A malformed saved cost on a session with good counts is priced again at today's prices.
   for (const pt of ["a lot", -5, null]) {
     const repriced = lootTable(startWith({ version: 1, history: [{ ...pastSession(T0), pt }], current: null }).sent);
     assert.equal(repriced.details[0].at(-1), "Pots 800: Meat ×10", `saved cost ${JSON.stringify(pt)}`);
-    assert.equal(repriced.rows[0][3], "13.2K", `saved cost ${JSON.stringify(pt)}`);
   }
 });
 
@@ -426,5 +410,5 @@ test("MesoVibe 0.7.0 reads a save with potion fields", () => {
   assert.equal(old.history[0].maps[0].u, undefined, "0.7.0 drops what it doesn't know");
   const back = startWith(JSON.parse(JSON.stringify(old)));
   assert.equal(lootTable(back.sent).rows.length, 1);
-  assert.equal(lootTable(back.sent).rows[0][3], "—");
+  assert.ok(!lootTable(back.sent).details[0].some((line) => line.startsWith("Pots")), "a session 0.7.0 saved back counts no potions");
 });

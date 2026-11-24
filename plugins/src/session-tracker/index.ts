@@ -37,7 +37,7 @@ import {
 } from "./loot.js";
 import type { Catalog, ItemEntry, ItemInfo, LootFields, MapEntry, PotTime } from "./loot.js";
 import { potTotals } from "./pot-cost.js";
-import { allTimePotRows, netCell, potionsSection, potsLine } from "./potions-view.js";
+import { allTimePotRows, potionsSection, potsLine } from "./potions-view.js";
 import {
   advance,
   compare,
@@ -525,7 +525,7 @@ function pastRow(past: Past, first: Map<string, number>): [Cell[], string[], Row
 /**
  * The Loot tab: All time on top, then each past session's loot, laid out like Past sessions: what
  * it picked up (mesos and items at NPC prices) and its loot/hr over the time pickups were read.
- * With potions counted (`pots`), each also shows its net loot/hr and a line of its potions.
+ * With potions counted (`pots`), each also shows a line of its potions.
  * Sessions from before loot tracking aren't listed.
  */
 function lootView(
@@ -546,12 +546,8 @@ function lootView(
       mesosText(lootValue(past, catalog), lootPartial(past, catalog), true),
       rate === null ? null : formatCompact(rate),
     ];
-    if (!pots) return [cells, pastLines(past)];
-    const line = potsLine(past, catalog);
-    return [
-      [...cells, netCell(past, catalog)],
-      line === null ? pastLines(past) : [...pastLines(past), line],
-    ];
+    const line = pots ? potsLine(past, catalog) : null;
+    return [cells, line === null ? pastLines(past) : [...pastLines(past), line]];
   });
   const past: ViewNode[] =
     tracked.length === 0
@@ -559,8 +555,8 @@ function lootView(
       : [
           {
             kind: "table",
-            columns: pots ? ["Map", "Loot gained", "Loot/hr", "Net/hr"] : ["Map", "Loot gained", "Loot/hr"],
-            numeric: pots ? [false, true, true, true] : [false, true, true],
+            columns: ["Map", "Loot gained", "Loot/hr"],
+            numeric: [false, true, true],
             rows: rows.map(([cells]) => cells),
             details: rows.map(([, lines]) => lines),
           },
@@ -743,8 +739,7 @@ definePlugin({
     };
     const show = (atMs: number) => {
       context.setSummary(summary(session, atMs, readers));
-      const loot = lootShown(readers) ? lootRate(session) : null;
-      const potions = source === null ? null : potionsSection(session, catalog, source, readers, loot, atMs);
+      const potions = source === null ? null : potionsSection(session, catalog, source, readers, atMs);
       context.render(view(session, history, capture, map, { readers, learningSince, atMs }, showMore, catalog, expanded, potions));
       context.render(lootView(session, history, allTime, catalog, expanded, lootMore, source !== null), "loot");
     };

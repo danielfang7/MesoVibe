@@ -1,24 +1,19 @@
 /**
- * The Session Tracker's potion views: the Session view's Potions section, and the Loot tab's
- * Net/hr column, pots line and All time rows. They show only once a count source is wired in.
+ * The Session Tracker's potion views: the Session view's Potions section, and the Loot tab's pots
+ * line and All time rows. They show only once a count source is wired in.
  *
- * Net loot/hr is loot/hr (over the time the pickup notices were read) minus pot cost/hr (over the
- * time potions were counted). The Potions section's headline is always one `stat` in the same
- * place, so the panel doesn't jump as it changes from "shows after a minute" to pot cost/hr to net.
+ * The Potions section's headline is always pot cost/hr, one `stat` in the same place, so the panel
+ * doesn't jump as it changes from "shows after a minute" to a rate. No net (loot minus pot cost)
+ * is shown: loot/hr comes from the pickup notices, which miss pickups on busy maps, so a net built
+ * on it would read too low. Net comes back once mesos are read from the inventory.
  */
 
 import { formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";
 import type { Cell, Readers, ViewNode } from "@mesovibe/sdk";
 import type { CountSource } from "./count-source.js";
-import { lootRate } from "./loot.js";
 import type { Catalog, LootFields } from "./loot.js";
-import { costAtLeast, netAtMost, pastPotTotals, potRate, potTotals } from "./pot-cost.js";
+import { costAtLeast, pastPotTotals, potRate, potTotals } from "./pot-cost.js";
 import type { PotTotals } from "./pot-cost.js";
-
-/** A rate or amount, with U+2212 for a negative one: net can fall below zero. */
-function signed(n: number): string {
-  return n < 0 ? `−${formatCompact(-n)}` : formatCompact(n);
-}
 
 /** "a 7", "an 8", or for several "a digit it hasn't seen yet: 0, 4 or 5", as What MesoVibe sees says it. */
 function digitsWanted(digits: string): string {
@@ -50,23 +45,21 @@ function readingLine(readers: Readers): ViewNode | null {
   }
 }
 
-/** The headline: net loot/hr, pot cost/hr while loot/hr isn't known, or "?" before a minute. */
-function headline(totals: PotTotals, loot: number | null, healing: boolean): ViewNode {
+/**
+ * The headline: pot cost/hr, or "?" before a minute. A cost with maybe uses in it is a lower
+ * bound, marked "+" as in the pots line.
+ */
+function headline(totals: PotTotals): ViewNode {
   const pots = potRate(totals);
-  if (pots === null) return { kind: "stat", label: "Net loot/hr", value: null, detail: "Net loot/hr shows after a minute." };
-  const plus = costAtLeast(totals) ? "+" : "";
-  if (loot === null) return { kind: "stat", label: "Pot cost/hr", value: `${formatCompact(pots)}${plus}`, detail: "Net shows with loot/hr" };
-  const net = loot - pots;
-  const atMost = netAtMost(totals, healing);
-  const none = totals.lines.length === 0;
-  const said = none
-    ? atMost
-      ? "no potions counted yet"
-      : "No potions used yet"
-    : net < 0
-      ? "more spent on potions than picked up"
-      : `${formatCompact(loot)} loot/hr − ${formatCompact(pots)}${plus} on potions`;
-  return { kind: "stat", label: "Net loot/hr", value: signed(net), detail: atMost ? `At most: ${said}` : said };
+  if (pots === null) return { kind: "stat", label: "Pot cost/hr", value: null, detail: "Pot cost/hr shows after a minute." };
+  if (totals.lines.length === 0) return { kind: "stat", label: "Pot cost/hr", value: formatCompact(pots), detail: "No potions used yet" };
+  const atLeast = costAtLeast(totals);
+  return {
+    kind: "stat",
+    label: "Pot cost/hr",
+    value: `${formatCompact(pots)}${atLeast ? "+" : ""}`,
+    detail: `${atLeast ? "At least " : ""}${formatDigits(pots)} mesos on potions per hour`,
+  };
 }
 
 /** "+160 HP each", or "+160 and +240 HP each" when a recovery skill raises it. */
@@ -100,20 +93,19 @@ function potTable(totals: PotTotals, source: CountSource): ViewNode {
 
 /**
  * The Session view's Potions section, or null before the session's first EXP gain, when no potion
- * counts yet. `loot` is the loot/hr Items shows, or null when it isn't known.
+ * counts yet.
  */
 export function potionsSection(
   session: LootFields & { expGained: number },
   catalog: Catalog,
   source: CountSource,
   readers: Readers,
-  loot: number | null,
   atMs: number,
 ): ViewNode | null {
   if (session.expGained <= 0) return null;
   const totals = potTotals(session, catalog);
   const healing = source.healing("hp", atMs) || source.healing("mp", atMs);
-  const children: ViewNode[] = [headline(totals, loot, healing)];
+  const children: ViewNode[] = [headline(totals)];
   if (totals.lines.length > 0) children.push(potTable(totals, source));
   // At most two lines about why counts may be off, the reading first.
   const reading = readingLine(readers);
@@ -130,15 +122,6 @@ export function potionsSection(
   return { kind: "section", title: "Potions", children };
 }
 
-/** A past session's Net/hr cell: "—" when potions weren't counted in it, "?" when its loot/hr isn't known. */
-export function netCell(past: LootFields, catalog: Catalog): Cell {
-  const totals = pastPotTotals(past, catalog);
-  if (totals.readMs <= 0) return "—";
-  const pots = potRate(totals);
-  const loot = lootRate(past);
-  return pots === null || loot === null ? null : signed(loot - pots);
-}
-
 /** A past session's pots line, "Pots 3.1K: Meat ×30, Lemon ×12", or null when it used none. */
 export function potsLine(past: LootFields, catalog: Catalog): string | null {
   const totals = pastPotTotals(past, catalog);
@@ -150,23 +133,18 @@ export function potsLine(past: LootFields, catalog: Catalog): string | null {
 
 /**
  * All time's potion rows, over the sessions that counted potions only (sessions from before potions
- * were counted have none, and would make net look better than it was): how long that was, what
- * their potions cost, and their net loot/hr.
+ * were counted have none): how long that was and what their potions cost.
  */
 export function allTimePotRows(sessions: LootFields[], catalog: Catalog, running: LootFields | null): [string, Cell][] {
   const counted = sessions
-    .map((s) => ({ s, totals: s === running ? potTotals(s, catalog) : pastPotTotals(s, catalog) }))
-    .filter(({ totals }) => totals.readMs > 0);
+    .map((s) => (s === running ? potTotals(s, catalog) : pastPotTotals(s, catalog)))
+    .filter((totals) => totals.readMs > 0);
   if (counted.length === 0) return [];
-  const readMs = counted.reduce((sum, { totals }) => sum + totals.readMs, 0);
-  const cost = counted.reduce((sum, { totals }) => sum + totals.cost, 0);
-  const plus = counted.some(({ totals }) => costAtLeast(totals)) ? "+" : "";
-  const rows: [string, Cell][] = [
+  const readMs = counted.reduce((sum, totals) => sum + totals.readMs, 0);
+  const cost = counted.reduce((sum, totals) => sum + totals.cost, 0);
+  const plus = counted.some((totals) => costAtLeast(totals)) ? "+" : "";
+  return [
     ["Pots counted for", formatDuration(readMs)],
     ["Pot cost", `${formatCompact(cost)}${plus}`],
   ];
-  const pots = potRate({ cost, readMs });
-  const loot = lootRate({ maps: counted.flatMap(({ s }) => s.maps ?? []) });
-  if (pots !== null && loot !== null) rows.push(["Net loot/hr", signed(loot - pots)]);
-  return rows;
 }

@@ -92,11 +92,3 @@ export function potRate(totals: Pick<PotTotals, "cost" | "readMs">): number | nu
 export function costAtLeast(totals: PotTotals): boolean {
   return totals.maybe > 0;
 }
-
-/**
- * Whether net loot/hr is an upper bound: potions may be missing from the cost (maybe uses, or heals
- * from others hiding some), or some were priced as picked up when they may have been bought.
- */
-export function netAtMost(totals: PotTotals, healing: boolean): boolean {
-  return totals.maybe > 0 || totals.healMs > 0 || healing || totals.lines.some((line) => line.picked > 0);
-}
