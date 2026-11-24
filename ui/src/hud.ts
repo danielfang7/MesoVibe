@@ -91,13 +91,22 @@ function paint(hud: Hud): void {
   );
   const loot = summary?.lootPerHour ?? null;
   if (loot !== null && (issue === null || issue.tone === "live")) {
-    // Mesos and items' NPC value per hour, the number atop the Session view's Items.
+    // Profit/hr, the same figure and mark as the Session view's Loot headline, so the two never
+    // disagree: "≈" while it's an estimate from the pickup notices.
+    const approx = summary?.lootApprox ?? false;
     rows.push(
       h(
         "p",
-        { class: "hud-line hud-loot", attrs: { title: `${formatDigits(loot)} mesos and NPC item value per hour` } },
+        {
+          class: "hud-line hud-loot",
+          attrs: {
+            title: approx ? `About ${formatDigits(loot)} mesos per hour, from pickup notices` : `${formatDigits(loot)} mesos of profit per hour`,
+          },
+        },
+        approx ? h("span", { attrs: { "aria-hidden": "true" } }, "≈") : null,
+        approx ? h("span", { class: "visually-hidden" }, "about ") : null,
         h("span", { class: "number" }, formatCompact(loot)),
-        " loot/hr",
+        " profit/hr",
       ),
     );
   }

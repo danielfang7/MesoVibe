@@ -17,9 +17,12 @@ import {
   addPickup,
   addPotUse,
   addTime,
+  countHeld,
   hasLoot,
   HOLD_MS,
   itemsValue,
+  ledgerProfit,
+  ledgerRate,
   longest,
   lootRate,
   mapRates,
@@ -30,6 +33,7 @@ import {
   start as startLoot,
   sumItems,
   totalMesos,
+  uncountHeld,
   validCatalog,
   validItems,
   validLedger,
@@ -37,7 +41,8 @@ import {
   validPotSources,
 } from "./loot.js";
 import type { Catalog, ItemEntry, ItemInfo, LootFields, MapEntry, PotTime } from "./loot.js";
-import { potTotals } from "./pot-cost.js";
+import { COUNT_HELD, lootHeadline, lootSection } from "./loot-view.js";
+import { potRate, potTotals } from "./pot-cost.js";
 import { allTimePotRows, potionsSection, potsLine } from "./potions-view.js";
 import {
   advance,
@@ -52,13 +57,14 @@ import {
 } from "./session.js";
 import type { PastSession, SessionState } from "./session.js";
 
-/** How long End, Reset and deleting a past session can be undone. */
+/** How long End, Reset, deleting a past session and counting a held rise can be undone. */
 const UNDO_MS = 10_000;
 /** What a press of Undo after its ten seconds says. */
 const TOO_LATE = {
   "undo-end": "Too late to undo: it's saved in Past sessions.",
   "undo-reset": "Too late to undo the reset.",
   "undo-delete": "Too late to undo: the session is deleted.",
+  "undo-count": "Too late to undo: it's counted in Profit.",
 };
 /** How often the running session is saved while nothing changes, so closing MesoVibe loses little. */
 const SAVE_EVERY_MS = 30_000;
@@ -103,13 +109,17 @@ interface Saved {
   catalog?: Catalog;
 }
 
-/** What Undo puts back: the session and history before End, Reset or deleting a past session. */
+/**
+ * What Undo puts back: the session and history before End, Reset or deleting a past session, or
+ * for a held rise counted into Profit, the rise to hold again.
+ */
 interface Undo {
-  kind: "end" | "reset" | "delete";
+  kind: "end" | "reset" | "delete" | "count";
   session: Session;
   history: Past[];
   allTime: AllTime;
   until: number;
+  held?: [number, number];
 }
 
 /** The loot fields of a saved session, with anything malformed dropped. */
@@ -168,13 +178,9 @@ function canEnd(session: Session, atMs: number): boolean {
   return held !== undefined && hasLoot(held) && atMs - held.atMs >= HOLD_MS;
 }
 
-/** Whether a loot rate means anything: not while the pickup text is learned or the notices are covered. */
-function lootShown(readers: Readers): boolean {
-  return readers.notices !== "learning" && readers.notices !== "blocked";
-}
-
 function summary(session: Session, atMs: number, readers: Readers): SessionSummary {
   const last = session.last;
+  const loot = lootHeadline(session, readers);
   return {
     expPerHour: sessionRate(session),
     recentExpPerHour: recentRate(session),
@@ -185,7 +191,8 @@ function summary(session: Session, atMs: number, readers: Readers): SessionSumma
     expToGo: toGo(session),
     expToGoApprox: last?.expShown === false,
     activeMs: session.activeMs,
-    lootPerHour: lootShown(readers) ? lootRate(session) : null,
+    lootPerHour: loot.rate,
+    lootApprox: loot.approx,
     canEnd: canEnd(session, atMs),
     canReset: session.expGained > 0 || hasLoot(session.held),
     lootOnly: session.expGained <= 0 && hasLoot(session.held),
@@ -210,6 +217,7 @@ function finishWithLoot(session: Session, atMs: number, catalog: Catalog): Past 
   const past: Past | null = finish(session);
   if (past !== null) {
     if (session.maps !== undefined) past.maps = structuredClone(session.maps);
+    if (session.lg !== undefined) past.lg = structuredClone(session.lg);
     if (session.missed) past.missed = true;
     if (session.shapesWrong) past.shapesWrong = true;
     return keepPots(past, session, catalog);
@@ -245,11 +253,6 @@ function finishWithLoot(session: Session, atMs: number, catalog: Catalog): Past 
   };
 }
 
-/** Compact mesos, "+" when some pickups were missed (the total is at least that). */
-function mesosText(amount: number, partial: boolean, compact: boolean): string {
-  return `${compact ? formatCompact(amount) : formatDigits(amount)}${partial ? "+" : ""}`;
-}
-
 function when(ms: number): string {
   const date = new Date(ms);
   const day = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -257,6 +260,11 @@ function when(ms: number): string {
   // No-break spaces inside each part, so a narrow panel wraps "Nov 3," above "5:15 PM" and nowhere else.
   const keep = (part: string) => part.replace(/ /g, " ");
   return `${keep(day)}, ${keep(time)}`;
+}
+
+/** A time of day, "5:45 PM", kept whole on one line. */
+function clockTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }).replace(/ /g, " ");
 }
 
 /**
@@ -274,11 +282,15 @@ function levels(past: PastSession): string | null {
 
 /**
  * What End says about the session it saved: "Saved: 41,667 EXP in 30m (81.3K/hr).", with its mesos
- * when it counted any: "Saved: 41,667 EXP and 57.8K mesos in 30m (83.3K EXP/hr)."
+ * when it counted any. Mesos from the pickup notices are an estimate: "Saved: 41,667 EXP and ≈57.8K
+ * mesos in 30m (83.3K EXP/hr)." From meso totals read in the inventory they're the profit so far,
+ * since what's sold after End can still be added: "... and 57.8K mesos so far in 30m ...".
  */
 function recap(session: Session): string {
   const rate = sessionRate(session);
-  const mesos = totalMesos(session);
+  const ledger = session.lg;
+  const exact = ledger !== undefined && ledger.n >= 2;
+  const mesos = exact ? ledgerProfit(ledger) : totalMesos(session);
   if (mesos <= 0 && session.expGained <= 0) {
     // Items held five minutes without a kill.
     const count = sessionItems(session).reduce((sum, item) => sum + item.c, 0);
@@ -289,7 +301,7 @@ function recap(session: Session): string {
     return `Saved: ${formatDigits(session.expGained)} EXP in ${formatDuration(session.activeMs)}${pace}.`;
   }
   const pace = rate === null ? "" : ` (${formatCompact(rate)} EXP/hr)`;
-  const loot = `${mesosText(mesos, session.missed === true, true)} mesos`;
+  const loot = exact ? `${formatCompact(mesos)} mesos so far` : `≈${formatCompact(mesos)} mesos`;
   if (session.expGained <= 0) return `Saved: ${loot}.`;
   return `Saved: ${formatDigits(session.expGained)} EXP and ${loot} in ${formatDuration(session.activeMs)}${pace}.`;
 }
@@ -357,31 +369,10 @@ function noticeLines(session: Session, notices: Notices): ViewNode[] {
   return lines;
 }
 
-/**
- * The line saying some pickups weren't read, so the items and their value may be short. It goes
- * at the bottom of Items, or of This session before any item. Not with a misread digit, whose line
- * says more, nor while the notices are covered, whose line says why.
- */
-function missingLine(session: Session, readers: Readers): ViewNode[] {
-  if (!session.missed || session.shapesWrong || readers.notices === "blocked") return [];
-  return [{ kind: "partial", text: "Some pickups may be missing: MesoVibe couldn't read every notice." }];
-}
-
 /** The action that deletes one past session, by when it started. */
 const DELETE_SESSION = "delete-session:";
 /** The action that shows all of one item list, or fewer again, by its group. */
 const TOGGLE_ITEMS = "toggle-items:";
-
-/**
- * Whether `items` are worth at least their counted value, not exactly: some had names no item fit,
- * or fit several items, counted at the lowest price they may have or, with no price, not at all.
- */
-function valueAtLeast(items: ItemEntry[], catalog: Catalog): boolean {
-  return items.some((item) => {
-    const info = catalog[item.k];
-    return info === undefined || info.n === null || (info.v === null && !item.k.startsWith("#"));
-  });
-}
 
 /**
  * A named item's row: its name, the count and what an NPC shop pays for them all, with its tab
@@ -423,7 +414,7 @@ function itemList(items: ItemEntry[], catalog: Catalog, group: string, expanded:
   const nodes: ViewNode[] = [
     {
       kind: "table",
-      columns: ["Item", "Count", "Value"],
+      columns: ["Item", "Seen", "≈ Value"],
       numeric: [false, true, true],
       rows: rows.map((row) => row.cells),
       details: rows.map((row) => row.detail),
@@ -448,19 +439,20 @@ function itemsView(session: Session, catalog: Catalog, first: Map<string, number
   ]);
 }
 
-/** A past session's value of what was picked up: its mesos and its items at NPC prices. */
+/**
+ * What a session's pickup notices say it picked up: its mesos and its items at NPC prices. For a
+ * session without two meso totals read, it's the estimate of its profit, as if it sold everything.
+ */
 function lootValue(loot: LootFields, catalog: Catalog): number {
   return totalMesos(loot) + itemsValue(sessionItems(loot), catalog);
 }
 
-/** Whether a session's loot is at least what's shown: some pickups missed, or items' values not known exactly. */
-function lootPartial(loot: LootFields, catalog: Catalog): boolean {
-  return loot.missed === true || valueAtLeast(sessionItems(loot), catalog);
-}
-
 /**
- * All time: time played, mesos, item value and loot/hr over every session kept and the running
- * one, and the items picked up most. Empty until anything was picked up.
+ * All time: time played, profit and profit/hr over every session kept and the running one, how
+ * long of that was measured exactly from meso totals, and the items seen picked up most. A session
+ * with two meso totals read adds its exact profit over its readings' play time; any other adds what
+ * its pickup notices counted, mesos plus items at NPC prices, over the time they were read, and the
+ * totals are then marked "≈". Empty until anything was picked up.
  */
 function allTimeView(
   session: Session,
@@ -475,18 +467,38 @@ function allTimeView(
   const sessions: (Past | Session)[] = [...[...history].reverse(), ...running];
   // Counted with a map, not a list search: this runs on every redraw, over up to 500 sessions.
   const items = sumItems([allTime.items ?? [], ...sessions.map(sessionItems)]);
-  const mesos = sessions.reduce((sum, s) => sum + totalMesos(s), allTime.mesos);
-  if (mesos <= 0 && items.length === 0) {
+  // Sessions dropped past the 500 kept were counted from the notices.
+  let profit = allTime.mesos + itemsValue(allTime.items ?? [], catalog);
+  let estimated = profit > 0;
+  let earned = 0;
+  let time = 0;
+  let exactMs = 0;
+  for (const s of sessions) {
+    const ledger = s.lg;
+    if (ledger !== undefined && ledgerRate(ledger) !== null) {
+      profit += ledgerProfit(ledger);
+      earned += ledgerProfit(ledger);
+      time += ledger.pt;
+      exactMs += ledger.pt;
+    } else {
+      const value = lootValue(s, catalog);
+      profit += value;
+      if (value > 0) estimated = true;
+      for (const entry of s.maps ?? []) {
+        earned += entry.r + (entry.rv ?? 0);
+        time += entry.l;
+      }
+    }
+  }
+  if (profit <= 0 && items.length === 0) {
     return [{ kind: "empty", text: "Mesos and items you pick up add up here, over every session." }];
   }
-  const partial = sessions.some((s) => s.missed === true);
-  const rate = lootRate({ maps: sessions.flatMap((s) => s.maps ?? []) });
   const rows: [string, Cell][] = [
     ["Played", formatDuration(sessions.reduce((sum, s) => sum + s.activeMs, allTime.playedMs))],
-    ["Mesos", mesosText(mesos, partial, true)],
+    ["Profit", `${estimated ? "≈" : ""}${formatCompact(profit)}`],
   ];
-  if (items.length > 0) rows.push(["Item value", mesosText(itemsValue(items, catalog), partial || valueAtLeast(items, catalog), true)]);
-  if (rate !== null) rows.push(["Loot/hr", formatCompact(rate)]);
+  if (time >= MESOS_RATE_MS && earned > 0) rows.push(["Profit/hr", `${time > exactMs ? "≈" : ""}${formatCompact((earned * 3_600_000) / time)}`]);
+  if (exactMs > 0) rows.push(["Exact for", formatDuration(exactMs)]);
   if (pots) rows.push(...allTimePotRows(sessions, catalog, running[0] ?? null));
   const children: ViewNode[] = [{ kind: "keyValue", items: rows }];
   if (items.length > 0) children.push(...itemList(items, catalog, "all-time", expanded));
@@ -528,10 +540,11 @@ function pastRow(past: Past, first: Map<string, number>): [Cell[], string[], Row
 }
 
 /**
- * The Loot tab: All time on top, then each past session's loot, laid out like Past sessions: what
- * it picked up (mesos and items at NPC prices) and its loot/hr over the time pickups were read.
- * With potions counted (`pots`), each also shows a line of its potions.
- * Sessions from before loot tracking aren't listed.
+ * The Loot tab: All time on top, then each past session's loot, laid out like Past sessions: its
+ * profit and profit/hr, exact from meso totals read in the inventory or a shop, or "≈" what its
+ * pickup notices counted (mesos and items at NPC prices, over the time they were read). Under each:
+ * what it spent, any rise not counted, a close-out still waiting, and with potions counted (`pots`)
+ * a line of its potions. Sessions from before loot tracking aren't listed.
  */
 function lootView(
   session: Session,
@@ -541,18 +554,31 @@ function lootView(
   expanded: Set<string>,
   showMore: boolean,
   pots: boolean,
+  atMs: number,
 ): ViewNode[] {
   const first = firstPlayed(history, session);
   const tracked = history.filter((past) => past.maps !== undefined);
   const rows = tracked.slice(0, showMore ? SHOWN_MORE : SHOWN_HISTORY).map((past): [Cell[], string[]] => {
-    const rate = lootRate(past);
-    const cells: Cell[] = [
-      pastMap(past, first).cell,
-      mesosText(lootValue(past, catalog), lootPartial(past, catalog), true),
-      rate === null ? null : formatCompact(rate),
-    ];
+    const map = pastMap(past, first).cell;
+    const lines = pastLines(past);
+    const ledger = past.lg;
+    const exact = ledger === undefined ? null : ledgerRate(ledger);
+    let cells: Cell[];
+    if (ledger !== undefined && exact !== null) {
+      cells = [map, formatCompact(ledgerProfit(ledger)), formatCompact(exact)];
+      if (ledger.sp > 0) lines.push(`Spent ${formatCompact(ledger.sp)}`);
+    } else {
+      const value = lootValue(past, catalog);
+      const rate = lootRate(past);
+      cells = [map, value > 0 ? `≈${formatCompact(value)}` : "0", rate === null ? null : `≈${formatCompact(rate)}`];
+    }
+    if (ledger !== undefined && ledger.ho.length > 0) {
+      lines.push(`Not counted: ${ledger.ho.map(([amount]) => `+${formatCompact(amount)}`).join(", ")}`);
+    }
+    if (ledger?.co !== undefined && ledger.co > atMs) lines.push(`Closing out until ${clockTime(ledger.co)}`);
     const line = pots ? potsLine(past, catalog) : null;
-    return [cells, line === null ? pastLines(past) : [...pastLines(past), line]];
+    if (line !== null) lines.push(line);
+    return [cells, lines];
   });
   const past: ViewNode[] =
     tracked.length === 0
@@ -560,7 +586,7 @@ function lootView(
       : [
           {
             kind: "table",
-            columns: ["Map", "Loot gained", "Loot/hr"],
+            columns: ["Map", "Profit", "Profit/hr"],
             numeric: [false, true, true],
             rows: rows.map(([cells]) => cells),
             details: rows.map(([, lines]) => lines),
@@ -591,28 +617,20 @@ function view(
   catalog: Catalog,
   expanded: Set<string>,
   potions: ViewNode | null,
+  potsPerHour: number | null,
 ): ViewNode[] {
   const current: ViewNode[] = [];
   const left = toGo(session);
   const reading = capture === "capturing";
   const first = firstPlayed(history, session);
-  const mesos = totalMesos(session);
-  const partial = session.missed === true;
-  const items = sessionItems(session);
   const mapRow: [string, Cell][] = map === undefined ? [] : [["Map", mapCell(map, first)]];
-  const lootRows: [string, Cell][] = [
-    ...(mesos > 0 ? [["Mesos", mesosText(mesos, partial, false)] as [string, Cell]] : []),
-    ...(items.length > 0
-      ? [["Item value", mesosText(itemsValue(items, catalog), partial || valueAtLeast(items, catalog), false)] as [string, Cell]]
-      : []),
-  ];
   if (session.last === null) {
     if (!reading) current.push({ kind: "loading", text: "Waiting for the game. Your session starts with your first EXP gain." });
   } else if (session.expGained <= 0) {
-    // At startup and after End or Reset: no list of zeros, and the EXP to go is in the strip.
+    // At startup and after End or Reset: no list of zeros, and the EXP to go is in the strip. Loot
+    // picked up before the first kill shows in Loot; the map says where.
     if (!reading) current.push({ kind: "empty", text: "Your session numbers appear after your first gain." });
-    const rows: [string, Cell][] = [...(lootRows.length > 0 ? mapRow : []), ...lootRows];
-    if (rows.length > 0) current.push({ kind: "keyValue", items: rows });
+    if (hasLoot(session.held) && mapRow.length > 0) current.push({ kind: "keyValue", items: mapRow });
   } else {
     const recent = recentRate(session);
     const rows: [string, Cell][] = [
@@ -620,7 +638,6 @@ function view(
       ["Last 5 min EXP/hr", recent === null ? null : formatCompact(recent)],
       ["Time played", formatDuration(session.activeMs)],
       ["EXP gained", formatDigits(session.expGained)],
-      ...lootRows,
     ];
     // Worked out from the percent alone, it's within a hundredth of a percent, not exact.
     if (left !== null) rows.push(["EXP to go", `${session.last.expShown === false ? "≈" : ""}${formatDigits(left)}`]);
@@ -663,28 +680,31 @@ function view(
           },
         ];
 
-  // Loot/hr heads the Items section: mesos and items' NPC value per hour of pickups read. Until
-  // there's a minute of them, a line says it's coming. Not before the first kill, when nothing is
-  // read toward it, nor after a minute with nothing shops pay for; nor while the notices aren't
-  // read at all, which This session's own line explains.
-  const shown = lootShown(notices.readers);
-  const rate = shown ? lootRate(session) : null;
-  const readMs = (session.maps ?? []).reduce((sum, entry) => sum + entry.l, 0);
+  // Loot holds the session's money under one Profit/hr; what was seen picked up follows in its own
+  // section, counted from the notices.
+  const loot = lootSection(session, catalog, {
+    readers: notices.readers,
+    atMs: notices.atMs,
+    reading,
+    started: session.expGained > 0,
+    paused: session.paused === true,
+    potsPerHour,
+  });
   const itemNodes = itemsView(session, catalog, first, expanded);
-  const head: ViewNode[] =
-    rate !== null
-      ? [{ kind: "stat", label: "Loot/hr", value: formatCompact(rate), detail: `${formatDigits(rate)} mesos and NPC item value per hour` }]
-      : itemNodes.length > 0 && shown && reading && session.expGained > 0 && readMs < MESOS_RATE_MS
-        ? [{ kind: "empty", text: "Loot/hr shows after a minute of pickups." }]
-        : [];
-  const missing = reading ? missingLine(session, notices.readers) : [];
-  // With mesos alone, the section is just the rate: the session's loot/hr shows nowhere else here.
-  const itemSection = [...head, ...itemNodes];
-  if (itemSection.length > 0) itemSection.push(...missing);
-  else current.push(...missing);
+  const seen: ViewNode[] =
+    itemNodes.length === 0
+      ? []
+      : [
+          {
+            kind: "section",
+            title: "Seen picking up",
+            children: [...itemNodes, { kind: "text", text: "Counted from pickup notices, which miss some on busy maps.", variant: "muted" }],
+          },
+        ];
   return [
     ...(current.length === 0 ? [] : [{ kind: "section", title: "This session", children: current } as const]),
-    ...(itemSection.length === 0 ? [] : [{ kind: "section", title: "Items", children: itemSection } as const]),
+    ...(loot === null ? [] : [loot]),
+    ...seen,
     ...(potions === null ? [] : [potions]),
     { kind: "section", title: "Past sessions", children: past },
   ];
@@ -745,8 +765,9 @@ definePlugin({
     const show = (atMs: number) => {
       context.setSummary(summary(session, atMs, readers));
       const potions = source === null ? null : potionsSection(session, catalog, source, readers, atMs);
-      context.render(view(session, history, capture, map, { readers, learningSince, atMs }, showMore, catalog, expanded, potions));
-      context.render(lootView(session, history, allTime, catalog, expanded, lootMore, source !== null), "loot");
+      const potsPerHour = source === null ? null : potRate(potTotals(session, catalog));
+      context.render(view(session, history, capture, map, { readers, learningSince, atMs }, showMore, catalog, expanded, potions, potsPerHour));
+      context.render(lootView(session, history, allTime, catalog, expanded, lootMore, source !== null, atMs), "loot");
     };
     const remember = (kind: Undo["kind"], atMs: number) => {
       undo = { kind, session: structuredClone(session), history: history.slice(), allTime, until: atMs + UNDO_MS };
@@ -920,6 +941,27 @@ definePlugin({
             context.notice("Session restored.");
           } else if (undo === null || atMs > undo.until) {
             // The panel's Undo can outlive the window by a tick; say so rather than do nothing.
+            undo = null;
+            context.notice(TOO_LATE[action]);
+          }
+        } else if (action.startsWith(COUNT_HELD)) {
+          // A rise held out of Profit as too big for farming, counted on the player's word.
+          const readAt = Number(action.slice(COUNT_HELD.length));
+          const at = session.lg?.ho.findIndex(([, when]) => when === readAt) ?? -1;
+          const held = at === -1 ? null : countHeld(session, at);
+          if (held !== null) {
+            undo = { kind: "count", session, history, allTime, until: atMs + UNDO_MS, held };
+            persist(atMs, 0);
+            context.notice(`Counted +${formatCompact(held[0])} in Profit.`, "undo-count");
+          }
+        } else if (action === "undo-count") {
+          if (undo?.kind === "count" && undo.held !== undefined && atMs <= undo.until) {
+            uncountHeld(session, undo.held);
+            const rise = formatCompact(undo.held[0]);
+            undo = null;
+            persist(atMs, 0);
+            context.notice(`+${rise} is held out of Profit again.`);
+          } else if (undo === null || atMs > undo.until) {
             undo = null;
             context.notice(TOO_LATE[action]);
           }

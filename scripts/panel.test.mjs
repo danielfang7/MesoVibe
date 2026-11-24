@@ -213,21 +213,24 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     failed.close();
   });
 
-  // The map shows as a picture of its name, with a name screen readers can say, and mesos as a
-  // total. Fails if the picture never arrives from the host, is drawn without its mask, or the
-  // Mesos row is missing.
-  await t.test("This session shows the map's name picture and the mesos counted", async () => {
+  // The map shows as a picture of its name, with a name screen readers can say, and Loot shows the
+  // profit estimated from the notices, marked "≈" and read aloud as "about". Fails if the picture
+  // never arrives from the host, is drawn without its mask, the Profit row is missing, or the
+  // estimate loses its mark or its spoken "about".
+  await t.test("This session shows the map's name picture, and Loot the estimated profit", async () => {
     const page = await openPage(devtools, at("loot"));
     const picture = `document.querySelector('.view .game-text[aria-label^="Map first played"]')`;
     await page.until(`${picture}?.style.maskImage?.startsWith('url("data:image/png')`, "the map's picture");
     assert.ok(await page.evaluate(`${picture}.getBoundingClientRect().width > 0`), "drawn with a size");
-    const mesos = `[...document.querySelectorAll(".view dt")].find((d) => d.textContent === "Mesos")?.nextElementSibling?.textContent`;
-    assert.match(await page.until(mesos, "the Mesos row"), /^[\d,]+\+?$/);
+    const mesos = `[...document.querySelectorAll(".view dt")].find((d) => d.textContent === "Profit")?.nextElementSibling?.textContent`;
+    assert.match(await page.until(mesos, "the Profit row"), /^≈about [\d,]+$/);
+    const hidden = `[...document.querySelectorAll(".view dt")].find((d) => d.textContent === "Profit")?.nextElementSibling?.querySelector(".visually-hidden")?.textContent`;
+    assert.equal(await page.evaluate(hidden), "about ", "screen readers hear the estimate as about");
 
-    // Items picked up list by name with their count and NPC value. Fails if the Items table is
+    // Items seen picked up list by name with their count and NPC value. Fails if the table is
     // missing once items are picked up.
     const itemRows = `[...document.querySelectorAll(".view table")].find((t) => t.querySelector("th")?.textContent === "Item")?.querySelectorAll("tbody tr").length`;
-    assert.ok((await page.until(itemRows, "the Items table")) > 0);
+    assert.ok((await page.until(itemRows, "the Seen picking up table")) > 0);
 
     // The Loot tab opens on All time. Fails if its rail item doesn't show the tracker's Loot page.
     await page.evaluate(`document.querySelector('[aria-label="Loot"]').click()`);
@@ -236,8 +239,8 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.ok((await page.until(itemRows, "All time's items")) > 0);
     // The Loot tab keeps up while it's open. Fails if pickups made with it open only show once the
     // tab is opened again.
-    const opened = await page.until(mesos, "All time's mesos");
-    await page.until(`((m) => m !== undefined && m !== ${JSON.stringify(opened)})(${mesos})`, "All time's mesos rising with the Loot tab open");
+    const opened = await page.until(mesos, "All time's profit");
+    await page.until(`((m) => m !== undefined && m !== ${JSON.stringify(opened)})(${mesos})`, "All time's profit rising with the Loot tab open");
 
     // What MesoVibe sees shows the HP and MP numbers as read, says how the notices are read and
     // shows the map's name as read, and Reads lists the HP and MP numbers. Fails if a row is
@@ -586,9 +589,10 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
   await t.test("the mini-HUD shows the rate, time to level and progress, or what's wrong", async () => {
     const page = await openPage(devtools, at("grind", "hud.html"));
     assert.equal(await page.until(`document.querySelector(".hud-rate")?.textContent`, "the rate"), "48.2K");
-    // Loot/hr on its own row under EXP/hr, then time to level.
+    // Profit/hr on its own row under EXP/hr, marked "≈" and read as "about" while it's an estimate,
+    // then time to level.
     const hudLines = `[...document.querySelectorAll(".hud-line")].map((l) => l.textContent)`;
-    await page.until(`${hudLines}.join("|") === "21.5K loot/hr|Lv 42 → 43 in 51 min"`, "loot/hr and time to level");
+    await page.until(`${hudLines}.join("|") === "≈about 21.5K profit/hr|Lv 42 → 43 in 51 min"`, "profit/hr and time to level");
     assert.equal(await page.evaluate(`document.querySelector(".hud-progress .number").textContent`), "64.62%");
     assert.deepEqual(page.errors, []);
     page.close();
@@ -632,13 +636,13 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await mid.evaluate(`document.querySelector(".hud-progress")`), null, "the hint takes the progress row");
     assert.deepEqual(mid.errors, []);
     mid.close();
-    // At the mini-HUD window's own size (app/src/dock.rs) the loot/hr line still leaves every row
+    // At the mini-HUD window's own size (app/src/dock.rs) the profit/hr line still leaves every row
     // readable. Fails if a row is pushed out of the card, or a line is squeezed shorter than its text.
     const dock = readFileSync(join(REPO, "app", "src", "dock.rs"), "utf8");
     const [hudWidth, hudHeight] = ["HUD_WIDTH", "HUD_HEIGHT"].map((name) => Number(new RegExp(`const ${name}: f64 = ([\\d.]+);`).exec(dock)[1]));
     const small = await openPage(devtools, at("grind", "hud.html"));
     await small.resize(hudWidth, hudHeight);
-    await small.until(`document.querySelector(".hud-loot") && window.innerHeight === ${hudHeight}`, "loot/hr at the mini-HUD's size");
+    await small.until(`document.querySelector(".hud-loot") && window.innerHeight === ${hudHeight}`, "profit/hr at the mini-HUD's size");
     const cut = `(() => {
       const card = document.querySelector(".hud").getBoundingClientRect();
       return [...document.querySelectorAll(".hud > *")]

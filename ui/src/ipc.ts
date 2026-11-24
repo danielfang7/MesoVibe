@@ -110,6 +110,8 @@ export interface HudSummary {
   pctHundredths: number | null;
   minutesToLevel: number | null;
   lootPerHour: number | null;
+  /** `lootPerHour` is an estimate from the pickup notices; absent from an older panel. */
+  lootApprox?: boolean;
 }
 
 export interface AppInfo {
@@ -236,6 +238,7 @@ export function hudSummary(summary: SessionSummary): HudSummary {
     pctHundredths: whole(summary.pctHundredths),
     minutesToLevel: summary.minutesToLevel,
     lootPerHour: summary.lootPerHour,
+    lootApprox: summary.lootApprox,
   };
 }
 

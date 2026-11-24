@@ -114,6 +114,11 @@ export type ViewNode =
       action: string;
       style?: "primary" | "secondary" | "danger-link";
       confirm?: Confirm;
+      /**
+       * What screen readers hear when the label alone doesn't say what the button acts on: a
+       * "Count it" under a line about a held rise is "Count the 5M rise in Profit".
+       */
+      spoken?: string;
     }
   | { kind: "loading"; text: string }
   | { kind: "empty"; text: string }
@@ -142,12 +147,16 @@ export interface SessionSummary {
   /** Time played while capturing, in milliseconds. */
   activeMs: number;
   /**
-   * Mesos and the NPC value of items picked up, per hour over the time the pickup notices were
-   * read; null until loot is counted, and while the notices are still being learned or are blocked.
+   * The Session view's Loot headline: profit per hour, mesos picked up plus what shops paid. Exact
+   * once two meso totals were read in the inventory or a shop, an estimate from the pickup notices
+   * before that (`lootApprox`); null until loot is counted, and while the notices are still being
+   * learned or are blocked.
    *
    * @experimental May change before the Loot Tracker's item list is released.
    */
   lootPerHour: number | null;
+  /** `lootPerHour` is an estimate from the pickup notices, which miss some: show it with "≈". */
+  lootApprox: boolean;
   /** The session has EXP, or loot without EXP, worth keeping: End is offered. */
   canEnd: boolean;
   /** The session has something to throw away: Reset is offered. */

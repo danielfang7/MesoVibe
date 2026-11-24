@@ -14,6 +14,11 @@
  * Potions drunk count on the map from the session's first EXP gain (a potion on the walk to a map
  * isn't the grind's cost), measured over their own read time, the time the HP and MP numbers were
  * read, so pot cost/hr leaves out a stretch where a potion couldn't have been seen.
+ *
+ * The pickup notices miss pickups on busy maps, so what they count is an estimate. The meso
+ * ledger ([`Ledger`]) measures the session from the meso totals read in the inventory and shop
+ * windows instead, which miss nothing; once it has two totals, its Profit and Profit/hr replace the
+ * notices' figures, which stay as the estimate between readings and as the list of items seen.
  */
 
 import type { Event, NoticeState } from "@mesovibe/sdk";

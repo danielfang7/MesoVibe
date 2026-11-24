@@ -66,9 +66,14 @@ pub struct Summary {
     pub level: Option<u32>,
     pub pct_hundredths: Option<u32>,
     pub minutes_to_level: Option<f64>,
-    /// Mesos and the NPC value of items per hour, once loot is counted; absent from an older panel.
+    /// The Loot section's headline, profit per hour, once loot is counted; absent from an older
+    /// panel.
     #[serde(default)]
     pub loot_per_hour: Option<f64>,
+    /// `loot_per_hour` is an estimate from the pickup notices, shown with "≈". Left out when false,
+    /// so a summary from an older panel passes through unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loot_approx: bool,
 }
 
 /// The latest [`Summary`], for a mini-HUD that has just opened.
@@ -1092,8 +1097,9 @@ mod tests {
         );
     }
 
-    // The panel's loot/hr reaches the mini-HUD under the same `lootPerHour` key, and an older
-    // panel's summary without it still reads. Fails if the host drops or renames the field.
+    // The panel's profit/hr reaches the mini-HUD under the same `lootPerHour` key with its
+    // `lootApprox` mark, and an older panel's summary without them still reads. Fails if the host
+    // drops or renames either field.
     #[test]
     fn the_summary_carries_loot_per_hour_to_the_mini_hud() {
         let from_panel = serde_json::json!({
@@ -1118,6 +1124,20 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(older.loot_per_hour, None);
+        assert!(!older.loot_approx);
         assert_eq!(older.level, Some(42));
+
+        let estimate = serde_json::json!({
+            "expPerHour": 48210.0,
+            "level": 42,
+            "pctHundredths": 6462,
+            "minutesToLevel": 51.0,
+            "lootPerHour": 21480.0,
+            "lootApprox": true,
+        });
+        let summary: Summary = serde_json::from_value(estimate.clone()).unwrap();
+        assert!(summary.loot_approx);
+        latest.set(Some(summary));
+        assert_eq!(serde_json::to_value(latest.get()).unwrap(), estimate);
     }
 }

@@ -109,8 +109,8 @@ test("as shipped, no potions are counted or shown", () => {
   const { send, sent, now } = play({ bundle: shipped, meat: every(30, 60, 600) });
   assert.equal(potions(sent), undefined);
   send(action("end", now));
-  assert.deepEqual(lootTable(sent).columns, ["Map", "Loot gained", "Loot/hr"]);
-  assert.deepEqual(Object.keys(allTime(sent)), ["Played", "Mesos", "Loot/hr"]);
+  assert.deepEqual(lootTable(sent).columns, ["Map", "Profit", "Profit/hr"]);
+  assert.deepEqual(Object.keys(allTime(sent)), ["Played", "Profit", "Profit/hr"]);
   const past = last(sent, "save").data.history[0];
   assert.equal(past.maps[0].h, undefined);
   assert.equal(past.maps[0].u, undefined);
@@ -136,7 +136,7 @@ test("potions cost their shop price, and pot cost/hr is over the time they were 
     variant: "muted",
   });
   const order = sent.filter((m) => m.type === "render" && m.page === undefined).at(-1).view.map((node) => node.title);
-  assert.deepEqual(order.slice(-3), ["Items", "Potions", "Past sessions"], "Potions sits after Items");
+  assert.deepEqual(order.slice(-3), ["Loot", "Potions", "Past sessions"], "Potions sits after Loot");
   assert.equal(allTime(sent)["Pot cost"], "1.55K", "All time counts the running session's potions");
 });
 
@@ -308,8 +308,8 @@ test("an ended session shows its potions in the Loot tab", () => {
   assert.deepEqual(past.ps, { [MEAT]: "rises", 2010005: "rises" });
   assert.equal(potions(sent), undefined, "the next session's Potions section waits for its first gain");
   const table = lootTable(sent);
-  assert.deepEqual(table.columns, ["Map", "Loot gained", "Loot/hr"]);
-  assert.deepEqual(table.rows[0].slice(1), ["3K", "18K"]);
+  assert.deepEqual(table.columns, ["Map", "Profit", "Profit/hr"]);
+  assert.deepEqual(table.rows[0].slice(1), ["≈3K", "≈18K"]);
   assert.equal(table.details[0].at(-1), "Pots 1.55K: Meat ×10, Lemon ×5");
   const figures = allTime(sent);
   assert.equal(figures["Pots counted for"], "10m");
@@ -344,7 +344,7 @@ test("sessions without potion counts have no pots line and stay out of All time'
   assert.equal(details[0].at(-1), "Pots 800: Meat ×10");
   assert.ok(!details[1].some((line) => line.startsWith("Pots")), "the old session has no pots line");
   const figures = allTime(sent);
-  assert.equal(figures["Loot/hr"], "189K", "loot/hr covers both");
+  assert.equal(figures["Profit/hr"], "≈189K", "profit/hr covers both");
   assert.equal(figures["Pots counted for"], "10m");
   assert.equal(figures["Pot cost"], "800");
 });
