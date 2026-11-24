@@ -9,11 +9,17 @@
 //!
 //! ```text
 //! cargo run -p mesovibe-engine --example replay_exp -- [--quiet] \
+//!     [--knowledge <exp-bar.txt>] \
 //!     [--needed <level>=<EXP for that whole level>]... \
 //!     [--calibrate <run folder>/<frame number> <level> <exp> <percent, like 39.16>]... \
 //!     <run folder>...
 //! ```
 //!
+//! - `--knowledge` starts the reader from an `exp-bar.txt` the app kept, as the app starts a
+//!   session, so a run that begins late in a level reads its percent from the first frame. The app
+//!   keeps it in its data folder (`%APPDATA%\com.mesovibe.desktop` on Windows,
+//!   `~/Library/Application Support/com.mesovibe.desktop` on macOS) and rewrites it as it learns,
+//!   so copy it before recording to replay from what the app knew when the run began.
 //! - `--needed` checks the percent against an EXP needed you read off the game's tooltip, for
 //!   that level, independently of the reader's own EXP table.
 //! - `--calibrate` uses the typed fallback instead of self-calibration.
@@ -46,6 +52,8 @@ fn parse_pct(text: &str) -> Option<u16> {
 
 struct Args {
     calibrations: Vec<(PathBuf, String, TypedReading)>,
+    /// The `exp-bar.txt` given, and the reader it restores.
+    knowledge: Option<(String, ExpBarReader)>,
     needed: HashMap<u16, u64>,
     quiet: bool,
     runs: Vec<PathBuf>,
@@ -55,6 +63,7 @@ fn parse_args() -> Result<Args, String> {
     let mut args = std::env::args().skip(1);
     let mut out = Args {
         calibrations: Vec::new(),
+        knowledge: None,
         needed: HashMap::new(),
         quiet: false,
         runs: Vec::new(),
@@ -98,12 +107,19 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|_| "--needed: exp must be a number")?;
                 out.needed.insert(level, exp);
             }
+            "--knowledge" => {
+                let path = next()?;
+                let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+                let reader = ExpBarReader::from_knowledge(&text)
+                    .ok_or(format!("{path}: not text an EXP bar reader kept"))?;
+                out.knowledge = Some((path, reader));
+            }
             "--quiet" => out.quiet = true,
             _ => out.runs.push(PathBuf::from(a)),
         }
     }
     if out.runs.is_empty() {
-        return Err("usage: replay_exp [--quiet] [--needed <level>=<exp>]... [--calibrate <run>/<frame> <level> <exp> <pct>]... <run>...".into());
+        return Err("usage: replay_exp [--quiet] [--knowledge <exp-bar.txt>] [--needed <level>=<exp>]... [--calibrate <run>/<frame> <level> <exp> <pct>]... <run>...".into());
     }
     Ok(out)
 }
@@ -134,7 +150,13 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut reader = ExpBarReader::new();
+    let mut reader = match &args.knowledge {
+        Some((path, kept)) => {
+            println!("starting from the shapes the app kept in {path}");
+            kept.clone()
+        }
+        None => ExpBarReader::new(),
+    };
     for (run, frame, reading) in &args.calibrations {
         let image = match load(run, &run.join(frame)) {
             Ok(i) => i,
@@ -154,7 +176,7 @@ fn main() -> ExitCode {
             }
         }
     }
-    if args.calibrations.is_empty() {
+    if args.calibrations.is_empty() && args.knowledge.is_none() {
         println!("self-calibrating: no typed readings");
     }
 
