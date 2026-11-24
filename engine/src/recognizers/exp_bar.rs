@@ -1058,10 +1058,13 @@ impl ExpBarReader {
         true
     }
 
-    /// Learns a digit shape that turned up after calibration, when exactly one unnamed digit
-    /// makes the bar fit the EXP needed of the last reading without the EXP falling. The percent
-    /// alone never teaches one: nothing in it can tell a digit from something drawn over one (the
-    /// game's cursor, a stray pixel), so a shape first seen there waits for the full field.
+    /// Learns a digit shape that turned up after calibration, when exactly one digit makes the
+    /// bar fit the EXP needed of the last reading without the EXP falling, and that digit is
+    /// unnamed. Every digit is tried, named or not: in a low place the bar fits several (it allows
+    /// about a hundredth of a percent of EXP needed), and there a named digit with something drawn
+    /// over it (the game's cursor, a stray pixel) could pass for the missing one. The percent
+    /// alone never teaches one: nothing in it can tell a digit from something drawn over one, so a
+    /// shape first seen there waits for the full field.
     fn learn_unseen_digit(&mut self, frame: &Frame, layout: Layout) -> bool {
         let Some(last) = self.last.filter(|_| self.learner.confirmed) else {
             return false;
@@ -1081,30 +1084,36 @@ impl ExpBarReader {
         let [glyph] = unknown[..] else {
             return false;
         };
-        let mut fitting = Vec::new();
-        for digit in self.digits.missing(DIGITS) {
-            let mut atlas = self.digits.clone();
-            if atlas
-                .learn(std::slice::from_ref(glyph), &digit.to_string())
-                .is_err()
-            {
-                continue;
-            }
-            let text: Option<String> = found.iter().map(|(_, g)| atlas.name(g)).collect();
-            if let Some((Some(exp), pct)) = text.as_deref().and_then(parse_exp_text)
-                && last.exp.is_some_and(|before| exp >= before)
-                && fits(exp, pct, needed)
-            {
-                fitting.push(atlas);
-            }
+        let fitting: Vec<char> = DIGITS
+            .chars()
+            .filter(|&digit| {
+                let text: Option<String> = found
+                    .iter()
+                    .map(|(_, g)| match g == glyph {
+                        true => Some(digit),
+                        false => self.digits.name(g),
+                    })
+                    .collect();
+                matches!(
+                    text.as_deref().and_then(parse_exp_text),
+                    Some((Some(exp), pct))
+                        if last.exp.is_some_and(|before| exp >= before) && fits(exp, pct, needed)
+                )
+            })
+            .collect();
+        let [digit] = fitting[..] else {
+            return false;
+        };
+        let mut atlas = self.digits.clone();
+        if atlas
+            .learn(std::slice::from_ref(glyph), &digit.to_string())
+            .is_err()
+        {
+            // The digit is named already: this is its shape with something drawn over it.
+            return false;
         }
-        match <[Atlas; 1]>::try_from(fitting) {
-            Ok([atlas]) => {
-                self.digits = atlas;
-                true
-            }
-            Err(_) => false,
-        }
+        self.digits = atlas;
+        true
     }
 
     /// Learns the level tiles' digits and follows level-ups. Unconfirmed readings teach nothing.
@@ -2490,6 +2499,47 @@ mod tests {
             (Some(exp), pct_of(exp, NEEDED_41))
         );
         assert!(!reader.missing().exp.contains(&'7'));
+    }
+
+    // The game's cursor over the full field's last digit, while a 7 was never seen. Fails if the
+    // covered 0 is learned as the 7, which would leave every real 7 unreadable.
+    #[test]
+    fn a_stray_pixel_over_a_low_digit_is_not_learned_as_a_missing_one() {
+        let hud = Hud::new();
+        let mut reader = ExpBarReader::new();
+        let no_seven = |e: u64| !exp_text(e, pct_of(e, NEEDED_41)).contains('7');
+        let exps: Vec<u64> = (0..400)
+            .map(|i| 130_000 + i * 113)
+            .filter(|&e| no_seven(e))
+            .take(30)
+            .collect();
+        feed(&hud, &mut reader, 41, NEEDED_41, &exps);
+        assert_eq!(reader.missing().exp, ['7']);
+        // One more white pixel inside the last 0 of 136,100[41.98%].
+        let mut covered = hud.draw_values(41, 136_100, pct_of(136_100, NEEDED_41));
+        let x = 283
+            + 468
+            + "136,10"
+                .chars()
+                .map(|c| hud.exp_font.columns(c).len() as u32 + 1)
+                .sum::<u32>();
+        let (px, py) = (x..x + 5)
+            .flat_map(|px| (740..747).map(move |py| (px, py)))
+            .find(|&(px, py)| covered.get(px, py) == DARK)
+            .expect("a gap inside the 0");
+        covered.set(px, py, WHITE);
+        assert_eq!(
+            reader.observe(&covered.frame()),
+            Err(Unreadable::UnknownGlyph(Field::Exp))
+        );
+        assert_eq!(reader.missing().exp, ['7']);
+        // A real 7 where no other digit fits is still learned.
+        let exp = (217_200..).find(|&e| !no_seven(e)).unwrap();
+        let full = reader
+            .observe(&hud.draw_values(41, exp, pct_of(exp, NEEDED_41)).frame())
+            .unwrap();
+        assert_eq!(full.exp, Some(exp));
+        assert!(reader.missing().exp.is_empty());
     }
 
     // The percent alone, late in a level.
