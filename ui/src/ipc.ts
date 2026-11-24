@@ -112,6 +112,10 @@ export interface HudSummary {
   lootPerHour: number | null;
   /** `lootPerHour` is an estimate from the pickup notices; absent from an older panel. */
   lootApprox?: boolean;
+  /** When the session just ended stops waiting for its close-out; absent or null when none waits. */
+  closeOutBy?: number | null;
+  /** Ask once for the inventory, for exact mesos; absent from an older panel. */
+  askForMesos?: boolean;
 }
 
 export interface AppInfo {
@@ -239,6 +243,8 @@ export function hudSummary(summary: SessionSummary): HudSummary {
     minutesToLevel: summary.minutesToLevel,
     lootPerHour: summary.lootPerHour,
     lootApprox: summary.lootApprox,
+    closeOutBy: summary.closeOutBy,
+    askForMesos: summary.askForMesos,
   };
 }
 

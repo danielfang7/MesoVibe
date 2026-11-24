@@ -122,9 +122,14 @@ function paint(hud: Hud): void {
       ),
     );
   }
-  // A hint takes the progress row: the card has room for four rows, loot/hr's included.
-  if (issue?.hint !== undefined) {
-    rows.push(h("p", { class: "hud-line" }, issue.hint));
+  // A hint takes the progress row: the card has room for four rows, profit/hr's included. What's
+  // wrong comes first; then, for players who never see the panel, the close-out after End, and once
+  // ever, how to get exact mesos.
+  const hint =
+    issue?.hint ??
+    (summary?.closeOutBy != null ? "Open inventory to close out" : summary?.askForMesos ? "Open inventory 2s for exact mesos" : undefined);
+  if (hint !== undefined) {
+    rows.push(h("p", { class: "hud-line" }, hint));
   } else if (summary?.pctHundredths != null) {
     rows.push(
       h(

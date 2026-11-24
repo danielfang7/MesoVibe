@@ -16,7 +16,9 @@ import {
   addItem,
   addPickup,
   addPotUse,
+  addReading,
   addTime,
+  closeOut,
   countHeld,
   hasLoot,
   HOLD_MS,
@@ -28,9 +30,12 @@ import {
   mapRates,
   MESOS_RATE_MS,
   mergeLoot,
+  openWith,
   reads,
+  restartSegment,
   sessionItems,
   start as startLoot,
+  stopCloseOut,
   sumItems,
   totalMesos,
   uncountHeld,
@@ -39,9 +44,10 @@ import {
   validLedger,
   validMaps,
   validPotSources,
+  waitForCloseOut,
 } from "./loot.js";
-import type { Catalog, ItemEntry, ItemInfo, LootFields, MapEntry, PotTime } from "./loot.js";
-import { COUNT_HELD, lootHeadline, lootSection } from "./loot-view.js";
+import type { Catalog, ItemEntry, ItemInfo, Ledger, LedgerChange, LootFields, MapEntry, MesoSource, PotTime, SinceReading } from "./loot.js";
+import { COUNT_HELD, heldLines, lootHeadline, lootSection } from "./loot-view.js";
 import { potRate, potTotals } from "./pot-cost.js";
 import { allTimePotRows, potionsSection, potsLine } from "./potions-view.js";
 import {
@@ -65,6 +71,7 @@ const TOO_LATE = {
   "undo-reset": "Too late to undo the reset.",
   "undo-delete": "Too late to undo: the session is deleted.",
   "undo-count": "Too late to undo: it's counted in Profit.",
+  "undo-closeout": "Too late to undo: the close-out is in that session.",
 };
 /** How often the running session is saved while nothing changes, so closing MesoVibe loses little. */
 const SAVE_EVERY_MS = 30_000;
@@ -107,19 +114,23 @@ interface Saved {
   allTime?: AllTime;
   /** Every item key's name, tab and price, kept once rather than in each session. */
   catalog?: Catalog;
+  /** A meso total has been read at least once, so the mini-HUD stops asking for one. */
+  mesosRead?: true;
 }
 
 /**
- * What Undo puts back: the session and history before End, Reset or deleting a past session, or
- * for a held rise counted into Profit, the rise to hold again.
+ * What Undo puts back: the session and history before End, Reset, deleting a past session or a
+ * close-out, or for a held rise counted into Profit, the rise to hold again (`past`: in the past
+ * session that started then, not the running one).
  */
 interface Undo {
-  kind: "end" | "reset" | "delete" | "count";
+  kind: "end" | "reset" | "delete" | "count" | "closeout";
   session: Session;
   history: Past[];
   allTime: AllTime;
   until: number;
   held?: [number, number];
+  past?: number;
 }
 
 /** The loot fields of a saved session, with anything malformed dropped. */
@@ -168,6 +179,7 @@ function load(saved: unknown): Saved {
         ? { mesos: allTime.mesos, playedMs: allTime.playedMs, ...(items.length > 0 ? { items } : {}) }
         : { mesos: 0, playedMs: 0 },
     catalog: validCatalog(value.catalog),
+    ...(value.mesosRead === true ? { mesosRead: true as const } : {}),
   };
 }
 
@@ -178,7 +190,16 @@ function canEnd(session: Session, atMs: number): boolean {
   return held !== undefined && hasLoot(held) && atMs - held.atMs >= HOLD_MS;
 }
 
-function summary(session: Session, atMs: number, readers: Readers): SessionSummary {
+/**
+ * What the strip needs beside the session: when the session just ended stops waiting for its
+ * close-out (null when nothing waits), and whether to ask for a first meso reading.
+ */
+interface StripExtras {
+  closeOutBy: number | null;
+  askForMesos: boolean;
+}
+
+function summary(session: Session, atMs: number, readers: Readers, extras: StripExtras): SessionSummary {
   const last = session.last;
   const loot = lootHeadline(session, readers);
   return {
@@ -198,7 +219,27 @@ function summary(session: Session, atMs: number, readers: Readers): SessionSumma
     lootOnly: session.expGained <= 0 && hasLoot(session.held),
     paused: session.paused === true,
     canPause: session.expGained > 0 || session.paused === true,
+    closeOutBy: extras.closeOutBy,
+    askForMesos: extras.askForMesos,
   };
+}
+
+/**
+ * What the close-out says once the reading after End is in: "Closed out: +128.4K sold. Session
+ * profit 1.41M (412K/hr)."
+ */
+function closedOut(change: LedgerChange, ledger: Ledger): string {
+  const what =
+    change.kind === "sold"
+      ? `+${formatCompact(change.amount)} sold`
+      : change.kind === "spent"
+        ? `${formatCompact(change.amount)} spent`
+        : change.kind === "held"
+          ? `+${formatCompact(change.amount)} not counted`
+          : "nothing sold";
+  const rate = ledgerRate(ledger);
+  const pace = rate === null ? "" : ` (${formatCompact(rate)}/hr)`;
+  return `Closed out: ${what}. Session profit ${formatCompact(ledgerProfit(ledger))}${pace}.`;
 }
 
 /**
@@ -580,6 +621,12 @@ function lootView(
     if (line !== null) lines.push(line);
     return [cells, lines];
   });
+  // Rises the session just ended held out of Profit can still be counted until its close-out ends.
+  const closing = history[0]?.lg;
+  const countable: ViewNode[] =
+    closing?.co !== undefined && closing.co > atMs && closing.ho.length > 0
+      ? [{ kind: "text", text: "From the session you just ended, until its close-out:", variant: "muted" }, ...heldLines(closing)]
+      : [];
   const past: ViewNode[] =
     tracked.length === 0
       ? [{ kind: "empty", text: "Sessions show up here when you end them or close MesoVibe." }]
@@ -591,6 +638,7 @@ function lootView(
             rows: rows.map(([cells]) => cells),
             details: rows.map(([, lines]) => lines),
           },
+          ...countable,
           ...(tracked.length > SHOWN_HISTORY
             ? [{ kind: "button", label: showMore ? "Show fewer" : "Show more", action: "toggle-loot-history", style: "secondary" } as const]
             : []),
@@ -735,6 +783,8 @@ definePlugin({
     // End.
     const leftOver = saved.current === null ? null : finishWithLoot(saved.current, saved.current.lastAtMs, catalog);
     if (leftOver !== null) pushHistory(leftOver);
+    // Quitting MesoVibe ends any close-out: a reading after a restart may be hours later.
+    for (const past of history) stopCloseOut(past);
 
     let session: Session = newSession(startedAtMs, null);
     let capture: CaptureState = startCapture;
@@ -750,6 +800,16 @@ definePlugin({
     /** The item lists showing all their items, until the session ends. */
     let expanded = new Set<string>();
     let undo: Undo | null = null;
+    /** The last trusted meso total read with no session running: it can open the next one. */
+    let pre: { total: number; source: MesoSource; atMs: number } | null = null;
+    /** A total read during End's Undo window, closing out the session once that window has passed. */
+    let closeLater = false;
+    /** What happened since the session's last meso total: the maps played, and any pause. */
+    let since = { maps: new Set<string | null>(), paused: false };
+    /** "Mesos read" was said for this session, or the wait before it. */
+    let readSaid = false;
+    /** A meso total was ever read, so the mini-HUD stops asking for one. */
+    let mesosRead = saved.mesosRead === true;
     let savedAt = Number.NEGATIVE_INFINITY;
     // An EXP change the 5 s cap held back; the next tick past the cap saves it.
     let unsaved = false;
@@ -758,12 +818,19 @@ definePlugin({
     const persist = (atMs: number, gapMs = SAVE_EVERY_MS) => {
       if (atMs - savedAt < gapMs) return;
       const running = session.last === null && session.held === undefined ? null : session;
-      context.save({ version: 1, history, current: running, allTime, catalog } satisfies Saved);
+      context.save({ version: 1, history, current: running, allTime, catalog, ...(mesosRead ? { mesosRead: true as const } : {}) } satisfies Saved);
       savedAt = atMs;
       unsaved = false;
     };
+    /** When the session just ended stops waiting for its close-out, once End's Undo has passed. */
+    const closeOutBy = (atMs: number): number | null => {
+      const due = history[0]?.lg?.co;
+      if (session.expGained > 0 || due === undefined || due < atMs) return null;
+      return undo?.kind === "end" && atMs <= undo.until ? null : due;
+    };
     const show = (atMs: number) => {
-      context.setSummary(summary(session, atMs, readers));
+      const askForMesos = readers.mesos === "reading" && !mesosRead && session.expGained > 0;
+      context.setSummary(summary(session, atMs, readers, { closeOutBy: closeOutBy(atMs), askForMesos }));
       const potions = source === null ? null : potionsSection(session, catalog, source, readers, atMs);
       const potsPerHour = source === null ? null : potRate(potTotals(session, catalog));
       context.render(view(session, history, capture, map, { readers, learningSince, atMs }, showMore, catalog, expanded, potions, potsPerHour));
@@ -782,6 +849,70 @@ definePlugin({
       const before = session.activeMs;
       advance(session, atMs, capture === "capturing" && session.paused !== true);
       addTime(session, map, session.activeMs - before, reads(readers.notices), session.last?.level ?? null, potTime(atMs));
+      if (session.expGained > 0) {
+        if (map !== undefined && session.activeMs > before) since.maps.add(map);
+        if (session.paused) since.paused = true;
+      }
+    };
+    /** Starts afresh what's noted between meso totals, from the map the player is on. */
+    const resetSince = () => {
+      since = { maps: new Set(map === undefined ? [] : [map]), paused: false };
+    };
+    /**
+     * What the session did since its last meso total. Time on a map where it gained no EXP (a
+     * town) or a pause makes a rise what a shop paid, not mesos picked up.
+     */
+    const sinceReading = (): SinceReading => {
+      const played = [...since.maps];
+      const town = played.some((key) => (session.maps ?? []).find((m) => m.k === key)?.x === 0);
+      return { playMs: session.activeMs, map: played.length === 1 ? played[0] : undefined, away: since.paused || town };
+    };
+    /**
+     * Closes out the session just ended with a total read after End, saying what it added, with
+     * Undo. True when it did.
+     */
+    const tryCloseOut = (total: number, source: MesoSource, atMs: number): boolean => {
+      const last = history[0];
+      if (last?.lg?.co === undefined) return false;
+      const before = structuredClone(last);
+      const change = closeOut(last, total, source, atMs);
+      if (change === null || last.lg === undefined) return false;
+      undo = {
+        kind: "closeout",
+        session: structuredClone(session),
+        history: history.map((past) => (past === last ? before : past)),
+        allTime,
+        until: atMs + UNDO_MS,
+      };
+      persist(atMs, 0);
+      context.notice(closedOut(change, last.lg), "undo-closeout");
+      return true;
+    };
+    /**
+     * A trusted meso total. With no session running it closes out the one just ended (after End's
+     * Undo window) and is kept to open the next; during a session the ledger counts the change
+     * since the last total. The first total of a session says it was read.
+     */
+    const countMesos = (total: number, source: MesoSource, atMs: number) => {
+      mesosRead = true;
+      let said = false;
+      if (session.expGained <= 0) {
+        if (undo?.kind === "end" && atMs <= undo.until) {
+          // The close-out waits for End's Undo to pass, then says what it added.
+          closeLater = history[0]?.lg?.co !== undefined;
+          said = closeLater;
+        } else said = tryCloseOut(total, source, atMs);
+        pre = { total, source, atMs };
+      } else {
+        addReading(session, total, source, atMs, sinceReading());
+        resetSince();
+        unsaved = true;
+        persist(atMs, EXP_SAVE_EVERY_MS);
+      }
+      // Never over another notice's Undo (End's, a count's): it would take that Undo away.
+      const undoOpen = undo !== null && atMs <= undo.until;
+      if (!readSaid && !said && !undoOpen) context.notice(`Mesos read: ${formatDigits(total)}`);
+      if (said || !undoOpen) readSaid = true;
     };
     persist(startedAtMs, leftOver !== null ? 0 : SAVE_EVERY_MS);
     show(startedAtMs);
@@ -803,6 +934,8 @@ definePlugin({
           };
           const change = compare(session.last, reading);
           if (change.kind === "gain" && change.levelUp) session.levelUps += 1;
+          // Another character or a restarted game: the meso ledger starts a new segment too.
+          if (change.kind === "baseline" && session.last !== null) restartSegment(session);
           session.last = reading;
           show(atMs);
         } else if (event.type === "ExpChanged") {
@@ -816,7 +949,9 @@ definePlugin({
             needed: event.needed,
             expShown: event.exp_shown,
           };
-          observe(session, reading, atMs);
+          const change = observe(session, reading, atMs);
+          // Another character or a restarted game: the meso ledger starts a new segment too.
+          if (change.kind === "baseline" && before !== null) restartSegment(session);
           // A session starts at its first gain: a wait before it, such as after End or Reset,
           // keeps at most LEAD_MS, and its level and losses start from the reading before the gain.
           if (firstGain && session.expGained > 0) {
@@ -826,6 +961,13 @@ definePlugin({
             session.startLevel = before?.level ?? event.level;
             session.expLost = 0;
             startLoot(session, map, lead, reads(readers.notices), event.level, atMs, potTime(atMs));
+            // The session just ended stops waiting for its close-out, and a total read in the five
+            // minutes before this kill opens this one.
+            if (history[0] !== undefined) stopCloseOut(history[0]);
+            closeLater = false;
+            if (pre !== null) openWith(session, pre.total, pre.atMs, atMs);
+            pre = null;
+            resetSince();
           }
           addExp(session, map, session.expGained - gainedBefore, event.level);
           // Saved on EXP changes too, at most every 5 s, so a close loses at most that.
@@ -834,6 +976,10 @@ definePlugin({
           show(atMs);
         } else if (event.type === "MapChanged") {
           map = event.map_key;
+          show(atMs);
+        } else if (event.type === "MesoChanged") {
+          // Counted while paused too: a change across a pause is what a shop paid or what was spent.
+          countMesos(event.total, event.source, atMs);
           show(atMs);
         } else if (
           // Pickups made while paused aren't the session's.
@@ -876,6 +1022,11 @@ definePlugin({
       onTick(atMs) {
         tick(atMs);
         if (undo !== null && atMs > undo.until) undo = null;
+        // A total read during End's Undo window closes the session out once Undo has passed.
+        if (closeLater && undo === null) {
+          closeLater = false;
+          if (pre !== null && session.expGained <= 0) tryCloseOut(pre.total, pre.source, atMs);
+        }
         persist(atMs, unsaved ? EXP_SAVE_EVERY_MS : SAVE_EVERY_MS);
         show(atMs);
       },
@@ -887,8 +1038,11 @@ definePlugin({
           if (past !== null) {
             const said = recap(session);
             remember("end", atMs);
+            waitForCloseOut(past, atMs);
             pushHistory(past);
             session = newSession(atMs, session.last);
+            readSaid = false;
+            pre = null;
             expanded = new Set();
             persist(atMs, 0);
             context.notice(said, "undo-end");
@@ -898,6 +1052,8 @@ definePlugin({
           if (session.expGained > 0 || session.held !== undefined) {
             remember("reset", atMs);
             session = newSession(atMs, session.last);
+            readSaid = false;
+            pre = null;
             expanded = new Set();
             persist(atMs, 0);
             context.notice("Session reset.", "undo-reset");
@@ -931,10 +1087,15 @@ definePlugin({
               history = undo.history;
             } else {
               // Pickups made since End or Reset belong to the session put back.
-              const since = session;
+              const sinceEnd = session;
               ({ session, history, allTime } = undo);
-              mergeLoot(session, since);
+              mergeLoot(session, sinceEnd);
               session.lastAtMs = atMs;
+              // The session runs again: nothing waits to close out, and its meso notes start afresh.
+              closeLater = false;
+              pre = null;
+              readSaid = session.lg !== undefined;
+              resetSince();
             }
             undo = null;
             persist(atMs, 0);
@@ -945,22 +1106,47 @@ definePlugin({
             context.notice(TOO_LATE[action]);
           }
         } else if (action.startsWith(COUNT_HELD)) {
-          // A rise held out of Profit as too big for farming, counted on the player's word.
+          // A rise held out of Profit as too big for farming, counted on the player's word: in the
+          // running session, or in the one just ended while it waits for its close-out.
           const readAt = Number(action.slice(COUNT_HELD.length));
-          const at = session.lg?.ho.findIndex(([, when]) => when === readAt) ?? -1;
-          const held = at === -1 ? null : countHeld(session, at);
+          const last = history[0];
+          const closing = last?.lg?.co !== undefined && last.lg.co >= atMs ? last : undefined;
+          const owner = session.lg?.ho.some(([, when]) => when === readAt) ? session : closing;
+          const at = owner?.lg?.ho.findIndex(([, when]) => when === readAt) ?? -1;
+          const held = owner === undefined || at === -1 ? null : countHeld(owner, at);
           if (held !== null) {
-            undo = { kind: "count", session, history, allTime, until: atMs + UNDO_MS, held };
+            undo = {
+              kind: "count",
+              session,
+              history,
+              allTime,
+              until: atMs + UNDO_MS,
+              held,
+              ...(owner === session ? {} : { past: last?.startedAtMs }),
+            };
             persist(atMs, 0);
             context.notice(`Counted +${formatCompact(held[0])} in Profit.`, "undo-count");
           }
         } else if (action === "undo-count") {
           if (undo?.kind === "count" && undo.held !== undefined && atMs <= undo.until) {
-            uncountHeld(session, undo.held);
+            const startedAt = undo.past;
+            const owner = startedAt === undefined ? session : history.find((past) => past.startedAtMs === startedAt);
+            if (owner !== undefined) uncountHeld(owner, undo.held);
             const rise = formatCompact(undo.held[0]);
             undo = null;
             persist(atMs, 0);
             context.notice(`+${rise} is held out of Profit again.`);
+          } else if (undo === null || atMs > undo.until) {
+            undo = null;
+            context.notice(TOO_LATE[action]);
+          }
+        } else if (action === "undo-closeout") {
+          // A reading that wasn't the sell-out: the session waits for another, if there's time.
+          if (undo?.kind === "closeout" && atMs <= undo.until) {
+            history = undo.history;
+            undo = null;
+            persist(atMs, 0);
+            context.notice("Close-out undone.");
           } else if (undo === null || atMs > undo.until) {
             undo = null;
             context.notice(TOO_LATE[action]);

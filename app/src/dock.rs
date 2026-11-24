@@ -74,6 +74,13 @@ pub struct Summary {
     /// so a summary from an older panel passes through unchanged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub loot_approx: bool,
+    /// When the session just ended stops waiting for its close-out, in epoch milliseconds: the
+    /// mini-HUD asks for the inventory meanwhile. Left out when nothing waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_out_by: Option<f64>,
+    /// No meso total was ever read though one can be: the mini-HUD asks for the inventory once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ask_for_mesos: bool,
 }
 
 /// The latest [`Summary`], for a mini-HUD that has just opened.
@@ -1098,8 +1105,8 @@ mod tests {
     }
 
     // The panel's profit/hr reaches the mini-HUD under the same `lootPerHour` key with its
-    // `lootApprox` mark, and an older panel's summary without them still reads. Fails if the host
-    // drops or renames either field.
+    // `lootApprox` mark, along with the close-out time and the ask for a first meso reading, and
+    // an older panel's summary without them still reads. Fails if the host drops or renames any.
     #[test]
     fn the_summary_carries_loot_per_hour_to_the_mini_hud() {
         let from_panel = serde_json::json!({
@@ -1134,9 +1141,13 @@ mod tests {
             "minutesToLevel": 51.0,
             "lootPerHour": 21480.0,
             "lootApprox": true,
+            "closeOutBy": 1800000000000.0,
+            "askForMesos": true,
         });
         let summary: Summary = serde_json::from_value(estimate.clone()).unwrap();
         assert!(summary.loot_approx);
+        assert_eq!(summary.close_out_by, Some(1_800_000_000_000.0));
+        assert!(summary.ask_for_mesos);
         latest.set(Some(summary));
         assert_eq!(serde_json::to_value(latest.get()).unwrap(), estimate);
     }

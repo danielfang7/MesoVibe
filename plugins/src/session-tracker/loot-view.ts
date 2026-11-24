@@ -11,7 +11,7 @@
 import { formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";
 import type { Cell, Readers, ViewNode } from "@mesovibe/sdk";
 import { MESOS_RATE_MS, itemsValue, ledgerProfit, ledgerRate, ledgerStale, sessionItems, totalMesos } from "./loot.js";
-import type { Catalog, LootFields } from "./loot.js";
+import type { Catalog, Ledger, LootFields } from "./loot.js";
 
 /** The action that counts a held rise into Profit, by when it was read. */
 export const COUNT_HELD = "count-held:";
@@ -68,7 +68,8 @@ function signed(n: number): string {
  * The Session view's Loot section, or null with nothing to show yet. Its headline is Profit/hr,
  * with a muted line under it saying where the figure comes from and how fresh it is; then the
  * net after potions once both are known, Profit, Spent and Unsold items, and any rise held out of
- * Profit with a button to count it.
+ * Profit with a button to count it. Asking for the inventory waits for a host that reads the
+ * meso total (`readers.mesos`), so no player is asked for a reading nothing makes.
  */
 export function lootSection(session: LootFields, catalog: Catalog, context: LootContext): ViewNode | null {
   const ledger = session.lg;
@@ -95,8 +96,15 @@ export function lootSection(session: LootFields, catalog: Catalog, context: Loot
         : `Mesos read ${ago(context.atMs - ledger.ba)}`;
     } else if (ledger?.ob != null) {
       line = `Mesos at start ${formatDigits(ledger.ob)}. Open your inventory again later for exact profit.`;
+    } else if (context.readers.mesos === "learning") {
+      line = "Learning to read your mesos. Keep the inventory open a few seconds.";
+    } else if (context.readers.mesos === "reading") {
+      line = "From pickup notices, which miss some. Open your inventory for 2 seconds for exact mesos.";
     } else line = "From pickup notices, which miss some.";
     children.push({ kind: "text", text: line, variant: "muted" });
+    if (approx && context.readers.mesos === "unsupported") {
+      children.push({ kind: "partial", text: "MesoVibe can't read mesos at this game size." });
+    }
     if (!approx && context.potsPerHour !== null) {
       children.push({
         kind: "text",
@@ -123,12 +131,23 @@ export function lootSection(session: LootFields, catalog: Catalog, context: Loot
   if (unsold > 0 && !(ledger !== undefined && ledger.so > 0)) rows.push(["Unsold items", `≈${formatDigits(unsold)}`]);
   if (rows.length > 0) children.push({ kind: "keyValue", items: rows });
 
-  for (const [amount, readAt] of [...(ledger?.ho ?? [])].reverse().slice(0, SHOWN_HELD)) {
-    const rise = formatCompact(amount);
-    children.push(
-      { kind: "partial", text: `+${rise} not counted: too big a jump for farming (storage, a trade or a misread)` },
-      { kind: "button", label: "Count it", action: `${COUNT_HELD}${readAt}`, style: "secondary", spoken: `Count the ${rise} rise in Profit` },
-    );
-  }
+  if (ledger !== undefined) children.push(...heldLines(ledger));
   return children.length === 0 ? null : { kind: "section", title: "Loot", children };
+}
+
+/**
+ * Each rise held out of Profit, newest first and at most three: a calm line saying why, and a
+ * button to count it, stacked so it fits the narrowest panel. Its spoken name says which rise.
+ */
+export function heldLines(ledger: Ledger): ViewNode[] {
+  return [...ledger.ho]
+    .reverse()
+    .slice(0, SHOWN_HELD)
+    .flatMap(([amount, readAt]): ViewNode[] => {
+      const rise = formatCompact(amount);
+      return [
+        { kind: "partial", text: `+${rise} not counted: too big a jump for farming (storage, a trade or a misread)` },
+        { kind: "button", label: "Count it", action: `${COUNT_HELD}${readAt}`, style: "secondary", spoken: `Count the ${rise} rise in Profit` },
+      ];
+    });
 }

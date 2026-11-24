@@ -228,15 +228,18 @@ function shell(initial: Settings): void {
   };
   /**
    * A button in the Session view. A past session's delete takes its own button away with its row,
-   * so focus goes on to the Undo its notice brings, as after End.
+   * and counting a held rise takes away its line, so focus goes on to the Undo the notice brings,
+   * as after End.
    */
   const viewAction = (action: string) => {
     if (action.startsWith("delete-session:")) focusUndo = { undo: "undo-delete", until: Date.now() + FOCUS_UNDO_MS };
+    if (action.startsWith("count-held:")) focusUndo = { undo: "undo-count", until: Date.now() + FOCUS_UNDO_MS };
     tracker.action(action);
   };
   /** What the strip last drew in its help row and notice, so a repaint with nothing new keeps them. */
   let paintedHelp = "";
   let paintedNotice: Panel["notice"] | undefined;
+  let paintedCloseOut = "";
   const noticeBody = (notice: NonNullable<Panel["notice"]>) => {
     if (notice.undo === undefined) return h("div", { class: "notice-body" }, h("span", {}, notice.text));
     const undo = notice.undo;
@@ -291,6 +294,7 @@ function shell(initial: Settings): void {
   const toGo = h("p", { class: "to-go" }, toGoNumber, h("span", { class: "to-go-unit" }, "EXP to go"));
   const noticeSlot = h("div", { class: "notice", attrs: { role: "status", "aria-live": "polite" } });
   const updateSlot = h("div", { class: "notice", attrs: { role: "status", "aria-live": "polite", "data-key": "strip-update" } });
+  const closeOutSlot = h("div", { class: "notice", attrs: { role: "status", "aria-live": "polite", "data-key": "strip-close-out" } });
   const helpSlot = h("div", { class: "help" });
   const heroRow = h(
     "div",
@@ -308,6 +312,7 @@ function shell(initial: Settings): void {
     progressSlot,
     toGo,
     noticeSlot,
+    closeOutSlot,
     updateSlot,
   );
   const view = h("main", { class: "view", attrs: { tabindex: "-1" } });
@@ -676,6 +681,15 @@ function shell(initial: Settings): void {
       }
     }
     if (undoHadFocus && undoButton === null) strip.focus({ preventScroll: true });
+    // After End, the session waits for the inventory to add what was sold: a fixed time, never a
+    // countdown, under the notice row and above the update line.
+    const due = summary?.closeOutBy ?? null;
+    const closeKey = due === null ? "" : String(due);
+    if (closeKey !== paintedCloseOut) {
+      paintedCloseOut = closeKey;
+      const by = due === null ? "" : new Date(due).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      replace(closeOutSlot, due === null ? null : h("div", { class: "notice-body" }, h("span", {}, `Open your inventory by ${by} to add your sales to this session.`)));
+    }
     paintUpdate();
   }
 

@@ -16,7 +16,8 @@ use crate::recognizers::notices::{Missed, Tab};
 /// 6: `HpMpChanged`, the HP and MP numbers next to the EXP bar.
 /// 7: `ExpChanged` gained `exp_shown`: late in a level the HUD shows only the percent, and `exp`
 /// is worked out from it.
-pub const SCHEMA_VERSION: u32 = 7;
+/// 8: `MesoChanged`, the meso total shown in the inventory or an NPC shop.
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// Events the engine emits after a confident read (below the confidence
 /// threshold a recognizer reports "unreadable" and no value event is sent).
@@ -25,7 +26,7 @@ pub const SCHEMA_VERSION: u32 = 7;
 ///
 /// The events of one engine tick always come in this order: the EXP bar's (`ExpChanged`, then
 /// `LevelUp`), the pickup notices' (`MesosGained`, `ItemGained`, `PartyBonus`, `NoticesMissed`),
-/// `MapChanged`, then `HpMpChanged`. So a plugin comparing two HP and MP readings sees a level-up
+/// `MapChanged`, `HpMpChanged`, then `MesoChanged`. So a plugin comparing two HP and MP readings sees a level-up
 /// or a map change the engine read between them first. The numbers can read while the EXP field
 /// can't (a cursor over it): a level-up then shows as a higher max HP or MP before `LevelUp`.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -128,8 +129,28 @@ pub enum Event {
         max_mp: u32,
         continuous: bool,
     },
+    /// The player's meso total, as the inventory window or an NPC shop's window shows it, sent
+    /// when it changed and is trusted: read the same in several frames in a row, and a total with
+    /// more or fewer digits than the last one only when seen again a few seconds later. A total
+    /// the same as the last one isn't sent again. Nothing is sent while neither window is on
+    /// screen, so the time between two totals can be long.
+    MesoChanged {
+        #[ts(type = "number")]
+        total: u64,
+        #[ts(inline)]
+        source: MesoSource,
+    },
     /// A recognizer could not read its region confidently.
     Unreadable { recognizer: &'static str },
+}
+
+/// Where a meso total was read: the inventory window, or an NPC shop's window, where a rise is a
+/// sale and a fall a purchase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum MesoSource {
+    Inventory,
+    Shop,
 }
 
 #[cfg(test)]

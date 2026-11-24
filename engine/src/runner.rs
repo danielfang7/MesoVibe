@@ -1521,6 +1521,7 @@ mod tests {
             | Event::NoticesMissed { .. } => 2,
             Event::MapChanged { .. } => 3,
             Event::HpMpChanged { .. } | Event::Unreadable { .. } => 4,
+            Event::MesoChanged { .. } => 5,
         };
         let hud = Hud::new();
         let on_map = |name: &str, exp: u64, hp: u32| {

@@ -167,6 +167,20 @@ export interface SessionSummary {
   paused: boolean;
   /** Pause is offered (Resume, while paused): the session has started. */
   canPause: boolean;
+  /**
+   * The session just ended waits until then (epoch milliseconds) for a meso total that adds what
+   * was sold after End: the strip asks for the inventory by that time. Null when nothing waits.
+   *
+   * @experimental May change before the meso total is read.
+   */
+  closeOutBy: number | null;
+  /**
+   * No meso total has ever been read though MesoVibe can read one: the mini-HUD asks for the
+   * inventory once.
+   *
+   * @experimental May change before the meso total is read.
+   */
+  askForMesos: boolean;
 }
 
 /**
@@ -191,7 +205,9 @@ export type HpMpChanged = Extract<Event, { type: "HpMpChanged" }>;
  * How the engine is reading the pickup notices and the HP and MP numbers. `waitingMesos` is how many
  * mesos amounts wait for a digit to be learned before they're counted. While `hpMp` is
  * `missing_digits`, `hpMpMissing` lists the digits the EXP field hasn't shown yet, such as "7" or
- * "045": the one the HP and MP numbers wait for is among them. It is null otherwise.
+ * "045": the one the HP and MP numbers wait for is among them. It is null otherwise. `mesos` says
+ * how the meso total in the inventory and shop windows is read; it's absent from a host that
+ * doesn't read it.
  *
  * @experimental May change before the Loot Tracker's first release.
  */
@@ -200,7 +216,17 @@ export interface Readers {
   waitingMesos: number;
   hpMp: HpMpState;
   hpMpMissing: string | null;
+  mesos?: MesoState;
 }
+
+/**
+ * How the meso total is read: `reading` (it's read whenever the inventory or a shop is open long
+ * enough), `learning` (its digits are still being learned; keep the inventory open a few seconds),
+ * or `unsupported` (it can't be read at this game size).
+ *
+ * @experimental May change before the meso total is read.
+ */
+export type MesoState = "reading" | "learning" | "unsupported";
 
 /**
  * A page a plugin draws besides its main view, in a rail tab of its own. First-party Session

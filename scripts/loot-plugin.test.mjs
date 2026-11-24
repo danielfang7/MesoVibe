@@ -1088,3 +1088,172 @@ test("the Loot tab shows a past session's exact profit, spending and held rises"
   assert.equal(figures.Profit, "50K");
   assert.equal(figures["Exact for"], "41m");
 });
+
+// The meso ledger wired in: stand-in meso totals sent to the plugin as the host sends events.
+const total = (amount, atMs, source = "inventory") => event({ type: "MesoChanged", total: amount, source }, atMs);
+const notices = (sent) => sent.filter((m) => m.type === "notice");
+/** Plays on from `from` for `seconds`, a tick a second and an EXP gain every 10, from EXP `startExp`. */
+function grind(plugin, from, seconds, startExp = 231_000) {
+  for (let s = 1; s <= seconds; s++) {
+    plugin.send({ type: "tick", atMs: from + s * 1000 });
+    if (s % 10 === 0) plugin.send(exp(startExp + s * 10, from + s * 1000));
+  }
+  return from + seconds * 1000;
+}
+
+// Two meso totals make Loot's Profit/hr exact over the play time between them, the first says it
+// was read once, and the mini-HUD gets the same unmarked figure. Fails if totals don't reach the
+// ledger, the notice repeats, or the strip keeps the estimate.
+test("meso totals make Loot exact, and the first one says it was read", () => {
+  const played = play({ seconds: 120 });
+  played.send(total(1_000_000, played.now));
+  assert.equal(notices(played.sent).at(-1).text, "Mesos read: 1,000,000");
+  const count = notices(played.sent).length;
+  const later = grind(played, played.now, 600);
+  played.send(total(1_050_000, later));
+  assert.equal(notices(played.sent).length, count, "said once a session");
+  assert.equal(lootFigures(played.sent).Profit, "50,000");
+  assert.equal(Math.round(summary(played.sent).lootPerHour), 300_000);
+  assert.equal(summary(played.sent).lootApprox, false);
+  assert.equal(section(played.sent, "Loot").children[1].text, "Mesos read just now");
+});
+
+// A total read in the five minutes before the first kill opens the session; an older one doesn't.
+// Fails if the player has to open the inventory again right after a check in town, or a stale
+// total becomes the start.
+test("a total read just before the first kill opens the session", () => {
+  const opened = (gapMs) => {
+    const plugin = run();
+    plugin.send({ type: "start", saved: null, atMs: T0, capture: "capturing", readers: READING });
+    plugin.send(map("aaaa", T0));
+    plugin.send(exp(230_000, T0));
+    plugin.send(total(1_204_330, T0 + 1_000));
+    assert.equal(notices(plugin.sent).at(-1).text, "Mesos read: 1,204,330");
+    plugin.send({ type: "tick", atMs: T0 + 1_000 + gapMs });
+    plugin.send(exp(230_063, T0 + 1_000 + gapMs));
+    // Saves come at most every 5 s; a tick past that saves the kill.
+    plugin.send({ type: "tick", atMs: T0 + 7_000 + gapMs });
+    return last(plugin.sent, "save").data.current.lg;
+  };
+  assert.equal(opened(5 * MIN).ob, 1_204_330);
+  assert.equal(opened(5 * MIN + 1), undefined);
+});
+
+// After End the strip asks for the inventory by a fixed time once End's Undo has passed, the
+// close-out (here the shop's total after selling) says what it added with Undo, and Undo makes
+// the session wait again. A total read during End's Undo window closes out once that window
+// passes. Fails if the close-out row shows over End's Undo, a sale lands nowhere, or Undo of the
+// close-out loses the session's sales.
+test("End waits for a close-out, says what it added, and Undo takes it back", () => {
+  const played = play({ seconds: 120 });
+  played.send(total(1_000_000, played.now));
+  const t = grind(played, played.now, 600);
+  played.send(total(1_050_000, t));
+  played.send({ type: "action", action: "end", atMs: t });
+  assert.equal(summary(played.sent).closeOutBy, null, "not over End's Undo");
+  played.send({ type: "tick", atMs: t + 11_000 });
+  assert.equal(summary(played.sent).closeOutBy, t + 30 * MIN);
+  played.send(total(1_178_400, t + 60_000, "shop"));
+  assert.match(notices(played.sent).at(-1).text, /^Closed out: \+128K sold\. Session profit 178K \(1\.07M\/hr\)\.$/);
+  assert.equal(notices(played.sent).at(-1).undo, "undo-closeout");
+  assert.equal(summary(played.sent).closeOutBy, null);
+  const lootTab = () => section(played.sent, "Past sessions", "loot").children.find((n) => n.kind === "table");
+  assert.equal(lootTab().rows[0][1], "178K");
+  played.send({ type: "action", action: "undo-closeout", atMs: t + 61_000 });
+  assert.equal(notices(played.sent).at(-1).text, "Close-out undone.");
+  assert.equal(lootTab().rows[0][1], "50K");
+  assert.equal(summary(played.sent).closeOutBy, t + 30 * MIN, "waiting again");
+
+  const early = play({ seconds: 120 });
+  early.send(total(1_000_000, early.now));
+  const e = grind(early, early.now, 600);
+  early.send(total(1_050_000, e));
+  early.send({ type: "action", action: "end", atMs: e });
+  early.send(total(1_100_000, e + 2_000, "shop"));
+  assert.equal(notices(early.sent).at(-1).undo, "undo-end", "End's Undo stays");
+  early.send({ type: "tick", atMs: e + 11_000 });
+  assert.match(notices(early.sent).at(-1).text, /^Closed out: \+50K sold\./);
+});
+
+// The next session's first kill ends the close-out, so a later total never lands in the old
+// session. Fails if the old session keeps waiting into the new one.
+test("the next session's first kill ends the close-out", () => {
+  const played = play({ seconds: 120 });
+  played.send(total(1_000_000, played.now));
+  const t = grind(played, played.now, 600);
+  played.send(total(1_050_000, t));
+  played.send({ type: "action", action: "end", atMs: t });
+  played.send({ type: "tick", atMs: t + 11_000 });
+  played.send(exp(240_000, t + 20_000));
+  played.send(exp(240_100, t + 30_000));
+  assert.equal(summary(played.sent).closeOutBy, null);
+  played.send(total(1_500_000, t + 40_000));
+  assert.ok(!notices(played.sent).some((n) => n.text.startsWith("Closed out")));
+  assert.equal(last(played.sent, "save").data.history[0].lg.so, 0);
+});
+
+// A jump in the EXP bar (another character) starts a new ledger segment, so the jump between
+// two characters' mesos counts as nothing. Fails if the other character's balance shows as profit
+// or as spending.
+test("an EXP jump starts a new ledger segment", () => {
+  const played = play({ seconds: 120 });
+  played.send(total(1_000_000, played.now));
+  const t = grind(played, played.now, 600);
+  played.send(total(1_050_000, t));
+  played.send(event({ type: "ExpChanged", level: 20, exp: 100, pct_hundredths: 10, needed: 50_000 }, t + 1_000));
+  played.send(total(40_000_000, t + 2_000));
+  played.send({ type: "tick", atMs: t + 8_000 });
+  const ledger = last(played.sent, "save").data.current.lg;
+  assert.deepEqual([ledger.pu, ledger.sp, ledger.ho.length], [50_000, 0, 0]);
+  assert.equal(lootFigures(played.sent).Profit, "50,000");
+});
+
+// A rise across a pause is what a shop paid, never mesos picked up; a rise too big for farming is
+// held with Count it, and counting it can be undone. Fails if a pause's rise feeds a map's rate,
+// a held rise counts unasked, or Count it or its Undo don't reach Profit.
+test("a rise across a pause is sold, and Count it adds a held rise with Undo", () => {
+  const played = play({ seconds: 120 });
+  played.send(total(1_000_000, played.now));
+  let t = grind(played, played.now, 300);
+  played.send({ type: "action", action: "pause", atMs: t });
+  played.send(total(1_040_000, t + 60_000));
+  played.send({ type: "action", action: "resume", atMs: t + 61_000 });
+  const ledger = last(played.sent, "save").data.current.lg;
+  assert.deepEqual([ledger.pu, ledger.so], [0, 40_000]);
+  assert.equal(last(played.sent, "save").data.current.maps[0].fm, undefined);
+  t = grind(played, t + 61_000, 10);
+  played.send(total(6_040_000, t));
+  const button = section(played.sent, "Loot").children.find((n) => n.kind === "button");
+  assert.equal(button.label, "Count it");
+  assert.equal(lootFigures(played.sent).Profit, "40,000");
+  played.send({ type: "action", action: button.action, atMs: t + 1_000 });
+  assert.deepEqual([notices(played.sent).at(-1).text, notices(played.sent).at(-1).undo], ["Counted +5M in Profit.", "undo-count"]);
+  assert.equal(lootFigures(played.sent).Profit, "5,040,000");
+  played.send({ type: "action", action: "undo-count", atMs: t + 2_000 });
+  assert.equal(notices(played.sent).at(-1).text, "+5M is held out of Profit again.");
+  assert.equal(lootFigures(played.sent).Profit, "40,000");
+});
+
+// Loot asks for the inventory, and says when the meso digits are being learned or can't be read,
+// only from a host that reads the meso total; the mini-HUD asks once ever. Fails if a player is
+// asked for a reading nothing makes, or the ask outlives the first reading or a restart.
+test("the ask for the inventory follows the meso reader, and the mini-HUD asks once", () => {
+  const line = (mesos) => section(play({ seconds: 120, readers: { ...READING, mesos } }).sent, "Loot").children;
+  assert.equal(line(undefined)[1].text, "From pickup notices, which miss some.");
+  assert.equal(line("reading")[1].text, "From pickup notices, which miss some. Open your inventory for 2 seconds for exact mesos.");
+  assert.equal(line("learning")[1].text, "Learning to read your mesos. Keep the inventory open a few seconds.");
+  assert.deepEqual(line("unsupported")[2], { kind: "partial", text: "MesoVibe can't read mesos at this game size." });
+
+  const reading = play({ seconds: 120, readers: { ...READING, mesos: "reading" } });
+  assert.equal(summary(reading.sent).askForMesos, true);
+  reading.send(total(1_000_000, reading.now));
+  assert.equal(summary(reading.sent).askForMesos, false);
+  reading.send({ type: "tick", atMs: reading.now + SAVE_EVERY });
+  const again = run();
+  again.send({ type: "start", saved: last(reading.sent, "save").data, atMs: reading.now + 60_000, capture: "capturing", readers: { ...READING, mesos: "reading" } });
+  again.send(map("aaaa", reading.now + 60_000));
+  again.send(exp(240_000, reading.now + 61_000));
+  again.send(exp(240_100, reading.now + 71_000));
+  assert.equal(summary(again.sent).askForMesos, false);
+});
+const SAVE_EVERY = 30_000;
