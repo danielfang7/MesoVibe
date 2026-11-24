@@ -243,10 +243,20 @@ fn main() -> ExitCode {
             // lines are compared with it over the same frames.
             let mut hud_gain = None;
             let hud_text = match reading {
+                // Late in a level the HUD shows only the percent: no EXP to compare the lines with.
+                Some(r) if !r.exp_shown => {
+                    last_hud = None;
+                    format!(
+                        "hud {}.{:02}%",
+                        r.pct_hundredths / 100,
+                        r.pct_hundredths % 100
+                    )
+                }
                 Some(r) if r.confirmed => {
+                    let exp = r.exp.unwrap_or_default();
                     let gain = match last_hud {
-                        Some(before) if before.level == r.level && r.exp >= before.exp => {
-                            Some(r.exp - before.exp)
+                        Some(before) if before.level == r.level => {
+                            before.exp.and_then(|from| exp.checked_sub(from))
                         }
                         _ => None,
                     };
@@ -256,13 +266,13 @@ fn main() -> ExitCode {
                         totals.hud_gain += g;
                     }
                     match gain {
-                        Some(g) if g > 0 => format!("hud {} (+{g})", r.exp),
-                        _ => format!("hud {}", r.exp),
+                        Some(g) if g > 0 => format!("hud {exp} (+{g})"),
+                        _ => format!("hud {exp}"),
                     }
                 }
                 Some(r) => {
                     last_hud = None;
-                    format!("hud {} (unconfirmed)", r.exp)
+                    format!("hud {} (unconfirmed)", r.exp.unwrap_or_default())
                 }
                 None => {
                     last_hud = None;

@@ -86,6 +86,28 @@ test("a minute of grinding feeds the strip, and the Session view shows only what
   assert.match(text(pastSessions(sent)), /Sessions show up here when you end them or close MesoVibe/);
 });
 
+// Value: protects=EXP to go worked out from the percent is shown as approximate; fails_when=it
+// reads as an exact figure in the Session view or the strip's summary; why_new=no test sent
+// exp_shown false; seam=none; no_claim=the panel's own rendering of the strip (panel.test)
+// Late in a level the HUD shows only the percent, and the engine works the EXP out from it
+// (exp_shown false). Fails if EXP to go then reads as exact, or stays marked once the EXP shows.
+test("EXP to go worked out from the percent alone is marked approximate", () => {
+  const { send, sent, now } = grind();
+  assert.equal(last(sent, "summary").summary.expToGoApprox, false);
+  const workedOut = (value, atMs) => {
+    const message = exp(value, atMs);
+    return { ...message, event: { ...message.event, exp_shown: false } };
+  };
+  send(workedOut(230_500, now + 1_000));
+  const summary = last(sent, "summary").summary;
+  assert.equal(summary.expToGo, NEEDED - 230_500);
+  assert.equal(summary.expToGoApprox, true);
+  assert.equal(Object.fromEntries(items(sent))["EXP to go"], `≈${(NEEDED - 230_500).toLocaleString("en-US")}`);
+  send({ ...exp(230_563, now + 2_000), event: { ...exp(230_563, now + 2_000).event, exp_shown: true } });
+  assert.equal(last(sent, "summary").summary.expToGoApprox, false);
+  assert.equal(Object.fromEntries(items(sent))["EXP to go"], (NEEDED - 230_563).toLocaleString("en-US"));
+});
+
 // Level-ups and EXP lost appear once above 0. Fails if they never show, or show at 0.
 test("a death shows EXP lost in the Session view", () => {
   const { send, sent, now } = grind();

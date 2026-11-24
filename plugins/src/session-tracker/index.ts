@@ -178,6 +178,7 @@ function summary(session: Session, atMs: number, readers: Readers): SessionSumma
     pctHundredths: last?.pctHundredths ?? null,
     minutesToLevel: minutesToLevel(session),
     expToGo: toGo(session),
+    expToGoApprox: last?.expShown === false,
     activeMs: session.activeMs,
     lootPerHour: lootShown(readers) ? lootRate(session) : null,
     canEnd: canEnd(session, atMs),
@@ -620,7 +621,8 @@ function view(
       ["EXP gained", formatDigits(session.expGained)],
       ...lootRows,
     ];
-    if (left !== null) rows.push(["EXP to go", formatDigits(left)]);
+    // Worked out from the percent alone, it's within a hundredth of a percent, not exact.
+    if (left !== null) rows.push(["EXP to go", `${session.last.expShown === false ? "≈" : ""}${formatDigits(left)}`]);
     if (session.levelUps > 0) rows.push(["Level-ups", String(session.levelUps)]);
     if (session.expLost > 0) rows.push(["EXP lost", formatDigits(session.expLost)]);
     current.push({ kind: "keyValue", items: rows });
@@ -771,7 +773,13 @@ definePlugin({
         if (event.type === "ExpChanged" && session.paused) {
           // Paused, the bar is still followed: the strip's level stays true, and Resume counts only
           // what's gained after it. A level-up still counts, so the session's levels add up.
-          const reading = { level: event.level, exp: event.exp, pctHundredths: event.pct_hundredths, needed: event.needed };
+          const reading = {
+            level: event.level,
+            exp: event.exp,
+            pctHundredths: event.pct_hundredths,
+            needed: event.needed,
+            expShown: event.exp_shown,
+          };
           const change = compare(session.last, reading);
           if (change.kind === "gain" && change.levelUp) session.levelUps += 1;
           session.last = reading;
@@ -780,7 +788,14 @@ definePlugin({
           const firstGain = session.expGained <= 0;
           const before = session.last;
           const gainedBefore = session.expGained;
-          observe(session, { level: event.level, exp: event.exp, pctHundredths: event.pct_hundredths, needed: event.needed }, atMs);
+          const reading = {
+            level: event.level,
+            exp: event.exp,
+            pctHundredths: event.pct_hundredths,
+            needed: event.needed,
+            expShown: event.exp_shown,
+          };
+          observe(session, reading, atMs);
           // A session starts at its first gain: a wait before it, such as after End or Reset,
           // keeps at most LEAD_MS, and its level and losses start from the reading before the gain.
           if (firstGain && session.expGained > 0) {

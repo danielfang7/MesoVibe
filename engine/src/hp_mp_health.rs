@@ -137,7 +137,8 @@ mod tests {
 
     const EXP: Result<ExpReading, Unreadable> = Ok(ExpReading {
         level: Some(41),
-        exp: 128_027,
+        exp: Some(128_027),
+        exp_shown: true,
         pct_hundredths: 3949,
         needed: Some(324_240),
         confirmed: true,

@@ -150,7 +150,10 @@ pub struct Game {
 #[serde(rename_all = "camelCase")]
 pub struct Reading {
     pub level: Option<u16>,
-    pub exp: u64,
+    /// Worked out from the percent when the HUD shows only that (`exp_shown` false), and `None`
+    /// when the level's EXP needed isn't known to work it out from.
+    pub exp: Option<u64>,
+    pub exp_shown: bool,
     pub pct_hundredths: u16,
     pub needed: Option<u64>,
     pub confirmed: bool,
@@ -437,6 +440,7 @@ fn status<B: Backend>(
             Some(Reading {
                 level: r.level,
                 exp: r.exp,
+                exp_shown: r.exp_shown,
                 pct_hundredths: r.pct_hundredths,
                 needed: r.needed,
                 confirmed: r.confirmed,

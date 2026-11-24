@@ -17,6 +17,11 @@ export interface Reading {
   exp: number;
   pctHundredths: number;
   needed: number | null;
+  /**
+   * False when the engine worked `exp` out from the percent, which the HUD shows alone late in a
+   * level (`ExpChanged`'s `exp_shown`). Absent from readings kept before it existed.
+   */
+  expShown?: boolean;
 }
 
 /** The most a tick may add to time played: longer gaps are the computer sleeping, not play. */

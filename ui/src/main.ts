@@ -653,7 +653,7 @@ function shell(initial: Settings): void {
     // it; after, the Session view lists it with the session's other numbers.
     const left = summary?.expToGo ?? null;
     toGo.hidden = left === null || (summary?.expGained ?? 0) > 0;
-    toGoNumber.textContent = left === null ? "" : formatDigits(left);
+    toGoNumber.textContent = left === null ? "" : `${summary?.expToGoApprox ? "≈" : ""}${formatDigits(left)}`;
 
     const notice = panel.notice;
     const undoHadFocus = noticeSlot.contains(document.activeElement);
@@ -968,7 +968,9 @@ function shell(initial: Settings): void {
     else if (status?.exp) {
       const r = status.exp;
       const level = r.level === null ? "Level ?" : `Level ${r.level}`;
-      box = `✓ ${level} · ${formatDigits(r.exp)} EXP · ${formatPercent(r.pctHundredths)} · ${r.confirmed ? "sure" : "checking"}`;
+      // Late in a level the HUD shows only the percent, and the EXP is worked out from it.
+      const exp = r.exp === null ? "EXP hidden" : `${r.expShown ? "" : "≈"}${formatDigits(r.exp)} EXP`;
+      box = `✓ ${level} · ${exp} · ${formatPercent(r.pctHundredths)} · ${r.confirmed ? "sure" : "checking"}`;
     } else if (status?.unreadable === "learning" || status?.unreadable === "not_calibrated") box = "Learning the digits from your EXP gains.";
     else if (status?.unreadable) box = `Can't read (${status.unreadable.replaceAll("_", " ")}).`;
     else box = "Waiting for a picture.";
@@ -1239,10 +1241,17 @@ function shell(initial: Settings): void {
       tracker.event({ type: "MapChanged", map_key: status.map.key }, status.atMs);
     }
     const bar = status.exp;
-    if (!trackerHasBar && bar?.confirmed) {
+    if (!trackerHasBar && bar?.confirmed && bar.exp !== null) {
       trackerHasBar = true;
       tracker.event(
-        { type: "ExpChanged", level: bar.level, exp: bar.exp, pct_hundredths: bar.pctHundredths, needed: bar.needed },
+        {
+          type: "ExpChanged",
+          level: bar.level,
+          exp: bar.exp,
+          exp_shown: bar.expShown,
+          pct_hundredths: bar.pctHundredths,
+          needed: bar.needed,
+        },
         status.atMs,
       );
     }

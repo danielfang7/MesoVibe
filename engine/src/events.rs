@@ -14,7 +14,9 @@ use crate::recognizers::notices::{Missed, Tab};
 /// 4: `ItemGained` gained `item_id`, `name` and `sell`, from the game data.
 /// 5: `ItemGained` gained `sell_min` and `sell_max`, for a name several items fit.
 /// 6: `HpMpChanged`, the HP and MP numbers next to the EXP bar.
-pub const SCHEMA_VERSION: u32 = 6;
+/// 7: `ExpChanged` gained `exp_shown`: late in a level the HUD shows only the percent, and `exp`
+/// is worked out from it.
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Events the engine emits after a confident read (below the confidence
 /// threshold a recognizer reports "unreadable" and no value event is sent).
@@ -32,10 +34,16 @@ pub enum Event {
     /// The EXP bar was read: the level (when known), EXP into the level, the
     /// percentage shown on the bar (hundredths of a percent, 6420 = 64.20%), and
     /// the EXP the whole level needs (when known).
+    ///
+    /// Late in a level the HUD shows only the percent. `exp_shown` is then false, and `exp` is
+    /// worked out from the percent and `needed`: within what one hundredth of a percent is worth,
+    /// holding while the percent holds and carrying on from the last EXP shown, so gains add up
+    /// across the switch. Without `needed` there's no `exp` to work out, and no event.
     ExpChanged {
         level: Option<u16>,
         #[ts(type = "number")]
         exp: u64,
+        exp_shown: bool,
         pct_hundredths: u16,
         #[ts(type = "number | null")]
         needed: Option<u64>,
@@ -182,13 +190,14 @@ mod tests {
         let event = Event::ExpChanged {
             level: Some(42),
             exp: 230_622,
+            exp_shown: true,
             pct_hundredths: 6462,
             needed: Some(356_916),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"ExpChanged","level":42,"exp":230622,"pct_hundredths":6462,"needed":356916}"#
+            r#"{"type":"ExpChanged","level":42,"exp":230622,"exp_shown":true,"pct_hundredths":6462,"needed":356916}"#
         );
     }
 }
