@@ -992,6 +992,8 @@ impl MesoReader {
     fn see(&mut self, px: &Pixels) -> (MesoView, Option<Vec<u64>>) {
         let mut off_screen = false;
         let mut cut = false;
+        // A shop or storage box set aside for its underline (cut short or off the frame).
+        let mut npc_set_aside = false;
         let mut candidates: Vec<(Kind, Found)> = Vec::new();
         for b in find_boxes(px) {
             let Some(kind) = kind_of(px, &b) else {
@@ -1001,14 +1003,17 @@ impl MesoReader {
                 i64::from(b.left) + kind.line.dx,
                 i64::from(b.top) + kind.line.dy,
             );
+            let npc = kind.source != MesoSource::Inventory;
             match line_at(px, lx, ly, kind.line.len) {
                 LineCheck::Full => {}
                 LineCheck::OffFrame => {
                     off_screen = true;
+                    npc_set_aside |= npc;
                     continue;
                 }
                 LineCheck::Cut => {
                     cut = true;
+                    npc_set_aside |= npc;
                     continue;
                 }
             }
@@ -1024,10 +1029,12 @@ impl MesoReader {
                     (_, LineCheck::Full) => continue,
                     (LineCheck::OffFrame, _) => {
                         off_screen = true;
+                        npc_set_aside = true;
                         continue;
                     }
                     _ => {
                         cut = true;
+                        npc_set_aside = true;
                         continue;
                     }
                 }
@@ -1040,14 +1047,20 @@ impl MesoReader {
             MesoSource::Storage => 1,
             MesoSource::Inventory => 2,
         });
-        // Only the first box is read. A shop or storage window open with its box not found, or
-        // found but unreadable (the cursor or a tooltip over it), makes the frame covered: the
-        // inventory's total beside it would send a sale or a transfer as mesos picked up.
+        // Only the first box is read. A shop or storage window open with its box not read (not
+        // found, set aside for its underline, or under the cursor or a tooltip) keeps the frame
+        // from being read: the inventory's total beside it would send a sale or a transfer as
+        // mesos picked up.
         let Some((kind, b)) = candidates.into_iter().next() else {
             return (why(px, off_screen, cut), None);
         };
-        if kind.source == MesoSource::Inventory && npc_window_open(px) {
-            return (MesoView::Covered, None);
+        if kind.source == MesoSource::Inventory {
+            if npc_set_aside {
+                return (why(px, off_screen, cut), None);
+            }
+            if npc_window_open(px) {
+                return (MesoView::Covered, None);
+            }
         }
         let glyphs = self.glyphs(px, &b);
         let Some((glyphs, parts)) = glyphs.and_then(|g| parts(&g, MAX_GAP).map(|p| (g, p))) else {
@@ -1161,11 +1174,6 @@ impl MesoReader {
     }
 }
 
-/// Why no box read. A meso box found whole with its own underline off the frame or cut short
-/// (`off_screen`, `cut`) says so first. Otherwise the red underlines tell: one of a meso window's
-/// in full means its box is covered (or off the frame, when that's where the box would be); one
-/// running into the frame's edge, a window partly off screen; one cut short elsewhere, a window
-/// partly covered.
 /// Whether a shop's or storage's tab underline shows whole: that window is open.
 fn npc_window_open(px: &Pixels) -> bool {
     red_lines(px).iter().any(|line| {
@@ -1176,6 +1184,11 @@ fn npc_window_open(px: &Pixels) -> bool {
     })
 }
 
+/// Why no box read. A meso box found whole with its own underline off the frame or cut short
+/// (`off_screen`, `cut`) says so first. Otherwise the red underlines tell: one of a meso window's
+/// in full means its box is covered (or off the frame, when that's where the box would be); one
+/// running into the frame's edge, a window partly off screen; one cut short elsewhere, a window
+/// partly covered.
 fn why(px: &Pixels, off_screen: bool, cut: bool) -> MesoView {
     if off_screen {
         return MesoView::OffScreen;
@@ -1657,6 +1670,11 @@ mod tests {
         let mut covered = canvas.clone();
         draw_cursor(&mut covered, shop.at.0 + 60, shop.at.1 + 2);
         assert_eq!(look(&mut reader, &covered).view, MesoView::Covered);
+        // A tooltip over the end of the shop's underline, its box still clean.
+        let mut cut = canvas.clone();
+        draw_tooltip(&mut cut, 760, 330);
+        let seen = look(&mut reader, &cut).view;
+        assert!(!matches!(seen, MesoView::Read { .. }), "{seen:?}");
     }
 
     // A window dragged half off the game area's edge is reported partly off screen, and its box
