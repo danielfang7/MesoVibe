@@ -561,6 +561,22 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
+  // The Sessions switch is the Session Tracker's own setting: on at first, and a press goes to the
+  // tracker and comes back in its summary. Fails if the action names drift or Settings doesn't follow.
+  await t.test("Settings turns pausing and ending sessions on their own off and on", async () => {
+    const page = await openPage(devtools, at("grind"));
+    await openSettings(page);
+    const auto = `document.querySelector('[data-key="settings-auto"]')`;
+    await page.until(`${auto} && !${auto}.disabled`, "the sessions switch, once the tracker runs");
+    assert.equal(await page.evaluate(checked("settings-auto")), "true", "on at first");
+    await page.evaluate(`${auto}.click()`);
+    await page.until(`${checked("settings-auto")} === "false"`, "turned off");
+    await page.evaluate(`${auto}.click()`);
+    await page.until(`${checked("settings-auto")} === "true"`, "turned on again");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
   // Settings lists each switch by name; its explanation shows only while the pointer is on it or
   // it has keyboard focus, and screen readers hear it as the switch's description. Fails if the
   // explanations show all the time again, a hint doesn't appear or blocks the next switch, or a
@@ -570,7 +586,7 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await openSettings(page);
     await page.until(checked("settings-startup"), "the startup switch");
     const shown = (key) => `document.querySelector('[data-key="${key}"]').checkVisibility()`;
-    const hints = ["settings-safe-hint", "settings-startup-note", "settings-dock-hint", "settings-hud-hint", "settings-update-note"];
+    const hints = ["settings-safe-hint", "settings-startup-note", "settings-auto-hint", "settings-dock-hint", "settings-hud-hint", "settings-update-note"];
     for (const key of hints) assert.equal(await page.evaluate(shown(key)), false, `${key} hidden at first`);
     await page.hover('[data-key="settings-dock"]');
     await page.until(shown("settings-dock-hint"), "the hint on hover");

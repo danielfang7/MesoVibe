@@ -354,8 +354,11 @@ function shell(initial: Settings): void {
         if (shown) paintView();
       },
       summary: (summary) => {
+        const turned = panel.summary?.autoPause !== summary?.autoPause;
         panel.summary = summary;
         paintStrip();
+        // Settings shows the tracker's own setting, so it follows a change the tracker made.
+        if (turned && panel.view === "settings") paintView();
         void host.shareSummary(summary);
       },
       notice: (text, undo) => {
@@ -575,8 +578,10 @@ function shell(initial: Settings): void {
     strip.classList.toggle("dim", stale);
     const heroBox = hero.parentElement as HTMLElement;
     const paused = summary?.paused === true;
-    // A paused session's rate stands still: it's dimmed, with the words under it.
+    // A paused session's rate stands still: it's dimmed, with the words under it, which say why
+    // when it paused on its own.
     strip.classList.toggle("paused", paused);
+    const pausedText = summary?.autoPaused ? "Paused: no EXP for a minute" : "Session paused";
     if (rate === null) {
       // Before the first gain the strip shows only the level and its bar; the rate takes its place
       // once there's EXP to measure.
@@ -584,7 +589,7 @@ function shell(initial: Settings): void {
       const capturing = !panel.settings.safeMode && status?.state === "capturing";
       const gained = (summary?.expGained ?? 0) > 0;
       heroEmpty.textContent = paused
-        ? "Session paused"
+        ? pausedText
         : summary?.lootOnly
           ? "Pickups only so far"
           : capturing && gained
@@ -594,7 +599,7 @@ function shell(initial: Settings): void {
       hero.textContent = formatCompact(rate);
       hero.title = `${formatDigits(rate)} EXP per hour`;
       heroBox.hidden = false;
-      heroEmpty.textContent = paused ? "Session paused" : "";
+      heroEmpty.textContent = paused ? pausedText : "";
       if (!panel.rateShown) {
         panel.rateShown = true;
         heroBox.classList.add("arrive");
@@ -609,10 +614,12 @@ function shell(initial: Settings): void {
       // The same button, so keyboard focus stays on it from Pause to Resume and back.
       paintedPaused = paused;
       pauseButton.replaceChildren(icon(paused ? "resume" : "pause"), paused ? "Resume" : "Pause");
-      pauseButton.title = paused
-        ? "Resume the session: time and EXP count again"
-        : "Pause the session: time and EXP don't count until you resume";
     }
+    pauseButton.title = !paused
+      ? "Pause the session: time and EXP don't count until you resume"
+      : summary?.autoPaused
+        ? "Resume the session: your next kill resumes it too"
+        : "Resume the session: time and EXP count again";
     sessionActions.hidden =
       panel.settings.safeMode ||
       blocked ||
@@ -1189,6 +1196,22 @@ function shell(initial: Settings): void {
           "settings-safe-hint",
         ),
         startupSettings(),
+      ),
+      h(
+        "section",
+        { class: "block" },
+        h("h2", { class: "label" }, "Sessions"),
+        hinted(
+          toggle(
+            "Pause and end sessions on their own",
+            panel.summary?.autoPause ?? true,
+            (on) => tracker.action(on ? "auto-on" : "auto-off"),
+            "settings-auto",
+            panel.summary === null,
+          ),
+          "With no EXP for a minute, the session pauses from your last kill, and your next kill resumes it. Leave the map and gain no EXP for a minute, and it ends from when you left.",
+          "settings-auto-hint",
+        ),
       ),
       displaySettings(),
       h(

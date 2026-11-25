@@ -160,8 +160,18 @@ export interface SessionSummary {
   canReset: boolean;
   /** The session counted loot but no EXP yet: the strip says "Pickups only so far". */
   lootOnly: boolean;
-  /** The player paused the session: no time, EXP or loot counts until Resume. */
+  /** The session is paused: no time, EXP or loot counts until Resume. */
   paused: boolean;
+  /**
+   * The session paused on its own, after a minute with no EXP on its map, and its next gain resumes
+   * it. False for a pause the player pressed.
+   */
+  autoPaused: boolean;
+  /**
+   * The player's setting: a session pauses on its own after a minute with no EXP, and ends a minute
+   * after they leave its map with no EXP. On unless turned off.
+   */
+  autoPause: boolean;
   /** Pause is offered (Resume, while paused): the session has started. */
   canPause: boolean;
   /**
@@ -212,7 +222,16 @@ export interface Readers {
   hpMpMissing: string | null;
   mesos?: MesoState;
   slots?: QuickSlotState;
+  expBar?: ExpBarState;
 }
+
+/**
+ * Whether something is over the EXP bar's numbers on the engine's last tick: `covered` (the HUD is
+ * there but its text can't be read, as with a cursor over it, so a gain can't be seen) or `clear`
+ * (read, or no HUD to read at all: a map fading, character select, the Cash Shop). Absent from
+ * hosts that don't say.
+ */
+export type ExpBarState = "clear" | "covered";
 
 /**
  * How the meso total is read: `reading` (it's read whenever the inventory or a shop is open long

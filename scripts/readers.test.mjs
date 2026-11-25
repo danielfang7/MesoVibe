@@ -49,6 +49,19 @@ test("the quick slots' state reaches plugins while the engine reads them", () =>
   assert.equal(readersChanged(readersOf(status({ slots: "reading" })), readersOf(status({ slots: "not_found" }))), true);
 });
 
+// Something over the EXP bar's numbers reaches plugins: the Session Tracker doesn't count that time
+// towards its minute with no EXP. A missing HUD, a map fading or a stale frame isn't covered. Fails
+// if one of them holds the minute back for good, or a covered bar doesn't.
+test("whether something is over the EXP bar reaches plugins", () => {
+  for (const unreadable of ["no_text", "unknown_glyph", "garbled"]) {
+    assert.equal(readersOf(status({ unreadable })).expBar, "covered", unreadable);
+  }
+  for (const unreadable of ["hud_not_found", "screen_dark", "learning", null]) {
+    assert.equal(readersOf(status({ unreadable })).expBar, "clear", String(unreadable));
+  }
+  assert.equal(readersChanged(readersOf(status({ unreadable: "no_text" })), readersOf(status({ unreadable: null }))), true);
+});
+
 // Statuses arrive four times a second; plugins hear only changes. Fails if an unchanged status is
 // sent on, or a change is missed, including a field one side has and the other doesn't.
 test("only changes are sent on", () => {
