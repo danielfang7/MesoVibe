@@ -212,7 +212,8 @@ function checkUsualShape(body, world) {
  * The size check against the last good run's count (`kept.count`). A list more than 20% off is
  * held: `hold` is what this run leaves for the next one, and null clears any hold. It's accepted
  * (`confirmed`) when the run right before held a size within 5% of it from an earlier Cozy update,
- * so a repeated run, which sees the same update again, never confirms a hold by itself.
+ * so a repeated run, which sees the same update again, never confirms a hold by itself. A confirmed
+ * run keeps the earlier hold: if it then fails for another reason, a retry still confirms.
  */
 function checkSize(body, kept) {
   const count = body.items.length;
@@ -222,7 +223,7 @@ function checkSize(body, kept) {
   const held = kept.held;
   const confirmed =
     Number.isInteger(held?.count) && change(held.count) <= HELD_MATCH && Date.parse(body.updated_at) > Date.parse(held.updated_at);
-  if (confirmed) return { hold, problem: null, confirmed };
+  if (confirmed) return { hold: held, problem: null, confirmed };
   return { hold, problem: `usual prices list ${count} items, against ${kept.count} last time` };
 }
 

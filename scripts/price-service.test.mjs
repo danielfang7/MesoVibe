@@ -244,6 +244,18 @@ test("a repeat of the same Cozy update never confirms a held size", async () => 
   assert.equal(store.data.get(FILE_PATH), good, "the half-empty list was never published");
 });
 
+// A run can confirm a lasting change and still fail on something else, such as Zenith's movers.
+// Fails if that run's own update replaces the hold, so retrying the same update is refused.
+test("a retry after a confirming run that failed elsewhere still accepts the change", async () => {
+  const store = memoryStore();
+  await run(listing(100, 0), store);
+  await run(listing(130, 6), store);
+  const zenithDown = { "/trends?world=zenith": new Response("{}", { status: 503 }) };
+  assert.equal((await run(listing(128, 12, zenithDown), store)).response.status, 502);
+  assert.deepEqual(held(store), { count: 130, updated_at: update(6) }, "the earlier update's hold is kept");
+  assert.equal((await run(listing(128, 12), store)).response.status, 200, "the retry accepts the change");
+});
+
 // A hold lasts only until the next run. Fails if a run that saw a normal list but failed for another
 // reason leaves the hold in place, letting two broken lists hours apart agree.
 test("a run that sees a normal-size list clears the hold even when it fails", async () => {
