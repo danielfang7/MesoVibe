@@ -1,6 +1,18 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "ignoreCommand": "git diff --quiet HEAD^ HEAD -- .",
+  "installCommand": "npm ci",
+  "crons": [
+    {
+      "path": "/api/refresh",
+      "schedule": "15 0,6,12,18 * * *"
+    }
+  ],
+  "functions": {
+    "api/refresh.js": {
+      "maxDuration": 120
+    }
+  },
   "headers": [
     {
       "source": "/(.*)",

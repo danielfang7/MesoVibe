@@ -32,7 +32,7 @@ MesoVibe is not affiliated with or endorsed by Nexon. MapleStory is a trademark 
 - [plugins](plugins/) - first-party plugins, starting with the Session Tracker
 - [tools](tools/) - capture helpers for developing recognizers, and the icon generator
 - [scripts](scripts/) - build checks, tests and release scripts
-- [web](web/) - the project website at mesovibe.com: static files with no build step, deployed by Vercel from `main` (the Vercel project's Root Directory is `web`; headers are in [web/vercel.json](web/vercel.json))
+- [web](web/) - the project website at mesovibe.com: static files with no build step, deployed by Vercel from `main` (the Vercel project's Root Directory is `web`; headers and the price job's schedule are in [web/vercel.json](web/vercel.json)). [web/api](web/api/) is the price service: every 6 hours it fetches Free Market prices from [Cozy Markets](https://cozy.markets), keeps the last good copy if anything looks wrong, and serves one price file at `/api/prices`. The Cozy key stays on the server.
 
 ## Building from source
 

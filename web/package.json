@@ -1,0 +1,12 @@
+{
+  "name": "mesovibe-web",
+  "private": true,
+  "license": "BSD-2-Clause",
+  "type": "module",
+  "dependencies": {
+    "@vercel/blob": "2.9.0"
+  },
+  "overrides": {
+    "zod": "^4.6.6"
+  }
+}
