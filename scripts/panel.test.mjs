@@ -240,7 +240,7 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     const opened = await page.until(row("Mesos picked up"), "All time's mesos picked up");
     await page.until(`((m) => m !== undefined && m !== ${JSON.stringify(opened)})(${row("Mesos picked up")})`, "All time's mesos rising with the Loot tab open");
 
-    // What MesoVibe sees shows the HP, MP, map and mesos rows, and Reads lists the mesos carried, not
+    // What MesoVibe sees shows the HP, MP, map, mesos and quick-slot rows, and Reads lists them, not
     // the pickup notices. Fails if a row or its value is missing, or the notices come back.
     await page.evaluate(`document.querySelector('[aria-label="What MesoVibe sees"]').click()`);
     const hpMp = `document.querySelector('[data-key="sees-hp-mp"]')?.textContent`;
@@ -249,6 +249,12 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(reads), true);
     assert.equal(await page.evaluate(textOf("sees-mesos")), "MesosRead whenever your inventory, an NPC shop or storage is open.");
     const readsMesos = `[...document.querySelectorAll(".view p")].some((p) => p.textContent === "Your mesos, when your inventory, an NPC shop or storage is open: the mesos you carry, never the amount stored.")`;
+    assert.equal(
+      await page.evaluate(textOf("sees-slots")),
+      "Quick slotsRead up to 4 times a second: which item each slot holds, and when its count changes.",
+    );
+    const readsSlots = `[...document.querySelectorAll(".view p")].some((p) => p.textContent === "Your quick slots: which item each holds and when its count changes, to count the potions you drink.")`;
+    assert.equal(await page.evaluate(readsSlots), true);
     assert.equal(await page.evaluate(readsMesos), true);
     assert.equal(await page.evaluate(`document.querySelector('[data-key="sees-notices"]')`), null);
     assert.equal(await page.evaluate(`[...document.querySelectorAll(".view p")].some((p) => p.textContent.includes("pickup notices"))`), false);
