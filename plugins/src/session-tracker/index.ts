@@ -137,8 +137,8 @@ interface Saved {
 
 /**
  * The stretch since the session's last EXP gain, to pause or end it on its own: the gain's map, the
- * capture time since (paused or not), the play time counted since and where it went, and when the
- * player left that map.
+ * time since with the EXP bar read (paused or not: a gain can't be seen while it isn't), the play
+ * time counted since and where it went, and when the player left that map.
  */
 interface Quiet {
   map: string | null | undefined;
@@ -801,7 +801,9 @@ definePlugin({
      */
     const tick = (atMs: number) => {
       const before = session.activeMs;
-      const captured = capture === "capturing" ? Math.min(Math.max(0, atMs - session.lastAtMs), MAX_TICK_MS) : 0;
+      // A host that doesn't say whether the EXP bar is read counts all capture time.
+      const seen = capture === "capturing" && readers.expBar !== "unread";
+      const captured = seen ? Math.min(Math.max(0, atMs - session.lastAtMs), MAX_TICK_MS) : 0;
       const pots = potTime(atMs);
       advance(session, atMs, capture === "capturing" && session.paused !== true);
       const step = session.activeMs - before;
@@ -836,8 +838,8 @@ definePlugin({
         over -= take;
         if (step.ms <= 0) quiet.steps.pop();
       }
-      // A meso total read in that time measured play that no longer counts.
-      if (session.lg !== undefined && session.lg.bp > session.activeMs) session.lg.bp = session.activeMs;
+      // A meso total read in that time keeps its play time as read: the next total's stretch is
+      // measured from it, so it leaves out the time taken back.
     };
     /** Saves the session to Past sessions and starts the next one at the next gain; `why` opens its notice. */
     const endSession = (atMs: number, why = "") => {
@@ -867,7 +869,9 @@ definePlugin({
       if (session.paused && !session.idle) return;
       const left = quiet.left;
       if (left !== null) {
-        if (quiet.ms - left.ms < AUTO_MS) return;
+        // Not over another notice's Undo (a delete's, a count's): ending would take it away. The
+        // end waits for it, still dated from when the player left.
+        if (quiet.ms - left.ms < AUTO_MS || (undo !== null && atMs <= undo.until)) return;
         takeBack(left.played);
         // The session ends when its time stopped: when the player left, or when it paused.
         session.lastAtMs = Math.min(session.lastAtMs, session.idle ? quiet.atMs + quiet.played : left.atMs);
@@ -1022,6 +1026,11 @@ definePlugin({
           persist(atMs, EXP_SAVE_EVERY_MS);
           show(atMs);
         } else if (event.type === "MapChanged") {
+          // Play time from before the first map name was read moves to that map with the next
+          // tick, so the stretch's record of it does too.
+          if (map === undefined && quiet !== null) {
+            for (const step of quiet.steps) if (step.map === undefined) step.map = event.map_key;
+          }
           map = event.map_key;
           // Leaving is from one map to another, both names read: a name that can't be read (the
           // minimap closed) says nothing, and one read only now is where the gain was.
@@ -1118,6 +1127,11 @@ definePlugin({
             persist(atMs, 0);
           }
         } else if (action === "auto-on" || action === "auto-off") {
+          // Turned back on, the minute with no EXP counts from the press: the time while it was off
+          // stays the player's, and a map left then counts as left now.
+          if (action === "auto-on" && !auto && quiet !== null) {
+            quiet = { ...quiet, ms: 0, played: 0, steps: [], left: quiet.left === null ? null : { ms: 0, played: 0, atMs } };
+          }
           auto = action === "auto-on";
           persist(atMs, 0);
         } else if (action.startsWith(DELETE_SESSION)) {
@@ -1142,8 +1156,9 @@ definePlugin({
               ({ session, history, allTime } = undo);
               mergeLoot(session, sinceEnd);
               session.lastAtMs = atMs;
-              // Its stretch since the last gain is unknown: the next gain starts one.
-              quiet = null;
+              // Its stretch since the last gain is gone: the minute with no EXP starts again from the
+              // press, as after Resume.
+              quiet = quietFrom(atMs);
               // The session runs again: nothing waits to close out, and its meso notes start afresh.
               closeLater = false;
               pre = null;

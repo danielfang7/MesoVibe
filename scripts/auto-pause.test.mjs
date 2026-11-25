@@ -66,7 +66,9 @@ function session(saved = null, { noMap = false, pots = false } = {}) {
   const goTo = (key) => plugin.send(event({ type: "MapChanged", map_key: key }, state.at));
   const total = (amount) => plugin.send(event({ type: "MesoChanged", total: amount, source: "inventory" }, state.at));
   const capture = (to) => plugin.send({ type: "capture", state: to, atMs: state.at });
-  return { ...plugin, state, idle, kill, grind, goTo, total, capture };
+  /** Whether the host reads the EXP bar: "reading" or "unread". */
+  const expBar = (to) => plugin.send({ type: "readers", readers: { ...readers, expBar: to }, atMs: state.at });
+  return { ...plugin, state, idle, kill, grind, goTo, total, capture, expBar };
 }
 
 // AFK on the grind map: after a minute with no EXP the session pauses, keeping one kill's worth
@@ -309,3 +311,131 @@ test("a minute off the map ends the session however many maps the player walks t
   assert.deepEqual(past.maps.map((m) => m.k), ["aaaa"], "the maps walked through aren't ones it played");
 });
 
+// Turned back on, the minute counts from the press: the time with the setting off stays, on the map
+// or off it. Fails if turning it on pauses or ends the session at once, taking that time back.
+test("turning the setting back on counts the minute from the press", () => {
+  const stay = session();
+  stay.send(action("auto-off", stay.state.at));
+  stay.grind(120);
+  stay.idle(600);
+  stay.send(action("auto-on", stay.state.at));
+  stay.idle(59);
+  assert.equal(summary(stay.sent).paused, false, "not at the press");
+  stay.idle(1);
+  assert.deepEqual([summary(stay.sent).autoPaused, summary(stay.sent).activeMs], [true, 725_000]);
+
+  const away = session();
+  away.send(action("auto-off", away.state.at));
+  away.grind(120);
+  away.goTo("bbbb");
+  away.idle(600);
+  away.send(action("auto-on", away.state.at));
+  away.idle(59);
+  assert.equal(history(away.sent).length, 0, "not at the press");
+  away.idle(1);
+  const [past] = history(away.sent);
+  assert.deepEqual([past.activeMs, past.endedAtMs], [720_000, T0 + 720_000]);
+});
+
+// Undo brings back a session that ended on its own, and its minute with no EXP starts again from
+// the press. Fails if Undo loses the session, or the session it brings back never pauses again.
+test("Undo brings back a session that ended on its own, and it can pause again", () => {
+  const game = session();
+  game.grind(120);
+  game.goTo("bbbb");
+  game.idle(60);
+  assert.equal(history(game.sent).length, 1);
+  game.send(action("undo-end", game.state.at));
+  assert.equal(history(game.sent).length, 0);
+  assert.equal(summary(game.sent).activeMs, 120_000);
+  game.idle(60);
+  assert.deepEqual([summary(game.sent).autoPaused, summary(game.sent).activeMs, history(game.sent).length], [true, 125_000, 0]);
+});
+
+// Resume pressed during a pause on its own resumes at once, and the minute starts again from the
+// press. Fails if the press leaves it paused, or it pauses again the moment it resumes.
+test("Resume during a pause on its own resumes the session from the press", () => {
+  const game = session();
+  game.grind(120);
+  game.idle(70);
+  game.send(action("resume", game.state.at));
+  assert.deepEqual([summary(game.sent).paused, summary(game.sent).autoPaused, summary(game.sent).activeMs], [false, false, 125_000]);
+  game.idle(59);
+  assert.equal(summary(game.sent).paused, false);
+  game.idle(1);
+  assert.deepEqual([summary(game.sent).autoPaused, summary(game.sent).activeMs], [true, 130_000]);
+});
+
+// Ending on its own never takes away another notice's open Undo: it waits, and still dates the
+// session from when the player left. Fails if a deleted past session can't be brought back.
+test("ending on its own waits for another notice's Undo", () => {
+  const game = session();
+  game.grind(60);
+  game.send(action("end", game.state.at));
+  const [first] = history(game.sent);
+  game.idle(20);
+  game.grind(120);
+  game.goTo("bbbb");
+  game.idle(55);
+  game.send(action(`delete-session:${first.startedAtMs}`, game.state.at));
+  game.idle(8);
+  assert.equal(history(game.sent).length, 0, "not ended during the delete's Undo");
+  game.send(action("undo-delete", game.state.at));
+  assert.equal(history(game.sent).length, 1, "the deleted session is back");
+  game.idle(3);
+  const [past] = history(game.sent);
+  assert.equal(history(game.sent).length, 2);
+  assert.equal(past.endedAtMs, T0 + 200_000, "dated from when the player left");
+});
+
+// A meso total read during the idle minute measured play the pause then takes back: Profit/hr's
+// clock and the map's mesos/hr clock leave that time out. Fails if either keeps it.
+test("a pause takes the idle time out of the meso clocks too", () => {
+  const game = session();
+  game.kill();
+  game.total(1_000_000);
+  game.grind(120);
+  game.idle(30);
+  game.total(1_030_000);
+  game.idle(40);
+  game.kill();
+  game.grind(60);
+  game.total(1_060_000);
+  game.send(action("end", game.state.at));
+  const [past] = history(game.sent);
+  assert.ok(past.lg.pt <= past.activeMs, `ledger ${past.lg.pt} ms, played ${past.activeMs} ms`);
+  assert.ok(past.maps[0].ft <= past.maps[0].p, `map ${past.maps[0].ft} ms, played ${past.maps[0].p} ms`);
+});
+
+// Time before the first map name is read goes to that map once it's read, and a pause takes the
+// idle part back from there. Fails if the map keeps time the session no longer counts.
+test("a map first read during the idle minute gives back the time the pause takes", () => {
+  const game = session(null, { noMap: true });
+  game.grind(120);
+  game.idle(30);
+  game.goTo("aaaa");
+  game.idle(40);
+  assert.equal(summary(game.sent).autoPaused, true);
+  game.send(action("end", game.state.at));
+  const [past] = history(game.sent);
+  assert.deepEqual(
+    past.maps.map((m) => [m.k, m.p]),
+    [["aaaa", past.activeMs]],
+  );
+});
+
+// While the EXP bar can't be read (a cursor over it), gains can't be seen, so that time doesn't
+// count towards the minute. Fails if the session pauses while the player may be killing, then
+// counts the stretch's EXP against almost no time.
+test("time the EXP bar can't be read doesn't count towards the minute with no EXP", () => {
+  const game = session();
+  game.grind(120);
+  game.expBar("unread");
+  game.idle(300);
+  game.expBar("reading");
+  game.kill();
+  assert.equal(summary(game.sent).paused, false);
+  assert.equal(summary(game.sent).activeMs, 421_000, "the unread stretch is play");
+  game.idle(60);
+  assert.equal(summary(game.sent).autoPaused, true, "a minute with the bar read and no EXP");
+});

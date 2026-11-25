@@ -51,6 +51,15 @@ test("the quick slots' state reaches plugins while the engine reads them", () =>
 
 // Statuses arrive four times a second; plugins hear only changes. Fails if an unchanged status is
 // sent on, or a change is missed, including a field one side has and the other doesn't.
+// Whether the EXP bar was read reaches plugins: the Session Tracker counts the minute with no EXP
+// only while it is. Fails if an unread bar looks read, or the change isn't sent on.
+test("whether the EXP bar is read reaches plugins", () => {
+  assert.equal(readersOf(status({ exp: { confirmed: true } })).expBar, "reading");
+  assert.equal(readersOf(status({ exp: { confirmed: false } })).expBar, "unread", "not confirmed yet");
+  assert.equal(readersOf(status({ exp: null })).expBar, "unread");
+  assert.equal(readersChanged(readersOf(status({ exp: { confirmed: true } })), readersOf(status({ exp: null }))), true);
+});
+
 test("only changes are sent on", () => {
   assert.equal(readersChanged(readersOf(status()), readersOf(status())), false);
   assert.equal(readersChanged(readersOf(status()), readersOf(status({ hpMpState: "covered" }))), true);

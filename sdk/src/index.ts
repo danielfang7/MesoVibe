@@ -222,7 +222,14 @@ export interface Readers {
   hpMpMissing: string | null;
   mesos?: MesoState;
   slots?: QuickSlotState;
+  expBar?: ExpBarState;
 }
+
+/**
+ * Whether the EXP bar was read on the engine's last tick: `reading`, or `unread` (covered, the game
+ * fading between maps, or not captured). Absent from hosts that don't say.
+ */
+export type ExpBarState = "reading" | "unread";
 
 /**
  * How the meso total is read: `reading` (it's read whenever the inventory or a shop is open long

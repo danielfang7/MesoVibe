@@ -15,6 +15,7 @@ export function readersOf(status: Status): Readers {
     hpMpMissing: status.hpMpMissing,
     ...(status.mesos === null ? {} : { mesos: status.mesos }),
     ...(status.slots === null ? {} : { slots: status.slots }),
+    expBar: status.exp?.confirmed ? "reading" : "unread",
   };
 }
 
