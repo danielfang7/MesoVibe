@@ -24,8 +24,13 @@ function digitsWanted(digits: string): string {
   return `a digit it hasn't seen yet: ${list.slice(0, -1).join(", ")} or ${list.at(-1)}`;
 }
 
-/** The line about reading the HP and MP numbers, when they aren't being read. */
-function readingLine(readers: Readers): ViewNode | null {
+/** Whether potions can be counted now: the HP and MP numbers are read, and the quick slots too if the source counts from them. */
+function counting(readers: Readers, source: CountSource): boolean {
+  return readers.hpMp === "reading" && (source.readsSlots !== true || readers.slots === "reading");
+}
+
+/** The line about reading the HP and MP numbers or the quick slots, when they aren't being read. */
+function readingLine(readers: Readers, source: CountSource): ViewNode | null {
   switch (readers.hpMp) {
     case "learning":
       return { kind: "empty", text: "Learning your HP and MP digits from your EXP gains." };
@@ -41,6 +46,13 @@ function readingLine(readers: Readers): ViewNode | null {
         kind: "partial",
         text: "Can't see your HP and MP numbers. Keep the bar at the bottom of the game in view. See What MesoVibe sees.",
       };
+  }
+  if (source.readsSlots !== true) return null;
+  switch (readers.slots) {
+    case "not_found":
+      return { kind: "partial", text: "Potions aren't counted while your quick slots are hidden or covered." };
+    case "unsupported":
+      return { kind: "partial", text: "Can't read your quick slots at this game size, so potions aren't counted." };
     default:
       return null;
   }
@@ -65,12 +77,12 @@ function headline(totals: PotTotals): ViewNode {
 
 /**
  * The line under the headline: why there's no rate yet, or that no potion has been used. Before a
- * minute it shows only while the HP and MP numbers are read; otherwise the reading line says why,
- * and the minute wouldn't come.
+ * minute it shows only while potions are counted; otherwise the reading line says why, and the
+ * minute wouldn't come.
  */
-function waitingLine(totals: PotTotals, readers: Readers): ViewNode | null {
+function waitingLine(totals: PotTotals, readers: Readers, source: CountSource): ViewNode | null {
   if (potRate(totals) === null) {
-    return readers.hpMp === "reading" ? { kind: "empty", text: "Pot cost/hr shows after a minute." } : null;
+    return counting(readers, source) ? { kind: "empty", text: "Pot cost/hr shows after a minute." } : null;
   }
   if (totals.lines.length === 0) return { kind: "empty", text: "No potions used yet." };
   return null;
@@ -120,19 +132,22 @@ export function potionsSection(
   const totals = potTotals(session, catalog);
   const healing = source.healing("hp", atMs) || source.healing("mp", atMs);
   const children: ViewNode[] = [headline(totals)];
-  const waiting = waitingLine(totals, readers);
+  const waiting = waitingLine(totals, readers, source);
   if (waiting !== null) children.push(waiting);
   if (totals.lines.length > 0) children.push(potTable(totals, source));
   // At most two lines about why counts may be off, the reading first.
-  const reading = readingLine(readers);
+  const reading = readingLine(readers, source);
   if (reading !== null) children.push(reading);
   if (healing) {
     children.push({ kind: "partial", text: "Some healing isn't from potions (a Heal, Drain or MP Eater), so potions may be undercounted." });
   }
-  const fromSlots = Object.values(session.ps ?? {}).some((s) => s !== "rises");
+  // How potions are counted: from the quick slots when the source counts from them.
+  const fromSlots = source.readsSlots === true || Object.values(session.ps ?? {}).some((s) => s !== "rises");
   children.push({
     kind: "text",
-    text: fromSlots ? "Only Meat and Lemon are counted." : "Counted from your HP and MP numbers going up. Only Meat and Lemon are counted.",
+    text: fromSlots
+      ? "Counted from your quick slots, as their counts drop. Only Meat and Lemon are counted."
+      : "Counted from your HP and MP numbers going up. Only Meat and Lemon are counted.",
     variant: "muted",
   });
   return { kind: "section", title: "Potions", children };

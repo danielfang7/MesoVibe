@@ -118,6 +118,8 @@ interface Saved {
   allTime?: AllTime;
   /** Every item key's name, tab and price, kept once rather than in each session. */
   catalog?: Catalog;
+  /** What the count source learned (which potion each quick-slot icon is), as it saved it. */
+  slots?: unknown;
 }
 
 /**
@@ -190,6 +192,7 @@ function load(saved: unknown): Saved {
           }
         : { mesos: 0, playedMs: 0 },
     catalog: validCatalog(value.catalog),
+    ...(value.slots === undefined ? {} : { slots: value.slots }),
   };
 }
 
@@ -647,7 +650,7 @@ definePlugin({
     let capture: CaptureState = startCapture;
     let readers: Readers = startReaders ?? { hpMp: "off", hpMpMissing: null };
     /** What counts potions, or null while nothing does: then none are counted or shown. */
-    const source = wiredSource();
+    const source = wiredSource(saved.slots);
     /** The map the player is on: undefined until the engine says. */
     let map: string | null | undefined;
     let showMore = false;
@@ -672,7 +675,8 @@ definePlugin({
     const persist = (atMs: number, gapMs = SAVE_EVERY_MS) => {
       if (atMs - savedAt < gapMs) return;
       const running = session.last === null && session.held === undefined ? null : session;
-      context.save({ version: 1, history, current: running, allTime, catalog } satisfies Saved);
+      const slots = source?.saved?.();
+      context.save({ version: 1, history, current: running, allTime, catalog, ...(slots === undefined ? {} : { slots }) } satisfies Saved);
       savedAt = atMs;
       unsaved = false;
     };
@@ -693,17 +697,24 @@ definePlugin({
     };
     const show = (atMs: number) => {
       context.setSummary(summary(session, atMs, { closeOutBy: closeOutBy(atMs), askForMesos: askForMesos(atMs) }));
-      const potions = source === null ? null : potionsSection(session, catalog, source, readers, atMs);
-      const potsPerHour = source === null ? null : potRate(potTotals(session, catalog));
+      const potions = source === null || !potsShown() ? null : potionsSection(session, catalog, source, readers, atMs);
+      const potsPerHour = source === null || !potsShown() ? null : potRate(potTotals(session, catalog));
       context.render(view(session, history, capture, map, readers, atMs, showMore, potions, potsPerHour));
-      context.render(lootView(session, history, allTime, catalog, lootMore, source !== null, atMs), "loot");
+      context.render(lootView(session, history, allTime, catalog, lootMore, potsShown(), atMs), "loot");
     };
     const remember = (kind: Undo["kind"], atMs: number) => {
       undo = { kind, session: structuredClone(session), history: history.slice(), allTime, until: atMs + UNDO_MS };
     };
-    /** Whether potions are being counted now: a source is wired in and the HP and MP numbers are read. */
+    /** Whether potions can show: a source is wired in, and the host reads the quick slots if it counts from them. */
+    const potsShown = (): boolean => source !== null && (source.readsSlots !== true || readers.slots !== undefined);
+    /** Whether the quick slots are read, or the source doesn't need them. */
+    const slotsRead = (): boolean => source?.readsSlots !== true || readers.slots === "reading";
+    /**
+     * Whether potions are being counted now: a source is wired in, the HP and MP numbers are read,
+     * and so are the quick slots if it counts from them.
+     */
     const potTime = (atMs: number): PotTime | undefined =>
-      source === null || readers.hpMp !== "reading"
+      source === null || readers.hpMp !== "reading" || !slotsRead()
         ? undefined
         : { counting: true, healing: source.healing("hp", atMs) || source.healing("mp", atMs) };
     /** Moves the session's clock, giving the time played to the map the player is on. */
@@ -866,7 +877,9 @@ definePlugin({
         // so the first change after Resume is measured from the last one while paused. HP and MP
         // readings come four times a second, so only a counted use redraws and saves; the 1 Hz
         // tick does the rest.
-        if (uses.length > 0 && !session.paused) {
+        // From a source counting from the quick slots, uses count only while they're read, as pot
+        // time does.
+        if (uses.length > 0 && !session.paused && slotsRead()) {
           for (const use of uses) addPotUse(session, use, map, session.expGained > 0, session.last?.level ?? null);
           unsaved = true;
           persist(atMs, EXP_SAVE_EVERY_MS);

@@ -1,7 +1,8 @@
 // The Session Tracker's potion accounting and views, with a stand-in count source wired in
 // (scripts/fixtures/synthetic-count-source.mjs): uses per map, their cost, pot cost/hr, the
 // Potions section, the net after potions in Loot, the Loot tab's pots lines, saves and Undo. Also
-// checks that the plugin as shipped, with no source wired in, counts and shows no potions.
+// checks that the plugin as shipped counts and shows no potions on a host that doesn't read the
+// quick slots (scripts/quick-slot-source.test.mjs checks it on one that does).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -102,10 +103,10 @@ const startWith = (saved) => {
   return plugin;
 };
 
-// With no count source wired in, as shipped, nothing about potions shows or is saved. Fails if
-// the Potions section appears before anything counts potions, or a session
-// saves read time that would later read as "no potions used".
-test("as shipped, no potions are counted or shown", () => {
+// As shipped, potions are counted from the quick slots, so from a host that doesn't read them
+// nothing about potions shows or is saved. Fails if the Potions section appears with nothing to
+// count from, or a session saves read time that would later read as "no potions used".
+test("as shipped, no potions are counted or shown without the quick slots", () => {
   const { send, sent, now } = play({ bundle: shipped, meat: every(30, 60, 600) });
   assert.equal(potions(sent), undefined);
   send(action("end", now));
@@ -397,7 +398,11 @@ test("a potion counted from its quick slot too is saved as counted both ways", (
   const { send, sent, now } = grind();
   send(event({ type: "TestSlot", item: MEAT, count: 1 }, now));
   assert.deepEqual(potTable(sent).rows[0], ["Meat", "×11", "880"]);
-  assert.deepEqual(potions(sent).children.at(-1), { kind: "text", text: "Only Meat and Lemon are counted.", variant: "muted" });
+  assert.deepEqual(potions(sent).children.at(-1), {
+    kind: "text",
+    text: "Counted from your quick slots, as their counts drop. Only Meat and Lemon are counted.",
+    variant: "muted",
+  });
   send(action("end", now));
   assert.deepEqual(last(sent, "save").data.history[0].ps, { [MEAT]: "both", 2010005: "rises" });
   // Lemon counted from its slot in the Undo window comes back counted both ways too.
