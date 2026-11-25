@@ -600,8 +600,8 @@ function shell(initial: Settings): void {
         heroBox.classList.add("arrive");
       }
     }
-    // End and Reset as the tracker offers them (nothing to end or reset before a gain), and none while capture is blocked or the tracker has crashed, when a press could
-    // not reach it.
+    // End and Reset as the tracker offers them (nothing to end or reset before a gain), and none
+    // while capture is blocked or the tracker has crashed, when a press could not reach it.
     resetButton.hidden = !summary?.canReset;
     endButton.hidden = !summary?.canEnd;
     pauseButton.hidden = !summary?.canPause;

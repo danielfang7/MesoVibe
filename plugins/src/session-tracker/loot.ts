@@ -311,7 +311,6 @@ export function longest(maps: MapEntry[]): MapEntry | null {
   return maps.reduce<MapEntry | null>((best, m) => (best === null || m.p > best.p ? m : best), null);
 }
 
-/** Where a trusted meso total was read: the inventory window or an NPC shop's. */
 /**
  * Where a trusted meso total was read: the inventory window, an NPC shop's, or the storage window's
  * mesos on hand.
