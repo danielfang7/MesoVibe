@@ -199,11 +199,11 @@ export interface SessionSummary {
 export type HpMpChanged = Extract<Event, { type: "HpMpChanged" }>;
 
 /**
- * How the engine is reading the HP and MP numbers and the meso total. While `hpMp` is
- * `missing_digits`, `hpMpMissing` lists the digits the EXP field hasn't shown yet, such as "7" or
- * "045": the one the HP and MP numbers wait for is among them. It is null otherwise. `mesos` says
- * how the meso total in the inventory and shop windows is read; it's absent from a host that
- * doesn't read it.
+ * How the engine is reading the HP and MP numbers, the meso total and the quick slots. While
+ * `hpMp` is `missing_digits`, `hpMpMissing` lists the digits the EXP field hasn't shown yet, such
+ * as "7" or "045": the one the HP and MP numbers wait for is among them. It is null otherwise.
+ * `mesos` says how the meso total in the inventory and shop windows is read, and `slots` how the
+ * quick slots are; each is absent from a host that doesn't read it.
  *
  * @experimental May change before the meso total is read.
  */
@@ -211,6 +211,7 @@ export interface Readers {
   hpMp: HpMpState;
   hpMpMissing: string | null;
   mesos?: MesoState;
+  slots?: QuickSlotState;
 }
 
 /**
@@ -221,6 +222,15 @@ export interface Readers {
  * @experimental May change before the meso total is read.
  */
 export type MesoState = "reading" | "learning" | "unsupported";
+
+/**
+ * How the quick slots are read: `reading` (every frame), `not_found` (the panel isn't where the
+ * HUD puts it: hidden, covered, or another screen), or `unsupported` (it can't be read at this
+ * game size).
+ *
+ * @experimental May change while the quick slots are new.
+ */
+export type QuickSlotState = "reading" | "not_found" | "unsupported";
 
 /**
  * A page a plugin draws besides its main view, in a rail tab of its own. First-party Session

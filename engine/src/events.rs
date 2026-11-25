@@ -18,7 +18,8 @@ use crate::recognizers::notices::{Missed, Tab};
 /// is worked out from it.
 /// 8: `MesoChanged`, the meso total shown in the inventory, an NPC shop or the storage window.
 /// The engine stops sending the pickup notices' events, which stay in the schema.
-pub const SCHEMA_VERSION: u32 = 8;
+/// 9: `QuickSlotChanged`, what each quick slot shows.
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// Events the engine emits after a confident read (below the confidence
 /// threshold a recognizer reports "unreadable" and no value event is sent).
@@ -26,7 +27,8 @@ pub const SCHEMA_VERSION: u32 = 8;
 /// As JSON, an event is an object whose `type` names the variant, with its fields beside it.
 ///
 /// The events of one engine tick always come in this order: the EXP bar's (`ExpChanged`, then
-/// `LevelUp`), `MapChanged`, `HpMpChanged`, then `MesoChanged`. So a plugin comparing two HP and
+/// `LevelUp`), `MapChanged`, `HpMpChanged`, `QuickSlotChanged`, then `MesoChanged`. So a plugin
+/// comparing two HP and
 /// MP readings sees a level-up or a map change the engine read between them first. The numbers
 /// can read while the EXP field can't (a cursor over it): a level-up then shows as a higher max
 /// HP or MP before `LevelUp`.
@@ -146,6 +148,22 @@ pub enum Event {
         total: u64,
         #[ts(inline)]
         source: MesoSource,
+    },
+    /// What a quick slot shows, sent once two frames in a row agree on it and it differs from what
+    /// was sent for that slot last, and for every slot when the slots are first read (after a game
+    /// restart or a pause in capture too). `slot` counts 0 to 7 along the top row (Shift, Ins, Hm
+    /// and Pup, as the game binds them at first), then the bottom row (Ctrl, Del, End and Pdn).
+    ///
+    /// `icon_key` identifies the icon's picture, the same every time the same item sits in a slot
+    /// on this computer; an empty slot has one too. `count_key` identifies the count's picture, or
+    /// is `null` when the slot shows no count: empty, a skill, an item that doesn't stack, or a
+    /// count something is drawn over. The count's digits aren't read: a potion use shows as the
+    /// slot's count changing in the same moment the HP or MP numbers rise, a frame or so apart in
+    /// the events, since a slot waits for two frames to agree.
+    QuickSlotChanged {
+        slot: u8,
+        count_key: Option<String>,
+        icon_key: String,
     },
     /// A recognizer could not read its region confidently.
     Unreadable { recognizer: &'static str },

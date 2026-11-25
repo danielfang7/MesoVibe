@@ -47,10 +47,10 @@
 use serde::Serialize;
 
 use super::digit_shapes;
+use super::pixels::Pixels;
 use crate::events::MesoSource;
 use crate::frame::Frame;
 use crate::glyph::{Atlas, Glyph, Rect, segment};
-use crate::unstretch;
 
 /// The game areas the box has been checked at, in game pixels: windowed, drawn at the game's own
 /// pixel size. Others report [`MesoState::Unsupported`] until recorded captures of them pass.
@@ -211,69 +211,6 @@ fn is_red(p: [u8; 3]) -> bool {
 /// An active tab, as it's drawn focused or pale.
 fn is_pink(p: [u8; 3]) -> bool {
     p[0] >= 0xc0 && p[0] >= p[1].saturating_add(0x20) && p[0] >= p[2].saturating_add(0x20)
-}
-
-/// A whole frame's game pixels: the frame itself at 1x, or at a backing scale one pixel of each
-/// block.
-#[derive(Clone, Copy)]
-struct Pixels<'a> {
-    frame: Frame<'a>,
-    scale: u32,
-    x0: u32,
-    y0: u32,
-    width: u32,
-    height: u32,
-}
-
-impl<'a> Pixels<'a> {
-    /// `blocks`: where the blocks start, when a reader of the same frame found it. Otherwise it's
-    /// found in the HUD's rows, which are whole blocks, unlike the top rows under a Mac window's
-    /// title bar.
-    fn of(frame: Frame<'a>, blocks: Option<(u32, u32)>) -> Option<Pixels<'a>> {
-        let scale = frame.scale();
-        let (x0, y0) = match scale {
-            1 => (0, 0),
-            _ => blocks.or_else(|| {
-                let rows = unstretch::scaled_rows(HUD_ROWS, scale);
-                unstretch::block_offset(&frame.bottom_rows(rows))
-            })?,
-        };
-        (x0 < scale && y0 < scale && frame.first_row() == 0).then(|| Pixels {
-            frame,
-            scale,
-            x0,
-            y0,
-            width: frame.width() / scale,
-            height: frame.height() / scale,
-        })
-    }
-
-    fn rgb(&self, x: u32, y: u32) -> [u8; 3] {
-        self.frame
-            .rgb(self.x0 + self.scale * x, self.y0 + self.scale * y)
-    }
-
-    fn get(&self, x: i64, y: i64) -> Option<[u8; 3]> {
-        let inside =
-            (0..i64::from(self.width)).contains(&x) && (0..i64::from(self.height)).contains(&y);
-        inside.then(|| self.rgb(x as u32, y as u32))
-    }
-
-    /// A region's game pixels as a 1x frame of its own, for the glyph helpers.
-    fn copy(&self, region: Rect) -> Option<Vec<u8>> {
-        let fits = region.x.checked_add(region.width)? <= self.width
-            && region.y.checked_add(region.height)? <= self.height;
-        fits.then(|| {
-            let mut bgra = Vec::with_capacity((region.width * region.height * 4) as usize);
-            for y in region.y..region.y + region.height {
-                for x in region.x..region.x + region.width {
-                    let [r, g, b] = self.rgb(x, y);
-                    bgra.extend_from_slice(&[b, g, r, 255]);
-                }
-            }
-            bgra
-        })
-    }
 }
 
 /// A navy-bordered rectangle 16 rows tall.
@@ -817,7 +754,9 @@ impl MesoReader {
         }
         self.since = 0;
         self.frames += 1;
-        let pixels = Pixels::of(*frame, blocks).filter(|_| !self.unsupported);
+        // Only a whole frame: the boxes can be anywhere in it.
+        let pixels =
+            Pixels::of(*frame, blocks, HUD_ROWS).filter(|px| px.top == 0 && !self.unsupported);
         let reading = match pixels {
             Some(px) => self.look(&px),
             None => {
@@ -1953,7 +1892,7 @@ mod tests {
         let shop = shop_with(5_208_350, &[5_712, 814, 1_786, 116, 200]);
         let canvas = one(&shop);
         let frame = canvas.frame();
-        let px = Pixels::of(frame, None).unwrap();
+        let px = Pixels::of(frame, None, HUD_ROWS).unwrap();
         let mut found = find_boxes(&px);
         found.retain(|b| kind_of(&px, b) == Some(SHOP));
         assert_eq!(
@@ -1963,11 +1902,11 @@ mod tests {
         let mut highlighted = shop.clone();
         highlighted.highlighted = vec![4];
         let canvas = one(&highlighted);
-        let px = Pixels::of(canvas.frame(), None).unwrap();
+        let px = Pixels::of(canvas.frame(), None, HUD_ROWS).unwrap();
         assert_eq!(buy_back(&px, &found[0]), None);
         let goods = MesoWindow::new(Window::Shop, 5_208_350);
         let canvas = one(&goods);
-        let px = Pixels::of(canvas.frame(), None).unwrap();
+        let px = Pixels::of(canvas.frame(), None, HUD_ROWS).unwrap();
         assert_eq!(buy_back(&px, &found[0]), None, "the All tab");
         assert_eq!(sale_agrees(500, &[19], &[19, 300]), Some(false));
         assert_eq!(sale_agrees(300, &[19], &[19, 300]), Some(true));
