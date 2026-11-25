@@ -9,6 +9,7 @@ import {
   FILE_PATH,
   REFRESH_SCHEDULE,
   STATE_PATH,
+  checkUsual,
   refresh,
   secondsUntilNextBuild,
   serve,
@@ -194,6 +195,10 @@ const broken = {
   "an item has no id": { "/usual-prices": usualPrices([item(1002071, 1200), { ...item(1082000, 5), item_id: "x" }]) },
   "the world is wrong": { "/usual-prices?world=zenith": usualPrices([item(1002071, 1), item(1082000, 2)], "windia") },
   "the trends lost their movers": { "/trends": { ...trends(), movers: {} } },
+  "the answer isn't JSON": { "/trends": new Response("<html>", { status: 200 }) },
+  "a mover has no price": { "/trends?world=zenith": { ...trends("zenith"), movers: { "7d": { up: [{ item_id: 1, game_id: 1, price: null, change: 0.1 }], down: [] } } } },
+  "the prices have no update time": { "/usual-prices": { ...usualPrices([item(1002071, 1200), item(1082000, 1500000)]), updated_at: undefined } },
+  "the list is empty": { "/usual-prices?world=zenith": usualPrices([], "zenith") },
 };
 for (const [name, override] of Object.entries(broken)) {
   test(`a bad answer keeps the last good file: ${name}`, async () => {
@@ -277,4 +282,35 @@ test("the cached copy lasts until just after the next scheduled run", () => {
 test("vercel.json runs the job on the schedule the code expects", async () => {
   const config = JSON.parse(await readFile(new URL("../web/vercel.json", import.meta.url), "utf8"));
   assert.deepEqual(config.crons, [{ path: "/api/refresh", schedule: REFRESH_SCHEDULE }]);
+});
+
+// The two limits are "more than": a list that moves by exactly 20%, or exactly 5% priced 0, still
+// builds. Fails if either check turns strict and a normal day blocks the file.
+test("the count and zero-price limits allow exactly 20% and 5%", () => {
+  const many = (n, zero = 0) => Array.from({ length: n }, (_, i) => item(1_000_000 + i, i < zero ? 0 : 100));
+  assert.equal(checkUsual(usualPrices(many(120)), "windia", 100), null);
+  assert.equal(checkUsual(usualPrices(many(80)), "windia", 100), null);
+  assert.match(checkUsual(usualPrices(many(121)), "windia", 100), /121 items/);
+  assert.equal(checkUsual(usualPrices(many(100, 5)), "windia", null), null);
+  assert.match(checkUsual(usualPrices(many(100, 6)), "windia", null), /6 of 100/);
+});
+
+// HEAD, other methods and the app's revalidation forms. Fails if HEAD sends the body, a POST is
+// served, or an If-None-Match list or "*" misses and sends the whole file again.
+test("the endpoint answers HEAD without a body, refuses POST, and honors If-None-Match lists", async () => {
+  const store = memoryStore({ [FILE_PATH]: '{"version":1}' });
+  const url = "https://mesovibe.com/api/prices";
+  const head = await serve({ request: new Request(url, { method: "HEAD" }), store, now: NOW });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+  const etag = head.headers.get("etag");
+  const post = await serve({ request: new Request(url, { method: "POST" }), store, now: NOW });
+  assert.equal(post.status, 405);
+  assert.equal(post.headers.get("allow"), "GET, HEAD");
+  for (const tags of [`"old", ${etag}`, "*"]) {
+    const response = await serve({ request: get(url, { "If-None-Match": tags }), store, now: NOW });
+    assert.equal(response.status, 304, tags);
+  }
+  const stale = await serve({ request: get(url, { "If-None-Match": '"old"' }), store, now: NOW });
+  assert.equal(stale.status, 200);
 });
