@@ -600,8 +600,7 @@ function shell(initial: Settings): void {
         heroBox.classList.add("arrive");
       }
     }
-    // End and Reset as the tracker offers them (nothing to end or reset before a gain or a
-    // pickup), and none while capture is blocked or the tracker has crashed, when a press could
+    // End and Reset as the tracker offers them (nothing to end or reset before a gain), and none while capture is blocked or the tracker has crashed, when a press could
     // not reach it.
     resetButton.hidden = !summary?.canReset;
     endButton.hidden = !summary?.canEnd;
@@ -611,8 +610,8 @@ function shell(initial: Settings): void {
       paintedPaused = paused;
       pauseButton.replaceChildren(icon(paused ? "resume" : "pause"), paused ? "Resume" : "Pause");
       pauseButton.title = paused
-        ? "Resume the session: time, EXP and pickups count again"
-        : "Pause the session: time, EXP and pickups don't count until you resume";
+        ? "Resume the session: time and EXP count again"
+        : "Pause the session: time and EXP don't count until you resume";
     }
     sessionActions.hidden =
       panel.settings.safeMode ||
@@ -953,6 +952,18 @@ function shell(initial: Settings): void {
     return namePicture({ gameText: key, label: "The map's name, as MesoVibe read it" }, tracker.pictures);
   }
 
+  /** Whether MesoVibe reads your mesos at this game size, and how. */
+  function mesosLine(state: NonNullable<Status["mesos"]>): string {
+    switch (state) {
+      case "learning":
+        return "Learning the digits of your meso total. Keep your inventory open a few seconds.";
+      case "unsupported":
+        return "Can't read your mesos at this game size yet.";
+      default:
+        return "Read whenever your inventory, an NPC shop or storage is open.";
+    }
+  }
+
   function seesView(): Node[] {
     const status = panel.status;
     const reading = status?.reading === true && !panel.settings.safeMode;
@@ -982,6 +993,9 @@ function shell(initial: Settings): void {
           ? h("div", { class: "reading-box", attrs: { "data-key": "sees-hp-mp" } }, h("span", { class: "label" }, "HP and MP"), h("span", status.hpMp ? { class: "number" } : {}, hpMpLine(status)))
           : null,
         reading && status ? h("div", { class: "reading-box", attrs: { "data-key": "sees-map" } }, h("span", { class: "label" }, "Map name"), mapLine(status)) : null,
+        reading && status?.mesos
+          ? h("div", { class: "reading-box", attrs: { "data-key": "sees-mesos" } }, h("span", { class: "label" }, "Mesos"), h("span", {}, mesosLine(status.mesos)))
+          : null,
         h(
           "dl",
           { class: "key-value" },
@@ -995,7 +1009,7 @@ function shell(initial: Settings): void {
           h(
             "dd",
             {},
-            "Up to 4 times a second, the bottom strip. The whole game picture after a map change and every 30 seconds, for the map's name.",
+            "Up to 4 times a second, the bottom strip. The whole game picture about once a second for your mesos, and up to 4 times a second while your inventory, an NPC shop or storage is open; and after a map change and every 30 seconds, for the map's name.",
           ),
         ),
       ),
@@ -1006,6 +1020,7 @@ function shell(initial: Settings): void {
         h("p", {}, "The EXP bar: your level, EXP and percent."),
         h("p", {}, "The HP and MP numbers next to the EXP bar."),
         h("p", {}, "The minimap's map name, as a picture."),
+        h("p", {}, "Your mesos, when your inventory, an NPC shop or storage is open: the mesos you carry, never the amount stored."),
         h("p", {}, "The chat box: whisper, party and friend lines, as pictures."),
         h("h2", { class: "label" }, "Never reads"),
         h("p", {}, "Your keyboard or mouse · the game's memory · the game's files · network traffic"),
