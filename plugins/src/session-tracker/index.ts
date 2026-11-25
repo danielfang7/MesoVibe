@@ -701,7 +701,8 @@ definePlugin({
       const potions = source === null || !potsShown() ? null : potionsSection(session, catalog, source, readers, atMs);
       const potsPerHour = source === null || !potsShown() ? null : potRate(potTotals(session, catalog));
       context.render(view(session, history, capture, map, readers, atMs, showMore, potions, potsPerHour));
-      context.render(lootView(session, history, allTime, catalog, lootMore, potsShown(), atMs), "loot");
+      // Saved potions show in the Loot tab whenever a source is wired in, reading or not.
+      context.render(lootView(session, history, allTime, catalog, lootMore, source !== null, atMs), "loot");
     };
     const remember = (kind: Undo["kind"], atMs: number) => {
       undo = { kind, session: structuredClone(session), history: history.slice(), allTime, until: atMs + UNDO_MS };

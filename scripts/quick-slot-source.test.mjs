@@ -65,13 +65,20 @@ function grinding({ readers = READING, saved = null } = {}) {
     // A slot's change is sent a frame after the rise shows.
     second([hpMp(state.hp, state.mp, state.at + 1000), ...slots.map(([i, count, icon]) => slot(i, count, icon, state.at + 1000))]);
   };
-  return { ...plugin, state, second, use };
+  /** Two seconds with nothing new, for an icon's name to settle (its last vote older than 1.5 s). */
+  const settle = () => {
+    for (let i = 0; i < 2; i++) second([hpMp(state.hp, state.mp, state.at + 1000)]);
+  };
+  return { ...plugin, state, second, use, settle };
 }
 
-// A slot's count changing as HP rises by Meat's 160 is a Meat; as MP rises by Lemon's 150, a
-// Lemon. Fails if a paired use is lost or goes to the wrong potion.
-test("a slot's count changing as HP or MP rises by a potion's amount is one use of it", () => {
-  const game = grinding();
+/** A save in which the Lemon and Meat icons are already named. */
+const NAMED = { version: 1, history: [], current: null, slots: { icons: [["lemon-icon", LEMON], ["meat-icon", MEAT]] } };
+
+// A named slot's count changing as HP rises is a Meat, as MP rises a Lemon. Fails if a paired use
+// is lost or goes to the wrong potion.
+test("a slot's count changing as HP or MP rises is one use of its potion", () => {
+  const game = grinding({ saved: NAMED });
   game.use({ hp: 160, slots: [[6, "c376", "meat-icon"]] });
   game.use({ mp: 150, slots: [[0, "c273", "lemon-icon"]] });
   game.use({ hp: 160, slots: [[6, "c375", "meat-icon"]] });
@@ -86,30 +93,82 @@ test("a slot's count changing as HP or MP rises by a potion's amount is one use 
 // A count changing with no rise (potions picked up or bought) and a rise with no count changing
 // (a Heal, natural recovery) are no use. Fails if either is counted.
 test("a count change without a rise, or a rise without a count change, counts nothing", () => {
-  const game = grinding();
+  const game = grinding({ saved: NAMED });
   game.use({ slots: [[6, "c380", "meat-icon"]] });
   game.use({ hp: 160 });
   game.use({ mp: 150 });
   assert.deepEqual(used(game.sent), {});
 });
 
-// An icon is named only by a rise of its potion's amount, give or take natural recovery; its
-// uses before that wait and count once it's named, and after it a use counts though HP tops up to
-// full or a hit lands in the same frame. Fails if a stray rise names an icon, an earlier use is
-// lost or counted twice, or a named icon's uses need the exact amount.
-test("an icon's potion is learned from a rise of its amount, then counted loosely", () => {
+// An icon is named by two rises of its potion's amount; its uses before that wait and count then,
+// and after it a use counts on a loose rise. Fails if one rise names it, an earlier use is lost,
+// or a named icon's uses need the exact amount.
+test("an icon is named by two rises of its potion's amount, then counted loosely", () => {
   const game = grinding();
   game.use({ mp: 208, slots: [[0, "c273", "lemon-icon"]] });
-  assert.deepEqual(used(game.sent), {}, "+208 MP names no Lemon");
   game.use({ mp: 150, slots: [[0, "c272", "lemon-icon"]] });
-  assert.deepEqual(used(game.sent), { Lemon: "×2" }, "+150 names it, and the +208 before counts");
-  game.use({ mp: 208, slots: [[0, "c271", "lemon-icon"]] });
+  game.settle();
+  assert.deepEqual(used(game.sent), {}, "one rise of 150 names nothing");
+  game.use({ mp: 150, slots: [[0, "c271", "lemon-icon"]] });
+  game.settle();
+  assert.deepEqual(used(game.sent), { Lemon: "×3" }, "named, with the +208 and +150 before");
   game.use({ mp: 90, slots: [[0, "c270", "lemon-icon"]] });
   game.use({ mp: 40, slots: [[0, "c269", "lemon-icon"]] });
-  assert.deepEqual(used(game.sent), { Lemon: "×4" }, "+208 and +90 count, +40 doesn't");
-  // MP rising to its max counts whatever the rise.
-  game.use({ mp: 1500 - game.state.mp, slots: [[0, "c268", "lemon-icon"]] });
-  assert.deepEqual(used(game.sent), { Lemon: "×5" });
+  assert.deepEqual(used(game.sent), { Lemon: "×4" }, "+90 counts, +40 doesn't");
+});
+
+// A rise the max capped says nothing of the potion's amount: a bigger potion topping HP up by
+// Meat's 160 names nothing. Fails if such rises name an icon.
+test("a rise capped by the max names nothing", () => {
+  const game = grinding();
+  game.send(slot(1, "c100", "white-icon", game.state.at));
+  for (const count of ["c99", "c98"]) {
+    game.use({ hp: 1800 - 165 - game.state.hp });
+    game.use({ hp: 165, slots: [[1, count, "white-icon"]] });
+  }
+  game.settle();
+  for (let i = 0; i < 6; i++) game.second();
+  assert.deepEqual(used(game.sent), {});
+  assert.equal(last(game.sent, "save").data.slots?.icons.some(([icon]) => icon === "white-icon") ?? false, false);
+});
+
+// A rise near two unnamed items' count changes names neither, in whatever order the slots come,
+// even for an item one vote from a name. Fails if the first slot takes the other's rise as a name.
+test("a rise near two unnamed items' changes names neither", () => {
+  const game = grinding();
+  game.use({ hp: 160, slots: [[0, "c273", "lemon-icon"]] });
+  game.use({ hp: 160, slots: [[0, "c272", "lemon-icon"], [6, "c376", "meat-icon"]] });
+  game.settle();
+  assert.deepEqual(used(game.sent), {});
+  game.use({ hp: 160, slots: [[6, "c375", "meat-icon"]] });
+  game.use({ hp: 160, slots: [[6, "c374", "meat-icon"]] });
+  game.settle();
+  assert.deepEqual(used(game.sent), { Meat: "×3" }, "two clean rises name Meat, and its use before counts");
+  for (let i = 0; i < 6; i++) game.second();
+  assert.deepEqual(last(game.sent, "save").data.slots.icons, [["meat-icon", MEAT]]);
+});
+
+// Two potions a moment apart show as one count change; both count. Fails if the second is lost.
+test("two potions a moment apart count as two", () => {
+  const game = grinding({ saved: NAMED });
+  const { hp, mp, at } = game.state;
+  // Four frames a second: two rises a quarter second apart, then the slot's one change.
+  game.send(hpMp(hp + 160, mp, at + 250));
+  game.send(hpMp(hp + 320, mp, at + 500));
+  game.send(slot(6, "c375", "meat-icon", at + 750));
+  assert.deepEqual(used(game.sent), { Meat: "×2" });
+});
+
+// Natural recovery topping HP up to full is no potion, even with a pickup just after it; a potion
+// topping it up counts. Fails if either is miscounted.
+test("natural recovery topping HP up isn't a use, a potion topping it up is", () => {
+  const game = grinding({ saved: NAMED });
+  game.use({ hp: 1800 - 5 - game.state.hp });
+  game.use({ hp: 5, slots: [[6, "c390", "meat-icon"]] });
+  assert.deepEqual(used(game.sent), {});
+  game.use({ hp: -60 });
+  game.use({ hp: 60, slots: [[6, "c389", "meat-icon"]] });
+  assert.deepEqual(used(game.sent), { Meat: "×1" });
 });
 
 // The potion each icon is is saved with the tracker's data and known from the first use next
@@ -117,19 +176,21 @@ test("an icon's potion is learned from a rise of its amount, then counted loosel
 test("which potion an icon is comes back after a restart", () => {
   const first = grinding();
   first.use({ hp: 160, slots: [[6, "c376", "meat-icon"]] });
+  first.use({ hp: 160, slots: [[6, "c375", "meat-icon"]] });
+  first.settle();
   for (let i = 0; i < 6; i++) first.second();
   const saved = last(first.sent, "save").data;
   assert.deepEqual(saved.slots, { icons: [["meat-icon", MEAT]] });
   saved.slots.icons.push(["bad", 7], [1, MEAT], "junk");
   const second = grinding({ saved });
-  second.use({ hp: 100, slots: [[6, "c375", "meat-icon"]] });
+  second.use({ hp: 100, slots: [[6, "c374", "meat-icon"]] });
   assert.deepEqual(used(second.sent), { Meat: "×1" }, "a known icon counts a rise short of 160");
 });
 
 // A rise and a count change more than a second and a half apart are two things, not one use;
 // the same item in two slots changes both, and one rise counts once. Fails on either.
 test("a use is one rise and one change close together", () => {
-  const game = grinding();
+  const game = grinding({ saved: NAMED });
   game.use({ hp: 160 });
   game.second();
   game.second([slot(6, "c376", "meat-icon", game.state.at + 1000)]);
@@ -139,33 +200,81 @@ test("a use is one rise and one change close together", () => {
   assert.deepEqual(used(game.sent), { Meat: "×1" });
 });
 
-// The same item in two slots, used before it's named: both counts wait with the one rise, and
-// naming it counts that rise once. Fails if one rise becomes two uses.
+// The same item in two slots, used before it's named: both counts wait with each rise, and naming
+// it counts each rise once. Fails if one rise becomes two uses or two votes.
 test("uses waiting for a name count each rise once", () => {
   const game = grinding();
   game.send(slot(3, "c274", "lemon-icon", game.state.at));
   game.use({ mp: 180, slots: [[0, "c273", "lemon-icon"], [3, "c273", "lemon-icon"]] });
   game.use({ mp: 150, slots: [[0, "c272", "lemon-icon"], [3, "c272", "lemon-icon"]] });
-  assert.deepEqual(used(game.sent), { Lemon: "×2" });
+  game.settle();
+  assert.deepEqual(used(game.sent), {}, "one rise of 150, though two slots changed");
+  game.use({ mp: 150, slots: [[0, "c271", "lemon-icon"], [3, "c271", "lemon-icon"]] });
+  game.settle();
+  assert.deepEqual(used(game.sent), { Lemon: "×3" });
 });
 
 // A stack moved to another slot, or a slot whose count goes unreadable and back, is no use even
 // with a rise. Fails if either is counted.
 test("a moved stack or a covered count is no use", () => {
-  const game = grinding();
+  const game = grinding({ saved: NAMED });
   game.use({ hp: 160, slots: [[6, null, "empty-icon"], [5, "c377", "meat-icon"]] });
   game.use({ hp: 160, slots: [[5, null, "meat-icon"]] });
   game.use({ hp: 160, slots: [[5, "c377", "meat-icon"]] });
   assert.deepEqual(used(game.sent), {});
 });
 
-// While the quick slots can't be read, potions aren't counted and the Potions section says why.
-// Fails if uses or time count while the slots are hidden, or the line is missing.
+// A use waits for its icon's name ten minutes at most, and the icons kept are the 32 used most
+// recently. Fails if an old use counts, or the list grows or drops an icon in use.
+test("what the source keeps has limits", () => {
+  const game = grinding();
+  game.use({ mp: 208, slots: [[0, "c273", "lemon-icon"]] });
+  for (let i = 0; i < 601; i++) game.second();
+  game.use({ mp: 150, slots: [[0, "c272", "lemon-icon"]] });
+  game.use({ mp: 150, slots: [[0, "c271", "lemon-icon"]] });
+  game.settle();
+  assert.deepEqual(used(game.sent), { Lemon: "×2" }, "the +208 waited too long");
+  const icons = [["meat-icon", MEAT], ...Array.from({ length: 31 }, (_, i) => [`old-${i}`, MEAT])];
+  const full = grinding({ saved: { ...NAMED, slots: { icons } } });
+  full.use({ hp: 160, slots: [[6, "c376", "meat-icon"]] });
+  full.use({ mp: 150, slots: [[0, "c273", "lemon-icon"]] });
+  full.use({ mp: 150, slots: [[0, "c272", "lemon-icon"]] });
+  full.settle();
+  for (let i = 0; i < 6; i++) full.second();
+  const kept = last(full.sent, "save").data.slots.icons.map(([icon]) => icon);
+  assert.equal(kept.length, 32);
+  assert.ok(kept.includes("meat-icon") && kept.includes("lemon-icon"));
+  assert.ok(!kept.includes("old-0"), "the one used longest ago goes");
+});
+
+// While the quick slots are hidden, potions aren't counted and the Potions section says why; with
+// reading off, past sessions' potions still show. Fails if uses count while hidden, the line is
+// missing, or saved potions vanish while reading is off.
 test("while the quick slots are hidden, potions aren't counted", () => {
-  const game = grinding({ readers: { ...READING, slots: "not_found" } });
+  const game = grinding({ readers: { ...READING, slots: "not_found" }, saved: NAMED });
   game.use({ hp: 160, slots: [[6, "c376", "meat-icon"]] });
   assert.deepEqual(used(game.sent), {});
   assert.ok(lines(game.sent).includes("Potions aren't counted while your quick slots are hidden or covered."));
   const odd = grinding({ readers: { ...READING, slots: "unsupported" } });
   assert.ok(lines(odd.sent).includes("Can't read your quick slots at this game size, so potions aren't counted."));
+  const past = {
+    startedAtMs: T0 - 3_600_000,
+    endedAtMs: T0 - 3_000_000,
+    activeMs: 600_000,
+    expGained: 3_780,
+    expLost: 0,
+    startLevel: 42,
+    endLevel: 42,
+    maps: [{ k: "aaaa", p: 600_000, x: 3_780, m: 0, r: 0, l: 0, s: 42, e: 42, u: [{ k: MEAT, c: 10 }], h: 600_000 }],
+    ps: { [MEAT]: "slots" },
+    pt: 800,
+  };
+  const off = run(shipped);
+  off.send({ type: "start", saved: { version: 1, history: [past], current: null }, atMs: T0, capture: "capturing", readers: { hpMp: "off", hpMpMissing: null } });
+  const table = off.sent
+    .filter((m) => m.type === "render" && m.page === "loot")
+    .at(-1)
+    .view.find((n) => n.title === "Past sessions")
+    .children.find((n) => n.kind === "table");
+  assert.equal(table.details[0].at(-1), "Pots 800: Meat ×10");
 });
