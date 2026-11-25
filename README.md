@@ -4,6 +4,8 @@
 
 MesoVibe is a free, open-source companion for MapleStory Classic World. It reads the game window the way a stream viewer sees it and shows your EXP per hour, time to level, the mesos you pick up and what shops pay for your loot, what you spend on potions, your sessions map by map and your chat, in a panel beside the game or a small overlay on it.
 
+A session pauses on its own after a minute with no EXP, from your last kill, and your next kill picks it up again. Leave the map and gain no EXP for a minute, and it ends from when you left, so a session you forgot to end doesn't count the time after it. You can turn this off in Settings.
+
 ## Download
 
 Get the installer from the [latest release](https://github.com/danielfang7/MesoVibe/releases/latest). It has everything MesoVibe needs, and MesoVibe updates itself after that.
