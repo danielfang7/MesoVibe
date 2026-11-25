@@ -4,7 +4,7 @@
 // (./mock.ts), so every state can be looked at without the game. Release builds leave it out.
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import type { Event as GameEvent, HpMpState, MesoState, SessionSummary } from "@mesovibe/sdk";
+import type { Event as GameEvent, HpMpState, MesoState, QuickSlotState, SessionSummary } from "@mesovibe/sdk";
 
 /** A corner of the game area, for the mini-HUD (app/src/dock.rs). */
 export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -160,6 +160,8 @@ export interface Status {
   map: { key: string | null } | null;
   /** How the meso total in the inventory, shop and storage windows is read; null while reading is off. */
   mesos: MesoState | null;
+  /** How the quick slots are read; null while reading is off. */
+  slots: QuickSlotState | null;
   atMs: number;
 }
 

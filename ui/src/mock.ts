@@ -156,6 +156,7 @@ export function mockHost(scenario: string): Host {
       hpMpMissing: null,
       map: null,
       mesos: settings.safeMode ? null : ("reading" as const),
+      slots: settings.safeMode ? null : ("reading" as const),
       fullScreen: false,
     };
     if (!base.reading) return { ...base, state: "off", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
@@ -337,6 +338,7 @@ function darkStatus(started: number, game: Status["game"]): Status {
     hpMpMissing: null,
     map: null,
     mesos: "reading",
+    slots: "reading",
   };
 }
 
@@ -350,6 +352,7 @@ function fullScreenStatus(started: number): Status {
     fullScreen: true,
     unreadable: "hud_not_found",
     mesos: "unsupported",
+    slots: "unsupported",
   };
 }
 
@@ -396,6 +399,7 @@ export function mockHudHost(scenario: string): HudHost {
       hpMpMissing: null,
       map: null,
       mesos: "reading" as const,
+      slots: "reading" as const,
     };
     if (scenario === "dark") return darkStatus(started, base.game);
     if (scenario.startsWith("fullscreen")) return fullScreenStatus(started);
