@@ -4,7 +4,7 @@
 //
 // Everything here takes its storage and fetch as arguments, so the tests run it without Vercel.
 // api/refresh.js and api/prices.js pass in the real ones.
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 export const COZY_API = "https://cozy.markets/trade-api/dev/v1";
 /** Each world has its own Free Market. Cozy answers for Windia when no world is named. */
@@ -25,8 +25,13 @@ const BUILD_MARGIN_MINUTES = 5;
 export const HISTORY_DAYS = 30;
 /** Days of prices kept: the chart's 30, and the day before them. */
 const KEEP_DAYS = HISTORY_DAYS + 1;
-/** A list that grows or shrinks by more than this since the last good run is treated as broken. */
+/**
+ * A list that grows or shrinks by more than this since the last good run is held, not used: a
+ * broken answer often comes back short. If the next run lists within HELD_MATCH of the held size,
+ * the change lasted and is accepted, so a real change in Cozy's catalog never stops the job.
+ */
 const MAX_COUNT_CHANGE = 0.2;
+const HELD_MATCH = 0.05;
 /**
  * Cozy lists a few items at a usual price of 0 (arrows, which sell for under a meso each). Those
  * have no market price here, so the app shows their NPC price instead. More than this share at 0
@@ -34,29 +39,37 @@ const MAX_COUNT_CHANGE = 0.2;
  */
 const MAX_ZERO_SHARE = 0.05;
 const COZY_TIMEOUT_MS = 20_000;
+/** How long the CDN may keep serving the last copy while this function fails. */
+const STALE_IF_ERROR_SECONDS = 24 * 60 * 60;
 
 // MARK: answering the app
 
 /**
  * GET /api/prices. Only the plain address is served, so every player shares one cached copy: a query
- * string can't make the CDN miss and run this again. The copy is cached until shortly after the
- * next build.
+ * string or an Authorization header (which the CDN never caches) can't make it miss and run this
+ * again. The copy is cached until shortly after the next build, and kept for a day if this fails.
  */
-export async function serve({ request, store, now }) {
+export async function serve({ request, store, now, log = console }) {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return text(405, "Use GET.", { Allow: "GET, HEAD" });
   }
-  if (new URL(request.url).search !== "") {
-    return text(400, "This address takes no query string.", { "Cache-Control": SHORT_CACHE });
+  if (new URL(request.url).search !== "" || request.headers.has("authorization")) {
+    return text(400, "This address takes no query string and no Authorization header.", { "Cache-Control": SHORT_CACHE });
   }
-  const file = await store.read(FILE_PATH);
+  let file;
+  try {
+    file = await store.read(FILE_PATH);
+  } catch (error) {
+    log.error(`prices: the price file couldn't be read (${error.name})`);
+    return json(503, { error: "Prices can't be read right now." }, { "Cache-Control": SHORT_CACHE, "Retry-After": "300" });
+  }
   if (file === null) {
     return json(503, { error: "Prices aren't ready yet." }, { "Cache-Control": SHORT_CACHE, "Retry-After": "600" });
   }
   const etag = `"${createHash("sha256").update(file).digest("base64url").slice(0, 27)}"`;
   const headers = {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": `public, max-age=0, s-maxage=${secondsUntilNextBuild(now)}`,
+    "Cache-Control": `public, max-age=0, s-maxage=${secondsUntilNextBuild(now)}, stale-if-error=${STALE_IF_ERROR_SECONDS}`,
     ETag: etag,
   };
   const known = (request.headers.get("if-none-match") ?? "").split(",").map((tag) => tag.trim());
@@ -66,7 +79,11 @@ export async function serve({ request, store, now }) {
 
 const SHORT_CACHE = "public, max-age=0, s-maxage=60";
 
-/** Seconds from `now` until a few minutes after the next scheduled run, at least one minute. */
+/**
+ * Seconds from `now` until a few minutes after the next scheduled run, at least one minute. A run
+ * stays "next" until its margin has passed, so a copy fetched while it may still be writing the new
+ * file lasts only to the end of that margin, not to the following run.
+ */
 export function secondsUntilNextBuild(now) {
   const runs = [];
   for (const dayOffset of [0, 1]) {
@@ -77,8 +94,9 @@ export function secondsUntilNextBuild(now) {
       runs.push(run.getTime());
     }
   }
-  const next = runs.find((at) => at > now.getTime());
-  const until = next + BUILD_MARGIN_MINUTES * 60_000 - now.getTime();
+  const margin = BUILD_MARGIN_MINUTES * 60_000;
+  const next = runs.find((at) => at + margin > now.getTime());
+  const until = next + margin - now.getTime();
   return Math.max(60, Math.round(until / 1000));
 }
 
@@ -97,23 +115,26 @@ export async function refresh({ request, env, fetchImpl, store, now, log = conso
     log.error("price job: CRON_SECRET or COZY_MARKET_API_KEY is missing");
     return json(500, { error: "The price job isn't set up." });
   }
-  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
+  if (!signedWith(request, secret)) {
     return json(401, { error: "Not allowed." });
   }
 
   const state = readState(await store.read(STATE_PATH, { fresh: true }), log);
   const fetched = {};
   for (const world of WORLDS) {
-    const lastCount = state.worlds[world]?.count ?? null;
+    const kept = state.worlds[world] ?? {};
     const usual = await getCozy(fetchImpl, key, "/usual-prices", world);
     const trends = usual.problem ? null : await getCozy(fetchImpl, key, "/trends", world);
-    const problem =
-      usual.problem ??
-      checkUsual(usual.body, world, lastCount) ??
-      trends.problem ??
-      checkTrends(trends.body, world);
+    const shape = usual.problem ?? checkUsualShape(usual.body, world);
+    const size = shape ? null : checkSize(usual.body.items.length, kept.count, kept.held);
+    const problem = shape ?? size ?? trends.problem ?? checkTrends(trends.body, world);
     if (problem) {
       log.error(`price job: ${world}: ${problem}; keeping the last good file`);
+      if (size) {
+        // Hold this size: if the next run lists the same, the change lasted and is accepted.
+        state.worlds[world] = { ...kept, held: usual.body.items.length };
+        await store.write(STATE_PATH, JSON.stringify(state));
+      }
       return json(502, { error: problem, world });
     }
     fetched[world] = { usual: usual.body, trends: trends.body };
@@ -159,20 +180,32 @@ async function getCozy(fetchImpl, key, path, world) {
   }
 }
 
-/** Why a usual-prices answer can't be used, or null when it's good. */
-export function checkUsual(body, world, lastCount) {
+/** Why a usual-prices answer can't be used, or null when it's good: its shape, then its size. */
+export function checkUsual(body, world, lastCount, heldCount) {
+  return checkUsualShape(body, world) ?? checkSize(body.items.length, lastCount, heldCount);
+}
+
+function checkUsualShape(body, world) {
   const common = checkCommon(body, world);
   if (common) return common;
   if (Number.isNaN(Date.parse(body.updated_at))) return "usual prices have no update time";
   if (!Array.isArray(body.items) || body.items.length === 0) return "usual prices list no items";
-  if (lastCount && Math.abs(body.items.length - lastCount) / lastCount > MAX_COUNT_CHANGE) {
-    return `usual prices list ${body.items.length} items, against ${lastCount} last time`;
-  }
   const bad = body.items.find((item) => !Number.isInteger(item?.item_id) || !isPriceOrZero(item?.usual));
   if (bad) return "an item has no item_id or no usual price";
   const zero = body.items.filter((item) => item.usual === 0).length;
   if (zero / body.items.length > MAX_ZERO_SHARE) return `${zero} of ${body.items.length} items have a usual price of 0`;
   return null;
+}
+
+/**
+ * Why a list of `count` items can't be used against the last good run's count, or null. A size
+ * the previous run already listed (within HELD_MATCH of `heldCount`) is accepted: it lasted.
+ */
+function checkSize(count, lastCount, heldCount) {
+  const change = (from) => Math.abs(count - from) / from;
+  if (!lastCount || change(lastCount) <= MAX_COUNT_CHANGE) return null;
+  if (heldCount && change(heldCount) <= HELD_MATCH) return null;
+  return `usual prices list ${count} items, against ${lastCount} last time`;
 }
 
 /** Why a trends answer can't be used, or null when it's good. */
@@ -195,6 +228,12 @@ function checkCommon(body, world) {
     return `the answer is for ${body.world}, not ${world}`;
   }
   return null;
+}
+
+/** Whether the request carries the job's secret. Compared as digests, in constant time. */
+function signedWith(request, secret) {
+  const digest = (value) => createHash("sha256").update(value).digest();
+  return timingSafeEqual(digest(request.headers.get("authorization") ?? ""), digest(`Bearer ${secret}`));
 }
 
 const isPrice = (value) => typeof value === "number" && Number.isFinite(value) && value > 0;

@@ -206,9 +206,33 @@ for (const [name, override] of Object.entries(broken)) {
     const { response } = await run({ ...goodAnswers(), ...override }, store);
     assert.equal(response.status, 502);
     assert.equal(store.data.get(FILE_PATH), "LAST GOOD FILE");
-    assert.equal(store.data.get(STATE_PATH), lastGood[STATE_PATH]);
+    const { count, days } = JSON.parse(store.data.get(STATE_PATH)).worlds.windia;
+    assert.deepEqual({ count, days }, { count: 2, days: {} }, "the kept days and count are untouched");
   });
 }
+
+// A real change in the size of Cozy's list must not stop the job for good: the first run with the
+// new size is held, and the next run with the same size is accepted. Fails if a lasting change is
+// rejected forever, or a one-off jump is accepted at once.
+test("a lasting change in the size of Cozy's list is accepted once two runs agree", async () => {
+  const sized = (n) => Array.from({ length: n }, (_, i) => item(1_000_000 + i, 100 + i));
+  const answers = (n) => ({ ...goodAnswers(), "/usual-prices": usualPrices(sized(n)) });
+  const store = memoryStore();
+  assert.equal((await run(answers(100), store)).response.status, 200);
+
+  assert.equal((await run(answers(130), store)).response.status, 502, "a jump of 30% is held, not used");
+  assert.equal(JSON.parse(store.data.get(STATE_PATH)).worlds.windia.held, 130);
+  const before = store.data.get(FILE_PATH);
+
+  assert.equal((await run(answers(128), store)).response.status, 200, "the next run within 5% of the held size is accepted");
+  assert.notEqual(store.data.get(FILE_PATH), before);
+  const windia = JSON.parse(store.data.get(STATE_PATH)).worlds.windia;
+  assert.equal(windia.count, 128);
+  assert.equal(windia.held, undefined, "an accepted size clears the hold");
+
+  assert.equal((await run(answers(60), store)).response.status, 502, "a one-off drop is held");
+  assert.equal((await run(answers(127), store)).response.status, 200, "a normal list afterwards builds as usual");
+});
 
 // Only Vercel's scheduler, signed with CRON_SECRET, may make the job call Cozy. Fails if an
 // unsigned request reaches Cozy or a misconfigured job runs.
@@ -238,16 +262,31 @@ test("a damaged state starts the kept days again instead of failing", async () =
 
 const get = (url, headers = {}) => new Request(url, { headers });
 
-// One plain address, so a query string can't make the CDN miss and bill a run. Fails if any query
-// string is served or reads the store.
-test("the endpoint refuses any query string without reading the store", async () => {
+// One plain address, so a query string or an Authorization header (never cached by the CDN) can't
+// make it miss and bill a run. Fails if either is served or reads the store.
+test("the endpoint refuses a query string or an Authorization header without reading the store", async () => {
   let reads = 0;
   const store = { async read() { reads += 1; return "{}"; } };
-  for (const url of ["https://mesovibe.com/api/prices?x=1", "https://mesovibe.com/api/prices?world=zenith"]) {
-    const response = await serve({ request: get(url), store, now: NOW });
+  const requests = [
+    get("https://mesovibe.com/api/prices?x=1"),
+    get("https://mesovibe.com/api/prices?world=zenith"),
+    get("https://mesovibe.com/api/prices", { Authorization: "Bearer anything" }),
+  ];
+  for (const request of requests) {
+    const response = await serve({ request, store, now: NOW });
     assert.equal(response.status, 400);
   }
   assert.equal(reads, 0);
+});
+
+// Storage failing (no Blob store connected yet, an outage) must answer like "not ready", not crash.
+// Fails if serve() throws or the error answer is cached for long.
+test("the endpoint answers 503 for a short time when the price file can't be read", async () => {
+  const store = { async read() { throw new Error("Vercel Blob: No blob credentials found."); } };
+  const response = await serve({ request: get("https://mesovibe.com/api/prices"), store, now: NOW, log: silent });
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("cache-control"), "public, max-age=0, s-maxage=60");
+  assert.equal(response.headers.get("retry-after"), "300");
 });
 
 // The file, its ETag and a CDN lifetime that ends just after the next build. Fails if the app
@@ -257,7 +296,7 @@ test("the endpoint serves the file with an ETag, answers 304 when unchanged, and
   const first = await serve({ request: get("https://mesovibe.com/api/prices"), store, now: new Date("2026-11-25T05:00:00Z") });
   assert.equal(first.status, 200);
   assert.equal(await first.text(), '{"version":1}');
-  assert.equal(first.headers.get("cache-control"), "public, max-age=0, s-maxage=4800");
+  assert.equal(first.headers.get("cache-control"), "public, max-age=0, s-maxage=4800, stale-if-error=86400");
   const etag = first.headers.get("etag");
   assert.match(etag, /^"[\w-]+"$/);
 
@@ -268,14 +307,16 @@ test("the endpoint serves the file with an ETag, answers 304 when unchanged, and
   assert.equal(empty.status, 503);
 });
 
-// The CDN keeps a copy until 5 minutes after the next run. Fails if a run time or the day's
-// rollover is wrong.
+// The CDN keeps a copy until 5 minutes after the next run. A copy fetched while a run may still be
+// writing lasts only to the end of its margin. Fails if a run time, the margin or the day's
+// rollover is wrong, which could hold an old file for 6 hours.
 test("the cached copy lasts until just after the next scheduled run", () => {
   const at = (iso) => secondsUntilNextBuild(new Date(iso));
   assert.equal(at("2026-11-25T06:14:00Z"), 6 * 60);
-  assert.equal(at("2026-11-25T06:16:00Z"), 6 * 3600 + 4 * 60);
+  assert.equal(at("2026-11-25T06:16:00Z"), 4 * 60, "inside the 06:15 run's margin");
+  assert.equal(at("2026-11-25T06:19:30Z"), 60, "never under a minute");
+  assert.equal(at("2026-11-25T06:20:00Z"), 6 * 3600, "once the margin ends, the next run counts");
   assert.equal(at("2026-11-25T23:00:00Z"), 3600 + 20 * 60);
-  assert.equal(at("2026-11-25T06:19:30Z"), 6 * 3600 + 30, "between a run and its margin, the next run counts");
 });
 
 // vercel.json and the code both name the schedule. Fails if they drift apart.
