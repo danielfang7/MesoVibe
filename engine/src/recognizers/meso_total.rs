@@ -678,9 +678,10 @@ fn buy_back(px: &Pixels, shop: &Found) -> Option<Vec<u64>> {
 /// Whether a rise in the shop's total agrees with the sales the buy-back rows list: `before` and
 /// `now` are the rows read with the last trusted total and this one. Only rows added to the end
 /// of the same list are this rise's sales; any other change (rows expired, scrolled, the pane
-/// switched) checks nothing (`None`).
+/// switched) checks nothing (`None`). Nor does a full list: more sales may be past its last row.
 fn sale_agrees(rise: u64, before: &[u64], now: &[u64]) -> Option<bool> {
-    (now.len() > before.len() && now.starts_with(before))
+    let full = now.len() >= BUY_BACK_ROWS as usize;
+    (now.len() > before.len() && !full && now.starts_with(before))
         .then(|| now[before.len()..].iter().sum::<u64>() == rise)
 }
 
@@ -820,10 +821,17 @@ impl MesoReader {
         let reading = match pixels {
             Some(px) => self.look(&px),
             None => {
-                self.unsupported = true;
                 self.end_look();
+                // At a checked size, a frame whose pixel blocks weren't found (a loading screen,
+                // say) shows nothing readable; it doesn't make the size unsupported, which would
+                // flip the state players see until the next strip.
+                let view = if self.unsupported {
+                    MesoView::Unsupported
+                } else {
+                    MesoView::NotOpen
+                };
                 MesoReading {
-                    view: MesoView::Unsupported,
+                    view,
                     send: None,
                     sale: None,
                 }
@@ -1032,37 +1040,37 @@ impl MesoReader {
             MesoSource::Storage => 1,
             MesoSource::Inventory => 2,
         });
-        let mut covered = false;
-        for (kind, b) in candidates {
-            let glyphs = self.glyphs(px, &b);
-            let Some((glyphs, parts)) = glyphs.and_then(|g| parts(&g, MAX_GAP).map(|p| (g, p)))
-            else {
-                covered = true;
-                continue;
-            };
-            let source = kind.source;
-            return match self.name(&glyphs, &parts) {
-                Read::Total(total) => {
-                    self.conflicts = 0;
-                    let rows = (source == MesoSource::Shop)
-                        .then(|| buy_back(px, &b))
-                        .flatten();
-                    (MesoView::Read { source, total }, rows)
-                }
-                Read::Learning => (MesoView::Learning(source), None),
-                Read::Conflict => {
-                    self.conflicts += 1;
-                    if self.conflicts >= CONFLICT_PATIENCE {
-                        self.drop_naming();
-                    }
-                    (MesoView::Learning(source), None)
-                }
-            };
-        }
-        if covered {
+        // Only the first box is read. A shop or storage window open with its box not found, or
+        // found but unreadable (the cursor or a tooltip over it), makes the frame covered: the
+        // inventory's total beside it would send a sale or a transfer as mesos picked up.
+        let Some((kind, b)) = candidates.into_iter().next() else {
+            return (why(px, off_screen, cut), None);
+        };
+        if kind.source == MesoSource::Inventory && npc_window_open(px) {
             return (MesoView::Covered, None);
         }
-        (why(px, off_screen, cut), None)
+        let glyphs = self.glyphs(px, &b);
+        let Some((glyphs, parts)) = glyphs.and_then(|g| parts(&g, MAX_GAP).map(|p| (g, p))) else {
+            return (MesoView::Covered, None);
+        };
+        let source = kind.source;
+        match self.name(&glyphs, &parts) {
+            Read::Total(total) => {
+                self.conflicts = 0;
+                let rows = (source == MesoSource::Shop)
+                    .then(|| buy_back(px, &b))
+                    .flatten();
+                (MesoView::Read { source, total }, rows)
+            }
+            Read::Learning => (MesoView::Learning(source), None),
+            Read::Conflict => {
+                self.conflicts += 1;
+                if self.conflicts >= CONFLICT_PATIENCE {
+                    self.drop_naming();
+                }
+                (MesoView::Learning(source), None)
+            }
+        }
     }
 
     /// The glyphs in a clean box's inside rows.
@@ -1158,6 +1166,16 @@ impl MesoReader {
 /// in full means its box is covered (or off the frame, when that's where the box would be); one
 /// running into the frame's edge, a window partly off screen; one cut short elsewhere, a window
 /// partly covered.
+/// Whether a shop's or storage's tab underline shows whole: that window is open.
+fn npc_window_open(px: &Pixels) -> bool {
+    red_lines(px).iter().any(|line| {
+        !line.at_edge
+            && KINDS
+                .iter()
+                .any(|k| k.source != MesoSource::Inventory && k.line.len == line.len)
+    })
+}
+
 fn why(px: &Pixels, off_screen: bool, cut: bool) -> MesoView {
     if off_screen {
         return MesoView::OffScreen;
@@ -1624,6 +1642,23 @@ mod tests {
         assert_eq!(look(&mut reader, &canvas).view, MesoView::Covered);
     }
 
+    // With the inventory open beside a shop, a cursor over the shop's box makes the frame covered.
+    // Fails if the inventory's total is read instead, which would send a sale as mesos picked up.
+    #[test]
+    fn a_covered_shop_box_is_never_read_as_the_inventory() {
+        let mut reader = taught();
+        let shop = MesoWindow::new(Window::Shop, 5_171_242).at(900, 300);
+        let inv = inventory(5_171_242).at(150, 450);
+        let canvas = game(1366, 768, &[&shop, &inv]);
+        assert_eq!(
+            look(&mut reader, &canvas).view,
+            read(MesoSource::Shop, 5_171_242)
+        );
+        let mut covered = canvas.clone();
+        draw_cursor(&mut covered, shop.at.0 + 60, shop.at.1 + 2);
+        assert_eq!(look(&mut reader, &covered).view, MesoView::Covered);
+    }
+
     // A window dragged half off the game area's edge is reported partly off screen, and its box
     // isn't read. Fails if a cut box is read or the window is called closed.
     #[test]
@@ -1920,6 +1955,11 @@ mod tests {
         assert_eq!(sale_agrees(300, &[19], &[19, 300]), Some(true));
         assert_eq!(sale_agrees(500, &[19], &[300]), None, "not the same list");
         assert_eq!(sale_agrees(500, &[19, 300], &[19, 300]), None, "no new row");
+        assert_eq!(
+            sale_agrees(9, &[1, 2, 3, 4, 5], &[1, 2, 3, 4, 5, 6]),
+            None,
+            "a full list may hide sales past its last row"
+        );
     }
 
     // After a size change, named shapes that still match read at once and ones that don't are
@@ -2058,6 +2098,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    // A Retina frame whose pixel blocks can't be found (a loading screen) reads nothing and leaves
+    // the size supported. Fails if the state players see flips to unsupported.
+    #[test]
+    fn a_retina_frame_without_blocks_leaves_the_size_supported() {
+        let bgra = vec![0u8; 2732 * 1536 * 4];
+        let frame = Frame::new(2732, 1536, 2732 * 4, &bgra)
+            .and_then(|f| f.with_scale(2))
+            .unwrap();
+        let mut reader = taught();
+        let seen = reader.observe(&frame, None).map(|r| r.view);
+        assert_eq!(seen, Some(MesoView::NotOpen));
+        assert_ne!(reader.state(), MesoState::Unsupported);
     }
 
     // Frames that hold only the bottom rows aren't looked at; the reader asks for a whole frame
