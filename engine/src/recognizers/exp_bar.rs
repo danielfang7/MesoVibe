@@ -205,14 +205,25 @@ const HUD_ROWS: u32 = LABEL.up + MAX_SHIFT;
 /// Fails when the HUD can't be placed: narrower than the bar, a picture that can't be recovered,
 /// or a frame missing rows the reader needs.
 fn at_1x<T>(frame: &Frame, read: impl FnOnce(&Frame, Layout) -> T) -> Result<T, Unreadable> {
+    at_1x_noting(frame, &mut None, read)
+}
+
+/// [`at_1x`], noting in `blocks` where a backing scale's pixel blocks start in the frame
+/// ([`unstretch::block_offset`]), when it declares one.
+fn at_1x_noting<T>(
+    frame: &Frame,
+    blocks: &mut Option<(u32, u32)>,
+    read: impl FnOnce(&Frame, Layout) -> T,
+) -> Result<T, Unreadable> {
     let scale = frame.scale();
     if scale > 1 {
         // Only the rows a backend reads back: the game's picture is doubled there, but not
         // necessarily everywhere (a Mac title bar's shadow falls on the top rows).
         let rows =
             unstretch::scaled_rows(rows_needed(frame.height() / scale, frame.source()), scale);
-        let picture = unstretch::unscale(&frame.bottom_rows(rows))
+        let (picture, offset) = unstretch::unscale_with_offset(&frame.bottom_rows(rows))
             .ok_or(Unreadable::UnsupportedScale { scale })?;
+        *blocks = Some(offset);
         return at_1x(&picture.frame(), read);
     }
     if frame.height() <= frame.source() {
@@ -428,6 +439,8 @@ pub struct ExpBarReader {
     /// The percent alone can't check the table, so it goes by these, and by the table at a level
     /// not seen in full.
     checked: Vec<RowCheck>,
+    /// Where the pixel blocks started in the last frame read at a backing scale.
+    blocks: Option<(u32, u32)>,
 }
 
 /// What confirmed readings of the full field said of the EXP table at one level this session.
@@ -519,7 +532,8 @@ impl ExpBarReader {
     /// confirmed and checked this session, wherever the learned "EXP." label is found. They don't
     /// need the EXP field itself to read: a cursor over it leaves them readable.
     pub fn observe_hud(&mut self, frame: &Frame) -> HudReading {
-        at_1x(frame, |frame, nominal| {
+        let mut blocks = None;
+        let reading = at_1x_noting(frame, &mut blocks, |frame, nominal| {
             let (exp, placed) = self.observe_at(frame, nominal);
             let hp_mp = match placed {
                 None => Err(HpMpUnreadable::NoHud),
@@ -541,7 +555,18 @@ impl ExpBarReader {
         .unwrap_or_else(|why| HudReading {
             exp: Err(why),
             hp_mp: Err(HpMpUnreadable::NoHud),
-        })
+        });
+        self.blocks = blocks;
+        reading
+    }
+
+    /// Where the game's pixel blocks started in the last frame [`ExpBarReader::observe_hud`]
+    /// read at a backing scale: (x, y) in captured pixels ([`unstretch::block_offset`]). Found in
+    /// the HUD's rows, which a Mac draws as whole blocks, so a reader of another part of the same
+    /// frame can read its game pixels there without undoing the whole frame. `None` at 1x, or
+    /// when the HUD's rows weren't whole blocks.
+    pub fn block_offset(&self) -> Option<(u32, u32)> {
+        self.blocks
     }
 
     /// Whether the HP and MP numbers' slash has been learned this session.
@@ -1927,6 +1952,7 @@ pub(crate) mod test_support {
         }
     }
 
+    #[derive(Clone)]
     pub(crate) struct Canvas {
         pub(crate) width: u32,
         pub(crate) height: u32,
@@ -3849,6 +3875,8 @@ mod tests {
                 Calibration::Confirmed,
                 "{phase:?} {shift:?}"
             );
+            // Where the blocks start, for the meso reader to sample the rest of a whole frame.
+            assert_eq!(reader.block_offset(), Some(phase), "{phase:?} {shift:?}");
             // As soon as at 1x (`learns_the_digits_with_no_typing_as_exp_moves`).
             assert!(
                 GRIND.len() - confirmed < 10,

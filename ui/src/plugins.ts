@@ -105,7 +105,7 @@ export class PluginHost {
   view: ViewNode[] = [];
   /** The plugin's other pages, as it last drew them. */
   readonly pages: Partial<Record<PluginPage, ViewNode[]>> = {};
-  private readers: Readers = { notices: "off", waitingMesos: 0, hpMp: "off", hpMpMissing: null };
+  private readers: Readers = { hpMp: "off", hpMpMissing: null };
   /** The pictures the plugin's views name, kept for drawing them. */
   readonly pictures: NamePictures;
 
@@ -173,7 +173,7 @@ export class PluginHost {
     this.post({ type: "capture", state, atMs: Date.now() });
   }
 
-  /** How the pickup notices and the HP and MP numbers are being read; sent on to the plugin when any of it changes. */
+  /** How the HP and MP numbers and the meso total are being read; sent on to the plugin when any of it changes. */
   setReaders(readers: Readers): void {
     if (!readersChanged(this.readers, readers)) return;
     this.readers = readers;
@@ -305,8 +305,14 @@ function cellContent(cell: Cell, pictures: Pick<NamePictures, "get"> | null): No
   return value(cell);
 }
 
-function value(text: string | null): string {
-  return text ?? "?";
+/**
+ * A value as shown, "?" for none. A figure marked "≈" (an estimate) is read aloud as "about ...":
+ * screen readers say the sign as "almost equal to", or skip it and make an estimate sound exact.
+ */
+function value(text: string | null): Node | string {
+  if (text === null) return "?";
+  if (!text.startsWith("≈")) return text;
+  return h("span", {}, h("span", { attrs: { "aria-hidden": "true" } }, "≈"), h("span", { class: "visually-hidden" }, "about "), text.slice(1));
 }
 
 function renderNode(
@@ -435,7 +441,11 @@ function renderNode(
       const style = node.style ?? "secondary";
       return h(
         "button",
-        { class: style === "danger-link" ? "danger-link" : `button ${style}`, attrs: { type: "button", "data-key": key }, on: { click: press } },
+        {
+          class: style === "danger-link" ? "danger-link" : `button ${style}`,
+          attrs: { type: "button", "data-key": key, "aria-label": node.spoken },
+          on: { click: press },
+        },
         node.label,
       );
     }

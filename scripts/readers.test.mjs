@@ -7,10 +7,9 @@ import { readersChanged, readersOf } from "../ui/src/readers.ts";
 
 /** An engine status with the readers' fields that matter here. */
 const status = (over = {}) => ({
-  notices: "reading",
-  waitingMesos: 0,
   hpMpState: "reading",
   hpMpMissing: null,
+  mesos: null,
   ...over,
 });
 
@@ -27,10 +26,22 @@ test("a change to the HP and MP state alone reaches plugins", () => {
   assert.equal(readersChanged(readersOf(status({ hpMpState: "missing_digits", hpMpMissing: "07" })), waiting), true);
 });
 
+// Plugins hear how the meso total is read only from a host that reads it, so the Session Tracker
+// asks for the inventory only then. Fails if a state is lost on the way, or reading off still
+// reports one.
+test("the meso total's state reaches plugins while the engine reads it", () => {
+  for (const state of ["learning", "reading", "unsupported"]) {
+    assert.equal(readersOf(status({ mesos: state })).mesos, state);
+  }
+  assert.equal("mesos" in readersOf(status({ mesos: null })), false, "reading off");
+  assert.equal(readersChanged(readersOf(status({ mesos: "learning" })), readersOf(status({ mesos: "reading" }))), true);
+  assert.equal(readersChanged(readersOf(status({ mesos: "reading" })), readersOf(status({ mesos: null }))), true);
+});
+
 // Statuses arrive four times a second; plugins hear only changes. Fails if an unchanged status is
-// sent on, or a pickup-notice change is missed.
+// sent on, or a change is missed, including a field one side has and the other doesn't.
 test("only changes are sent on", () => {
   assert.equal(readersChanged(readersOf(status()), readersOf(status())), false);
-  assert.equal(readersChanged(readersOf(status()), readersOf(status({ waitingMesos: 2 }))), true);
-  assert.equal(readersChanged(readersOf(status()), readersOf(status({ notices: "blocked" }))), true);
+  assert.equal(readersChanged(readersOf(status()), readersOf(status({ hpMpState: "covered" }))), true);
+  assert.equal(readersChanged(readersOf(status()), { ...readersOf(status()), mesos: "reading" }), true);
 });

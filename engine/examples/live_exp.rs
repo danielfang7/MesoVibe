@@ -108,6 +108,10 @@ mod live {
         let (mut ticks, mut read, mut confirmed, mut events) = (0, 0, 0, 0);
         let (mut grabs, mut stale) = (0, 0);
         let mut tick_ms: Vec<f64> = Vec::new();
+        // Ticks that grabbed the whole game area (for the map's name or the meso total), kept
+        // apart: switching between a strip and a whole frame can make a capture backend wait
+        // for a frame of the new size, and that wait shows here.
+        let mut whole_ms: Vec<f64> = Vec::new();
         while started.elapsed() < Duration::from_secs(seconds) {
             let tick_started = Instant::now();
             let tick = runner.tick();
@@ -137,7 +141,10 @@ mod live {
             }
             if let Some(exp) = &tick.exp {
                 grabs += 1;
-                tick_ms.push(took);
+                match tick.whole {
+                    Some(_) => whole_ms.push(took),
+                    None => tick_ms.push(took),
+                }
                 let line = match exp {
                     Ok(r) => {
                         read += 1;
@@ -170,14 +177,32 @@ mod live {
             std::thread::sleep(interval.saturating_sub(tick_started.elapsed()));
         }
 
+        // A tick slower than the interval misses a reading slot.
+        let late = |ms: &[f64]| {
+            ms.iter()
+                .filter(|&&t| t > interval.as_secs_f64() * 1000.0)
+                .count()
+        };
+        let (late_strips, late_whole) = (late(&tick_ms), late(&whole_ms));
         tick_ms.sort_by(f64::total_cmp);
-        let median = tick_ms.get(tick_ms.len() / 2).copied().unwrap_or(0.0);
-        let slowest = tick_ms.last().copied().unwrap_or(0.0);
+        whole_ms.sort_by(f64::total_cmp);
+        let median = |ms: &[f64]| ms.get(ms.len() / 2).copied().unwrap_or(0.0);
+        let slowest = |ms: &[f64]| ms.last().copied().unwrap_or(0.0);
         println!(
             "\n{ticks} ticks: {read} read ({confirmed} confirmed), {events} events. \
-             {grabs} grabs, {stale} with no new frame. A capturing tick took {median:.1} ms \
-             (median), {slowest:.1} ms at most. Calibration: {:?}.",
+             {grabs} grabs, {stale} with no new frame. Calibration: {:?}.",
             runner.exp_reader().calibration()
+        );
+        println!(
+            "Strip ticks: {}, {:.1} ms median, {:.1} ms at most, {late_strips} slower than the \
+             interval. Whole-frame ticks: {}, {:.1} ms median, {:.1} ms at most, {late_whole} \
+             slower than the interval.",
+            tick_ms.len(),
+            median(&tick_ms),
+            slowest(&tick_ms),
+            whole_ms.len(),
+            median(&whole_ms),
+            slowest(&whole_ms),
         );
         if let Some(recorder) = recorder {
             match recorder.finish() {

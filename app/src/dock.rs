@@ -66,9 +66,18 @@ pub struct Summary {
     pub level: Option<u32>,
     pub pct_hundredths: Option<u32>,
     pub minutes_to_level: Option<f64>,
-    /// Mesos and the NPC value of items per hour, once loot is counted; absent from an older panel.
+    /// The Loot section's headline, mesos picked up per hour, once two meso totals were read;
+    /// absent from an older panel.
     #[serde(default)]
     pub loot_per_hour: Option<f64>,
+    /// When the session just ended stops waiting for sales to add to it, in epoch milliseconds:
+    /// the mini-HUD asks the player to sell at a shop by then. Left out when nothing waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_out_by: Option<f64>,
+    /// The session has no meso total read yet, or only an old one, though one can be read: the
+    /// mini-HUD asks for the inventory.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ask_for_mesos: bool,
 }
 
 /// The latest [`Summary`], for a mini-HUD that has just opened.
@@ -1092,8 +1101,9 @@ mod tests {
         );
     }
 
-    // The panel's loot/hr reaches the mini-HUD under the same `lootPerHour` key, and an older
-    // panel's summary without it still reads. Fails if the host drops or renames the field.
+    // The panel's mesos/hr reaches the mini-HUD under the same `lootPerHour` key, along with the
+    // close-out time and the ask for a meso reading, and an older panel's summary without them
+    // still reads. Fails if the host drops or renames any.
     #[test]
     fn the_summary_carries_loot_per_hour_to_the_mini_hud() {
         let from_panel = serde_json::json!({
@@ -1118,6 +1128,22 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(older.loot_per_hour, None);
+        assert!(!older.ask_for_mesos);
         assert_eq!(older.level, Some(42));
+
+        let asking = serde_json::json!({
+            "expPerHour": 48210.0,
+            "level": 42,
+            "pctHundredths": 6462,
+            "minutesToLevel": 51.0,
+            "lootPerHour": 21480.0,
+            "closeOutBy": 1800000000000.0,
+            "askForMesos": true,
+        });
+        let summary: Summary = serde_json::from_value(asking.clone()).unwrap();
+        assert_eq!(summary.close_out_by, Some(1_800_000_000_000.0));
+        assert!(summary.ask_for_mesos);
+        latest.set(Some(summary));
+        assert_eq!(serde_json::to_value(latest.get()).unwrap(), asking);
     }
 }

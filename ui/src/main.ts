@@ -228,15 +228,18 @@ function shell(initial: Settings): void {
   };
   /**
    * A button in the Session view. A past session's delete takes its own button away with its row,
-   * so focus goes on to the Undo its notice brings, as after End.
+   * and counting a held rise takes away its line, so focus goes on to the Undo the notice brings,
+   * as after End.
    */
   const viewAction = (action: string) => {
     if (action.startsWith("delete-session:")) focusUndo = { undo: "undo-delete", until: Date.now() + FOCUS_UNDO_MS };
+    if (action.startsWith("count-held:")) focusUndo = { undo: "undo-count", until: Date.now() + FOCUS_UNDO_MS };
     tracker.action(action);
   };
   /** What the strip last drew in its help row and notice, so a repaint with nothing new keeps them. */
   let paintedHelp = "";
   let paintedNotice: Panel["notice"] | undefined;
+  let paintedCloseOut = "";
   const noticeBody = (notice: NonNullable<Panel["notice"]>) => {
     if (notice.undo === undefined) return h("div", { class: "notice-body" }, h("span", {}, notice.text));
     const undo = notice.undo;
@@ -291,6 +294,7 @@ function shell(initial: Settings): void {
   const toGo = h("p", { class: "to-go" }, toGoNumber, h("span", { class: "to-go-unit" }, "EXP to go"));
   const noticeSlot = h("div", { class: "notice", attrs: { role: "status", "aria-live": "polite" } });
   const updateSlot = h("div", { class: "notice", attrs: { role: "status", "aria-live": "polite", "data-key": "strip-update" } });
+  const closeOutSlot = h("div", { class: "notice", attrs: { role: "status", "aria-live": "polite", "data-key": "strip-close-out" } });
   const helpSlot = h("div", { class: "help" });
   const heroRow = h(
     "div",
@@ -308,6 +312,7 @@ function shell(initial: Settings): void {
     progressSlot,
     toGo,
     noticeSlot,
+    closeOutSlot,
     updateSlot,
   );
   const view = h("main", { class: "view", attrs: { tabindex: "-1" } });
@@ -595,9 +600,8 @@ function shell(initial: Settings): void {
         heroBox.classList.add("arrive");
       }
     }
-    // End and Reset as the tracker offers them (nothing to end or reset before a gain or a
-    // pickup), and none while capture is blocked or the tracker has crashed, when a press could
-    // not reach it.
+    // End and Reset as the tracker offers them (nothing to end or reset before a gain), and none
+    // while capture is blocked or the tracker has crashed, when a press could not reach it.
     resetButton.hidden = !summary?.canReset;
     endButton.hidden = !summary?.canEnd;
     pauseButton.hidden = !summary?.canPause;
@@ -606,8 +610,8 @@ function shell(initial: Settings): void {
       paintedPaused = paused;
       pauseButton.replaceChildren(icon(paused ? "resume" : "pause"), paused ? "Resume" : "Pause");
       pauseButton.title = paused
-        ? "Resume the session: time, EXP and pickups count again"
-        : "Pause the session: time, EXP and pickups don't count until you resume";
+        ? "Resume the session: time and EXP count again"
+        : "Pause the session: time and EXP don't count until you resume";
     }
     sessionActions.hidden =
       panel.settings.safeMode ||
@@ -676,6 +680,15 @@ function shell(initial: Settings): void {
       }
     }
     if (undoHadFocus && undoButton === null) strip.focus({ preventScroll: true });
+    // After End, what's sold at a shop still counts for the session for a while: a fixed time,
+    // never a countdown, under the notice row and above the update line.
+    const due = summary?.closeOutBy ?? null;
+    const closeKey = due === null ? "" : String(due);
+    if (closeKey !== paintedCloseOut) {
+      paintedCloseOut = closeKey;
+      const by = due === null ? "" : new Date(due).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      replace(closeOutSlot, due === null ? null : h("div", { class: "notice-body" }, h("span", {}, `Sell your loot at a shop by ${by} to add it to this session.`)));
+    }
     paintUpdate();
   }
 
@@ -902,27 +915,6 @@ function shell(initial: Settings): void {
     );
   }
 
-  /** What What MesoVibe sees says about the pickup notices, in words the player can act on. */
-  function noticesLine(status: Status): string {
-    switch (status.notices) {
-      case "off":
-        return "Not reading: capture is paused.";
-      case "learning":
-        return "Learning the pickup text from your EXP lines.";
-      case "covered":
-        return "Covered for a moment: a few pickups may be missing. Nothing to do.";
-      case "blocked":
-        return "Covered often, or by a party list.";
-      case "not_found":
-        return "Notices not found while EXP went up. Keep the bottom of the game window in view.";
-      case "reading": {
-        const waiting = status.waitingMesos;
-        if (waiting === 0) return "Reading";
-        return `Reading · ${waiting} ${waiting === 1 ? "amount waits" : "amounts wait"} for a digit to be learned`;
-      }
-    }
-  }
-
   /** What What MesoVibe sees says about the HP and MP numbers: the values read, or why not. */
   function hpMpLine(status: Status): string {
     const r = status.hpMp;
@@ -960,6 +952,18 @@ function shell(initial: Settings): void {
     return namePicture({ gameText: key, label: "The map's name, as MesoVibe read it" }, tracker.pictures);
   }
 
+  /** Whether MesoVibe reads your mesos at this game size, and how. */
+  function mesosLine(state: NonNullable<Status["mesos"]>): string {
+    switch (state) {
+      case "learning":
+        return "Learning the digits of your meso total. Keep your inventory open a few seconds.";
+      case "unsupported":
+        return "Can't read your mesos at this game size yet.";
+      default:
+        return "Read whenever your inventory, an NPC shop or storage is open.";
+    }
+  }
+
   function seesView(): Node[] {
     const status = panel.status;
     const reading = status?.reading === true && !panel.settings.safeMode;
@@ -988,8 +992,10 @@ function shell(initial: Settings): void {
         reading && status
           ? h("div", { class: "reading-box", attrs: { "data-key": "sees-hp-mp" } }, h("span", { class: "label" }, "HP and MP"), h("span", status.hpMp ? { class: "number" } : {}, hpMpLine(status)))
           : null,
-        reading && status ? h("div", { class: "reading-box", attrs: { "data-key": "sees-notices" } }, h("span", { class: "label" }, "Pickup notices"), h("span", {}, noticesLine(status))) : null,
         reading && status ? h("div", { class: "reading-box", attrs: { "data-key": "sees-map" } }, h("span", { class: "label" }, "Map name"), mapLine(status)) : null,
+        reading && status?.mesos
+          ? h("div", { class: "reading-box", attrs: { "data-key": "sees-mesos" } }, h("span", { class: "label" }, "Mesos"), h("span", {}, mesosLine(status.mesos)))
+          : null,
         h(
           "dl",
           { class: "key-value" },
@@ -1003,7 +1009,7 @@ function shell(initial: Settings): void {
           h(
             "dd",
             {},
-            "Up to 4 times a second, the bottom strip. The whole game picture after a map change and every 30 seconds, for the map's name.",
+            "Up to 4 times a second, the bottom strip. The whole game picture about once a second for your mesos, and up to 4 times a second while your inventory, an NPC shop or storage is open; and after a map change and every 30 seconds, for the map's name.",
           ),
         ),
       ),
@@ -1013,8 +1019,8 @@ function shell(initial: Settings): void {
         h("h2", { class: "label" }, "Reads"),
         h("p", {}, "The EXP bar: your level, EXP and percent."),
         h("p", {}, "The HP and MP numbers next to the EXP bar."),
-        h("p", {}, "The pickup notices at the bottom right: the EXP, mesos and items you pick up."),
         h("p", {}, "The minimap's map name, as a picture."),
+        h("p", {}, "Your mesos, when your inventory, an NPC shop or storage is open: the mesos you carry, never the amount stored."),
         h("p", {}, "The chat box: whisper, party and friend lines, as pictures."),
         h("h2", { class: "label" }, "Never reads"),
         h("p", {}, "Your keyboard or mouse · the game's memory · the game's files · network traffic"),

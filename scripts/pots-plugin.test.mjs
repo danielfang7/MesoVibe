@@ -1,7 +1,7 @@
 // The Session Tracker's potion accounting and views, with a stand-in count source wired in
 // (scripts/fixtures/synthetic-count-source.mjs): uses per map, their cost, pot cost/hr, the
-// Potions section, the Loot tab's pots lines, saves and Undo. Also checks that the
-// plugin as shipped, with no source wired in, counts and shows no potions.
+// Potions section, the net after potions in Loot, the Loot tab's pots lines, saves and Undo. Also
+// checks that the plugin as shipped, with no source wired in, counts and shows no potions.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -14,16 +14,16 @@ const synthetic = await bundleTracker({ synthetic: true });
 const MEAT = 2010003;
 const T0 = 1_800_000_000_000;
 const NEEDED = 356_916;
-const READING = { notices: "reading", waitingMesos: 0, hpMp: "reading", hpMpMissing: null };
+/** A host reading the HP and MP numbers and the meso total. */
+const READING = { hpMp: "reading", hpMpMissing: null, mesos: "reading" };
 
 const event = (e, atMs) => ({ type: "event", atMs, event: e });
 const exp = (value, atMs) =>
   event({ type: "ExpChanged", level: 42, exp: value, pct_hundredths: Math.round((value * 10_000) / NEEDED), needed: NEEDED }, atMs);
-const mesos = (amount, atMs) => event({ type: "MesosGained", amount, late: false, shaped: false }, atMs);
+/** A trusted meso total read in the inventory. */
+const total = (amount, atMs) => event({ type: "MesoChanged", total: amount, source: "inventory" }, atMs);
 const map = (key, atMs) => event({ type: "MapChanged", map_key: key }, atMs);
 const hpMp = (hp, mp, atMs) => event({ type: "HpMpChanged", hp, max_hp: 1386, mp, max_mp: 1140, continuous: true }, atMs);
-const lemonPickup = (count, atMs) =>
-  event({ type: "ItemGained", item_key: "0000000000000000", count, tab: "Use", item_id: null, name: "Lemon", sell: 15 }, atMs);
 const action = (name, atMs) => ({ type: "action", action: name, atMs });
 const tick = (atMs) => ({ type: "tick", atMs });
 
@@ -45,8 +45,8 @@ const renders = (sent) => sent.filter((m) => m.type === "render").length;
 const every = (start, step, end) => Array.from({ length: Math.floor((end - start) / step) + 1 }, (_, i) => start + i * step);
 
 /**
- * A plugin reading on map "aaaa" for `seconds`: EXP and 50 mesos every 10 s, the first gain at
- * 10 s, and an HP and MP reading every second: HP 660 at the seconds in `meat` and 500 otherwise,
+ * A plugin reading on map "aaaa" for `seconds`: EXP every 10 s, the first gain at 10 s, and an HP
+ * and MP reading every second: HP 660 at the seconds in `meat` and 500 otherwise,
  * MP 650 at the seconds in `lemon` and 500 otherwise, so each listed second is one potion. `also`
  * sends more at a given second.
  */
@@ -58,20 +58,20 @@ function play({ seconds = 600, meat = [], lemon = [], readers = READING, bundle 
   for (let s = 1; s <= seconds; s++) {
     const at = T0 + s * 1000;
     plugin.send(tick(at));
-    if (s % 10 === 0) {
-      plugin.send(exp(230_000 + (s / 10) * 63, at));
-      plugin.send(mesos(50, at));
-    }
+    if (s % 10 === 0) plugin.send(exp(230_000 + (s / 10) * 63, at));
     for (const message of also[s]?.(at) ?? []) plugin.send(message);
     plugin.send(hpMp(meat.includes(s) ? 660 : 500, lemon.includes(s) ? 650 : 500, at));
   }
   return { ...plugin, now: T0 + seconds * 1000 };
 }
 
-/** Ten minutes with a Meat every minute and a Lemon every two: 18K loot/hr, 9.3K pot cost/hr. */
+/** Ten minutes with a Meat every minute and a Lemon every two: 9.3K pot cost/hr. */
 const grind = (more = {}) => play({ meat: every(30, 60, 600), lemon: every(60, 120, 600), ...more });
 
-/** A past session as saved: ten minutes on "aaaa", 18K loot/hr, and ten Meat if `pots`. */
+/**
+ * A past session as saved: ten minutes on "aaaa", the mesos its pickup notices counted (an older
+ * build's), and ten Meat if `pots`.
+ */
 const pastSession = (startedAtMs, { pots = true, mesos = 3_000 } = {}) => ({
   startedAtMs,
   endedAtMs: startedAtMs + 600_000,
@@ -109,8 +109,10 @@ test("as shipped, no potions are counted or shown", () => {
   const { send, sent, now } = play({ bundle: shipped, meat: every(30, 60, 600) });
   assert.equal(potions(sent), undefined);
   send(action("end", now));
-  assert.deepEqual(lootTable(sent).columns, ["Map", "Loot gained", "Loot/hr"]);
-  assert.deepEqual(Object.keys(allTime(sent)), ["Played", "Mesos", "Loot/hr"]);
+  assert.deepEqual(lootTable(sent).columns, ["Map", "Mesos/hr", "Profit"]);
+  assert.deepEqual(section(sent, "All time", "loot").children, [
+    { kind: "empty", text: "Mesos you pick up and sell add up here, over every session." },
+  ]);
   const past = last(sent, "save").data.history[0];
   assert.equal(past.maps[0].h, undefined);
   assert.equal(past.maps[0].u, undefined);
@@ -136,8 +138,19 @@ test("potions cost their shop price, and pot cost/hr is over the time they were 
     variant: "muted",
   });
   const order = sent.filter((m) => m.type === "render" && m.page === undefined).at(-1).view.map((node) => node.title);
-  assert.deepEqual(order.slice(-3), ["Items", "Potions", "Past sessions"], "Potions sits after Items");
+  assert.deepEqual(order.slice(-3), ["Loot", "Potions", "Past sessions"], "Potions sits after Loot");
   assert.equal(allTime(sent)["Pot cost"], "1.55K", "All time counts the running session's potions");
+});
+
+// With potions counted and two meso totals read, Loot gives the net after potions: Mesos/hr less
+// pot cost/hr. Fails if the net is missing once both rates are known, or takes the wrong cost.
+test("Loot gives mesos/hr after potions once both are known", () => {
+  const net = (sent) => section(sent, "Loot").children.find((n) => n.kind === "text" && n.text.includes("on potions"))?.text;
+  const { sent } = grind({ also: { 60: (at) => [total(1_000_000, at)], 600: (at) => [total(1_018_000, at)] } });
+  // 18,000 mesos over nine minutes of play is 120K/hr, less 9.3K/hr on potions.
+  assert.equal(net(sent), "111K/hr after 9.3K/hr on potions");
+  const unread = grind();
+  assert.equal(net(unread.sent), undefined, "no net without a mesos rate");
 });
 
 // Pot cost/hr is one stat in every state, with a visible line saying why there's no rate yet.
@@ -150,7 +163,7 @@ test("the headline is pot cost/hr in every state, with or without loot/hr", () =
   const unread = play({ seconds: 40, meat: [20], readers: { ...READING, hpMp: "learning" } });
   assert.deepEqual(potLines(unread.sent), ["Learning your HP and MP digits from your EXP gains."]);
   assert.deepEqual(potTable(early.sent).details, [["+160 HP each"]], "no uses/hr before a minute either");
-  const learning = grind({ readers: { ...READING, notices: "learning" } });
+  const learning = grind({ readers: { ...READING, mesos: "learning" } });
   assert.deepEqual(headline(learning.sent), { kind: "stat", label: "Pot cost/hr", value: "9.3K", detail: "9,300 mesos on potions per hour" });
   assert.equal(potions(learning.sent).children[1].kind, "table", "no waiting line once there's a rate");
   const none = play({ seconds: 120 });
@@ -178,26 +191,13 @@ test("maybe uses make pot cost a lower bound, and heals from others say so", () 
 });
 
 // Time when heals from others may have hidden potions is saved with the session after the heals
-// stop, for a net that comes back with inventory mesos. Fails if that time isn't kept, or the
-// healing line stays after the heals stop.
+// stop. Fails if that time isn't kept, or the healing line stays after the heals stop.
 test("heal time from others is kept after the heals stop", () => {
   const heal = (on) => (at) => [event({ type: "TestHealing", resource: "hp", on }, at)];
   const { send, sent, now } = grind({ also: { 100: heal(true), 200: heal(false) } });
   assert.deepEqual(potLines(sent), [], "the healing line goes when the heals stop");
   send(action("end", now));
   assert.equal(last(sent, "save").data.history[0].maps[0].hm, 100_000);
-});
-
-// A Lemon picked up this session is worth what a shop pays for it, not what a shop charges. Fails if a pickup with no item ID
-// isn't matched by name, every use is priced as picked up, or more are than were drunk.
-test("a potion picked up this session costs its NPC sell price", () => {
-  const { sent } = play({ lemon: [60, 180], also: { 100: (at) => [lemonPickup(1, at)] } });
-  assert.deepEqual(potTable(sent).rows, [["Lemon", "×2", "165"]]);
-  assert.deepEqual(potTable(sent).details, [["+150 MP each · 12/hr", "1 picked up, at NPC sell price"]]);
-  // Picking up more than were drunk prices only the ones drunk.
-  const more = play({ lemon: [60], also: { 30: (at) => [lemonPickup(3, at)] } });
-  assert.deepEqual(potTable(more.sent).rows, [["Lemon", "×1", "15"]]);
-  assert.deepEqual(potTable(more.sent).details, [["+150 MP each · 6/hr", "1 picked up, at NPC sell price"]]);
 });
 
 // Each HP and MP reading state says why potions aren't counted, and the reading line comes before
@@ -308,8 +308,8 @@ test("an ended session shows its potions in the Loot tab", () => {
   assert.deepEqual(past.ps, { [MEAT]: "rises", 2010005: "rises" });
   assert.equal(potions(sent), undefined, "the next session's Potions section waits for its first gain");
   const table = lootTable(sent);
-  assert.deepEqual(table.columns, ["Map", "Loot gained", "Loot/hr"]);
-  assert.deepEqual(table.rows[0].slice(1), ["3K", "18K"]);
+  assert.deepEqual(table.columns, ["Map", "Mesos/hr", "Profit"]);
+  assert.deepEqual(table.rows[0].slice(1), ["—", "—"], "no meso total read, nothing sold");
   assert.equal(table.details[0].at(-1), "Pots 1.55K: Meat ×10, Lemon ×5");
   const figures = allTime(sent);
   assert.equal(figures["Pots counted for"], "10m");
@@ -344,7 +344,7 @@ test("sessions without potion counts have no pots line and stay out of All time'
   assert.equal(details[0].at(-1), "Pots 800: Meat ×10");
   assert.ok(!details[1].some((line) => line.startsWith("Pots")), "the old session has no pots line");
   const figures = allTime(sent);
-  assert.equal(figures["Loot/hr"], "189K", "loot/hr covers both");
+  assert.equal(figures["From pickup notices"], "≈63K", "both sessions' notice mesos, apart");
   assert.equal(figures["Pots counted for"], "10m");
   assert.equal(figures["Pot cost"], "800");
 });
@@ -492,7 +492,7 @@ test("MesoVibe 0.7.0 reads a save with potion fields", () => {
   const saved = JSON.parse(JSON.stringify(last(sent, "save").data));
   const old = load070(saved);
   assert.equal(old.history.length, 1);
-  assert.equal(old.history[0].maps[0].m, 3_000);
+  assert.equal(old.history[0].maps[0].x, 3_780);
   assert.equal(old.history[0].maps[0].u, undefined, "0.7.0 drops what it doesn't know");
   const back = startWith(JSON.parse(JSON.stringify(old)));
   assert.equal(lootTable(back.sent).rows.length, 1);

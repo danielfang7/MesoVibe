@@ -4,13 +4,15 @@ import type { Readers } from "@mesovibe/sdk";
 
 import type { Status } from "./ipc.js";
 
-/** The readers' states in a status, as plugins receive them. */
+/**
+ * The readers' states in a status, as plugins receive them. `mesos` is there only while the engine
+ * reads the meso total: with reading off, nothing asks the player to open the inventory.
+ */
 export function readersOf(status: Status): Readers {
   return {
-    notices: status.notices,
-    waitingMesos: status.waitingMesos,
     hpMp: status.hpMpState,
     hpMpMissing: status.hpMpMissing,
+    ...(status.mesos === null ? {} : { mesos: status.mesos }),
   };
 }
 

@@ -91,13 +91,14 @@ function paint(hud: Hud): void {
   );
   const loot = summary?.lootPerHour ?? null;
   if (loot !== null && (issue === null || issue.tone === "live")) {
-    // Mesos and items' NPC value per hour, the number atop the Session view's Items.
+    // Mesos/hr, the same figure as the Session view's Loot headline: mesos picked up over the play
+    // time between two meso totals read in the inventory or a shop.
     rows.push(
       h(
         "p",
-        { class: "hud-line hud-loot", attrs: { title: `${formatDigits(loot)} mesos and NPC item value per hour` } },
+        { class: "hud-line hud-loot", attrs: { title: `${formatDigits(loot)} mesos picked up per hour` } },
         h("span", { class: "number" }, formatCompact(loot)),
-        " loot/hr",
+        " mesos/hr",
       ),
     );
   }
@@ -113,9 +114,19 @@ function paint(hud: Hud): void {
       ),
     );
   }
-  // A hint takes the progress row: the card has room for four rows, loot/hr's included.
-  if (issue?.hint !== undefined) {
-    rows.push(h("p", { class: "hud-line" }, issue.hint));
+  // A hint takes the progress row: the card has room for four rows, mesos/hr's included. What's
+  // wrong comes first; then, for players who never see the panel, selling after End, and a meso
+  // total when the session has none or only an old one.
+  const closeOutBy = summary?.closeOutBy ?? null;
+  const hint =
+    issue?.hint ??
+    (closeOutBy !== null
+      ? `Sell at a shop by ${new Date(closeOutBy).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
+      : summary?.askForMesos
+        ? "Open inventory for mesos/hr"
+        : undefined);
+  if (hint !== undefined) {
+    rows.push(h("p", { class: "hud-line" }, hint));
   } else if (summary?.pctHundredths != null) {
     rows.push(
       h(

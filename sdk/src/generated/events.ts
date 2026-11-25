@@ -2,7 +2,7 @@
 // `MESOVIBE_UPDATE_SDK=1 cargo test -p mesovibe-engine events`.
 
 /** The event schema version these types describe. */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
  * Events the engine emits after a confident read (below the confidence
@@ -11,12 +11,16 @@ export const SCHEMA_VERSION = 7;
  * As JSON, an event is an object whose `type` names the variant, with its fields beside it.
  *
  * The events of one engine tick always come in this order: the EXP bar's (`ExpChanged`, then
- * `LevelUp`), the pickup notices' (`MesosGained`, `ItemGained`, `PartyBonus`, `NoticesMissed`),
- * `MapChanged`, then `HpMpChanged`. So a plugin comparing two HP and MP readings sees a level-up
- * or a map change the engine read between them first. The numbers can read while the EXP field
- * can't (a cursor over it): a level-up then shows as a higher max HP or MP before `LevelUp`.
+ * `LevelUp`), `MapChanged`, `HpMpChanged`, then `MesoChanged`. So a plugin comparing two HP and
+ * MP readings sees a level-up or a map change the engine read between them first. The numbers
+ * can read while the EXP field can't (a cursor over it): a level-up then shows as a higher max
+ * HP or MP before `LevelUp`.
+ *
+ * The pickup notices' events (`MesosGained`, `ItemGained`, `PartyBonus`, `NoticesMissed`) stay
+ * in the schema, but the engine doesn't send them: the notices miss pickups on busy maps, so
+ * mesos come from `MesoChanged` instead.
  */
-export type Event = { "type": "ExpChanged", level: number | null, exp: number, exp_shown: boolean, pct_hundredths: number, needed: number | null, } | { "type": "LevelUp", level: number, } | { "type": "MesosGained", amount: number, late: boolean, shaped: boolean, } | { "type": "ItemGained", item_key: string, count: number, tab: "Equip" | "Use" | "Setup" | "Etc" | "Cash" | null, item_id: number | null, name: string | null, sell: number | null, sell_min: number | null, sell_max: number | null, } | { "type": "PartyBonus", amount: number, } | { "type": "MapChanged", map_key: string | null, } | { "type": "NoticesMissed", reason: "unaligned" | "unreadable" | "not_learned" | "exp_short" | "exp_over" | "lost" | "dropped" | "shapes_wrong", } | { "type": "HpMpChanged", hp: number, max_hp: number, mp: number, max_mp: number, continuous: boolean, } | { "type": "Unreadable", recognizer: string, };
+export type Event = { "type": "ExpChanged", level: number | null, exp: number, exp_shown: boolean, pct_hundredths: number, needed: number | null, } | { "type": "LevelUp", level: number, } | { "type": "MesosGained", amount: number, late: boolean, shaped: boolean, } | { "type": "ItemGained", item_key: string, count: number, tab: "Equip" | "Use" | "Setup" | "Etc" | "Cash" | null, item_id: number | null, name: string | null, sell: number | null, sell_min: number | null, sell_max: number | null, } | { "type": "PartyBonus", amount: number, } | { "type": "MapChanged", map_key: string | null, } | { "type": "NoticesMissed", reason: "unaligned" | "unreadable" | "not_learned" | "exp_short" | "exp_over" | "lost" | "dropped" | "shapes_wrong", } | { "type": "HpMpChanged", hp: number, max_hp: number, mp: number, max_mp: number, continuous: boolean, } | { "type": "MesoChanged", total: number, source: "inventory" | "shop" | "storage", } | { "type": "Unreadable", recognizer: string, };
 
 
 /**
