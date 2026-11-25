@@ -467,6 +467,21 @@ test("only the totals after a storage visit's first move the balance without cou
   assert.equal(loot.validLedger(JSON.parse(JSON.stringify(ledger))).ls, "storage", "where the last total came from is saved");
 });
 
+// A storage visit after grinding counts what was picked up since the last one. Fails if the mesos
+// picked up between two storage visits are taken for a transfer.
+test("a second storage visit after grinding counts what was picked up between", () => {
+  const plugin = play();
+  const t = twoReadings(plugin);
+  plugin.send(map("cccc", t));
+  plugin.send(total(1_050_000, t + 1000, "storage"));
+  plugin.send(total(1_000_000, t + 2000, "storage"));
+  plugin.send(map("aaaa", t + 3000));
+  const later = grind(plugin, t + 3000, 600, 240_000);
+  plugin.send(map("cccc", later));
+  plugin.send(total(1_040_000, later + 1000, "storage"));
+  assert.equal(lootFigures(plugin.sent)["Mesos picked up"], "90,000");
+});
+
 // After End, storage moves during the close-out count for nothing, and a sale after them counts.
 // Fails if a withdrawal in the close-out counts as sold.
 test("a storage withdrawal during the close-out counts for nothing", () => {
@@ -978,6 +993,70 @@ test("a held rise in the session just ended can be counted from the Loot tab, wi
   assert.equal(notices(played.sent).at(-1).text, "+5M is held out of Profit again.");
   assert.equal(lootTable(played.sent).rows[0][2], "100K");
   assert.ok(countIt() !== undefined, "held again in the ended session");
+});
+
+// A held rise counted while nothing is sold yet shows in Profit. Fails if Count it changes nothing
+// the Loot section shows.
+test("Count it with nothing sold shows the rise in Profit", () => {
+  const played = play({ seconds: 120 });
+  played.send(total(1_000_000, played.now));
+  const t = grind(played, played.now, 600);
+  played.send(total(6_000_000, t));
+  assert.equal(lootFigures(played.sent).Profit, undefined, "no Profit before a sale or a count");
+  const button = section(played.sent, "Loot").children.find((n) => n.kind === "button");
+  played.send(action(button.action, t + 1_000));
+  assert.equal(lootFigures(played.sent).Profit, "5,000,000");
+});
+
+// After its 30-minute close-out, the ended session's held rise stays uncounted. Fails if Count it
+// still shows, or a late press of it counts the rise.
+test("a held rise of the session just ended can't be counted after its close-out", () => {
+  const played = play({ seconds: 120 });
+  played.send(total(1_000_000, played.now));
+  const t = grind(played, played.now, 600);
+  played.send(total(6_000_000, t));
+  played.send(action("end", t));
+  played.send({ type: "tick", atMs: t + 11_000 });
+  const countIt = () => section(played.sent, "Past sessions", "loot").children.find((n) => n.kind === "button" && n.label === "Count it");
+  const press = countIt().action;
+  played.send({ type: "tick", atMs: t + 31 * MIN });
+  assert.equal(countIt(), undefined);
+  played.send(action(press, t + 31 * MIN + 1_000));
+  played.send({ type: "tick", atMs: t + 32 * MIN });
+  const past = last(played.sent, "save").data.history[0].lg;
+  assert.deepEqual([past.ct, past.ho.length], [0, 1]);
+});
+
+// A sale after End never takes the place of another Undo still open. Fails if a sale read just
+// after Count it leaves that count without its Undo.
+test("a sale after End keeps the Undo of a count just made", () => {
+  const played = play({ seconds: 120 });
+  played.send(total(1_000_000, played.now));
+  const t = grind(played, played.now, 600);
+  played.send(total(6_000_000, t));
+  played.send(action("end", t));
+  played.send({ type: "tick", atMs: t + 11_000 });
+  played.send(total(6_000_000, t + 20_000, "shop"));
+  const countIt = section(played.sent, "Past sessions", "loot").children.find((n) => n.kind === "button" && n.label === "Count it");
+  played.send(action(countIt.action, t + 30_000));
+  played.send(total(6_100_000, t + 32_000, "shop"));
+  assert.equal(notices(played.sent).at(-1).undo, undefined, "the sale says what it added, without an Undo");
+  played.send(action("undo-count", t + 34_000));
+  assert.equal(notices(played.sent).at(-1).text, "+5M is held out of Profit again.");
+});
+
+// Another character after End adds nothing to the ended session. Fails if the second character's
+// total counts as a sale, a spend or a held rise in the first one's session.
+test("another character after End adds nothing to the ended session", () => {
+  const played = play({ seconds: 120 });
+  const t = twoReadings(played);
+  played.send(action("end", t));
+  played.send({ type: "tick", atMs: t + 11_000 });
+  played.send(event({ type: "ExpChanged", level: 20, exp: 100, pct_hundredths: 10, needed: 50_000 }, t + 20_000));
+  played.send(total(30_000, t + 25_000));
+  played.send({ type: "tick", atMs: t + 40_000 });
+  const past = last(played.sent, "save").data.history[0].lg;
+  assert.deepEqual([past.so, past.sp, past.ho.length], [0, 0, 0]);
 });
 
 // The mini-HUD asks for the inventory while the session has no total read or only one older than

@@ -726,7 +726,7 @@ definePlugin({
       const played = [...since.maps];
       const grinding = (key: string | null | undefined) => ((session.maps ?? []).find((m) => m.k === key)?.x ?? 0) > 0;
       const one = played.length === 1 && grinding(played[0]) ? played[0] : undefined;
-      return { playMs: session.activeMs, map: one, away: since.paused };
+      return { playMs: session.activeMs, map: one, grinding: played.some(grinding), away: since.paused };
     };
     /**
      * Counts a total read while the session just ended still counts its sales (its close-out).
@@ -739,6 +739,12 @@ definePlugin({
       const change = closeOut(last, total, source, atMs);
       persist(atMs, 0);
       if (change?.kind === "sold" && last.lg !== undefined) {
+        // Never over another Undo still open (a delete's, a count's): it would be lost. The sale
+        // still says what it added, without an Undo of its own.
+        if (undo !== null && atMs <= undo.until && undo.kind !== "closeout") {
+          context.notice(saleNotice(change.amount, last.lg));
+          return true;
+        }
         undo = { kind: "closeout", session, history, allTime, until: atMs + UNDO_MS, sold: change.amount, past: last.startedAtMs };
         context.notice(saleNotice(change.amount, last.lg), "undo-closeout");
         return true;
@@ -808,8 +814,17 @@ definePlugin({
             expShown: event.exp_shown,
           };
           const change = observe(session, reading, atMs);
-          // Another character or a restarted game: the meso ledger starts a new segment too.
-          if (change.kind === "baseline" && before !== null) restartSegment(session);
+          // Another character or a restarted game: the meso ledger starts a new segment too. After
+          // End, the ended session stops counting sales and the total read before is forgotten:
+          // another character's mesos are neither.
+          if (change.kind === "baseline" && before !== null) {
+            restartSegment(session);
+            if (firstGain) {
+              if (history[0] !== undefined) stopCloseOut(history[0]);
+              closeLater = false;
+              pre = null;
+            }
+          }
           // A session starts at its first gain: a wait before it, such as after End or Reset,
           // keeps at most LEAD_MS, and its level and losses start from the reading before the gain.
           if (firstGain && session.expGained > 0) {

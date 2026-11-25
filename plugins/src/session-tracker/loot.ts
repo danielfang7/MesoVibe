@@ -369,6 +369,8 @@ export interface SinceReading {
    * read), or undefined when several were or it was a town, so the change goes to no map.
    */
   map: string | null | undefined;
+  /** A map where the session gained EXP was played since the last reading. */
+  grinding?: boolean;
   /**
    * The session was paused since the last reading. A rise then is what a shop paid, never mesos
    * picked up. Time in a town isn't away: a potion run passes through one.
@@ -417,10 +419,11 @@ function rebase(ledger: Ledger, total: number, atMs: number, playMs: number, sou
 /**
  * Whether a total moves mesos to or from storage: a storage total after another one, read while the
  * window stayed open. The change up to a visit's first storage total counts by the usual rules,
- * since nothing has moved yet when the window opens.
+ * since nothing has moved yet when the window opens. Grinding since the last total means the
+ * window was closed in between: storage is only ever in a town, so this is another visit.
  */
-function transfer(ledger: Ledger, source: MesoSource): boolean {
-  return source === "storage" && ledger.ls === "storage";
+function transfer(ledger: Ledger, source: MesoSource, grinding = false): boolean {
+  return source === "storage" && ledger.ls === "storage" && !grinding;
 }
 
 /**
@@ -438,7 +441,7 @@ export function addReading(loot: LootFields, total: number, source: MesoSource, 
   }
   const played = Math.max(0, since.playMs - ledger.bp);
   const delta = total - before;
-  if (transfer(ledger, source)) {
+  if (transfer(ledger, source, since.grinding)) {
     ledger.pt += played;
     rebase(ledger, total, atMs, since.playMs, source);
     return { kind: "moved", amount: delta };

@@ -100,18 +100,20 @@ export function lootSection(session: LootFields, context: LootContext): ViewNode
   if (line !== null) children.push(line);
 
   const sold = ledger !== undefined && ledger.so > 0;
+  // Profit once a shop has paid, or a held rise was counted into it (so Count it shows).
+  const profit = sold || (ledger !== undefined && ledger.ct > 0);
   const rows: [string, Cell][] = [];
   if (ledger !== undefined && ledger.n >= 2) rows.push(["Mesos picked up", formatDigits(ledger.pu)]);
   rows.push(["Loot sold", sold ? formatDigits(ledger.so) : "—"]);
-  if (sold) rows.push(["Profit", formatDigits(ledgerProfit(ledger))]);
+  if (profit) rows.push(["Profit", formatDigits(ledgerProfit(ledger))]);
   if (ledger !== undefined && ledger.sp > 0) rows.push(["Spent", formatDigits(ledger.sp)]);
   children.push({ kind: "keyValue", items: rows });
 
   if (!sold && context.readers.mesos !== undefined && context.readers.mesos !== "unsupported") {
     children.push(muted("Sell your loot at a shop to see what it's worth. Sales up to 30 minutes after End count for this session."));
   }
-  // Net after potions: from Profit/hr once loot is sold, from Mesos/hr until then.
-  const base = sold ? profitRate(ledger) : rate;
+  // Net after potions: from Profit/hr once Profit shows, from Mesos/hr until then.
+  const base = profit ? profitRate(ledger) : rate;
   if (context.potsPerHour !== null && base !== null) {
     children.push(muted(`${signed(base - context.potsPerHour)}/hr after ${formatCompact(context.potsPerHour)}/hr on potions`));
   }
