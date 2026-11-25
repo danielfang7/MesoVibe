@@ -535,9 +535,10 @@ test("a rise across a pause counts as sold", () => {
 });
 
 // A potion run: potions bought in a town's shop, a walk back through a map with no kills, then
-// more grinding. Fails if time in a town turns the mesos picked up after it into loot sold.
+// more grinding, in one session (pausing and ending on their own turned off, or the run over a
+// minute would end it). Fails if time in a town turns the mesos picked up after it into loot sold.
 test("mesos picked up after a potion run through town still count as picked up", () => {
-  const played = play({ seconds: 120 });
+  const played = play({ seconds: 120, saved: { version: 1, history: [], current: null, auto: false } });
   let t = twoReadings(played);
   played.send(map("cccc", t));
   for (let s = 1; s <= 40; s++) {

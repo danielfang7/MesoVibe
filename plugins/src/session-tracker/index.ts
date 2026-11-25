@@ -5,7 +5,9 @@
  * and draws the Session view and the Loot tab. Pause stops the session counting until Resume. End
  * saves the session to Past sessions, Reset throws it away and a past session's delete button
  * removes it, each one click with Undo; deleting all history asks first. For 30 minutes after End,
- * what's sold at a shop still counts for the session just ended.
+ * what's sold at a shop still counts for the session just ended. Unless the player turns it off in
+ * Settings, a session pauses on its own after a minute with no EXP on its map, from the last kill,
+ * and the next kill resumes it; a minute off that map with no EXP ends it, from when they left.
  */
 
 import { definePlugin, formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";
@@ -38,6 +40,7 @@ import {
   sessionItems,
   start as startLoot,
   stopCloseOut,
+  takeTime,
   totalMesos,
   uncountHeld,
   uncountSale,
@@ -56,6 +59,7 @@ import {
   advance,
   compare,
   finish,
+  MAX_TICK_MS,
   MIN_RATE_MS,
   minutesToLevel,
   newSession,
@@ -63,7 +67,7 @@ import {
   recentRate,
   sessionRate,
 } from "./session.js";
-import type { PastSession, SessionState } from "./session.js";
+import type { PastSession, Reading, SessionState } from "./session.js";
 
 /** How long End, Reset, deleting a past session and counting a held rise can be undone. */
 const UNDO_MS = 10_000;
@@ -85,6 +89,11 @@ const EXP_SAVE_EVERY_MS = 5_000;
  * play.
  */
 const LEAD_MS = 60_000;
+/**
+ * How long with no EXP pauses a session on its map, and how long off that map with no EXP ends it:
+ * a kill takes seconds, so a minute without one is the player away or done.
+ */
+const AUTO_MS = 60_000;
 /** Past sessions kept. */
 const MAX_HISTORY = 500;
 /** Past sessions shown in the table, and with "Show more". */
@@ -93,9 +102,10 @@ const SHOWN_MORE = 50;
 
 /**
  * A session as kept, running or past: its EXP and, since loot tracking, its loot by map. `paused`:
- * the player paused it, so no time, EXP or loot counts until Resume.
+ * no time, EXP or loot counts until Resume. `idle`: the session paused on its own (no EXP for a
+ * minute on its map), and its next gain resumes it.
  */
-type Session = SessionState & LootFields & { paused?: true };
+type Session = SessionState & LootFields & { paused?: true; idle?: true };
 type Past = PastSession & LootFields;
 
 /**
@@ -121,6 +131,26 @@ interface Saved {
   catalog?: Catalog;
   /** What the count source learned (which potion each quick-slot icon is), as it saved it. */
   slots?: unknown;
+  /** False: the player turned off pausing and ending sessions on their own. */
+  auto?: false;
+}
+
+/**
+ * The stretch since the session's last EXP gain, to pause or end it on its own: the gain's map, the
+ * capture time since (paused or not), the play time counted since and where it went, and when the
+ * player left that map.
+ */
+interface Quiet {
+  map: string | null | undefined;
+  /** When the gain was. */
+  atMs: number;
+  ms: number;
+  played: number;
+  steps: { map: string | null | undefined; ms: number; pots: PotTime | undefined }[];
+  /** The play time a pause keeps after the gain: about one kill's worth. */
+  keepMs: number;
+  /** When the player left the gain's map: the capture and play time since the gain, and the clock. */
+  left: { ms: number; played: number; atMs: number } | null;
 }
 
 /**
@@ -194,7 +224,27 @@ function load(saved: unknown): Saved {
         : { mesos: 0, playedMs: 0 },
     catalog: validCatalog(value.catalog),
     ...(value.slots === undefined ? {} : { slots: value.slots }),
+    ...(value.auto === false ? { auto: false } : {}),
   };
+}
+
+/** An `ExpChanged` as the session's arithmetic takes it. */
+function readingOf(event: { level: number | null; exp: number; pct_hundredths: number; needed: number | null; exp_shown: boolean }): Reading {
+  return { level: event.level, exp: event.exp, pctHundredths: event.pct_hundredths, needed: event.needed, expShown: event.exp_shown };
+}
+
+/**
+ * About one kill's worth of play: the shorter middle gap between the gains of the last five
+ * minutes, at most AUTO_MS. A pause keeps it after the last gain, so a player who kills a slow mob
+ * a minute apart isn't left with EXP and no time.
+ */
+function killTime(recent: [number, number][]): number {
+  const times = recent.map(([at]) => at);
+  const gaps = times
+    .slice(1)
+    .map((at, i) => at - (times[i] ?? at))
+    .sort((a, b) => a - b);
+  return Math.min(gaps[Math.floor((gaps.length - 1) / 2)] ?? 0, AUTO_MS);
 }
 
 /** The session is worth saving at End: it gained EXP, or it held loot for five minutes. */
@@ -211,6 +261,8 @@ function canEnd(session: Session, atMs: number): boolean {
 interface StripExtras {
   closeOutBy: number | null;
   askForMesos: boolean;
+  /** Pausing and ending on their own is on. */
+  autoPause: boolean;
 }
 
 function summary(session: Session, atMs: number, extras: StripExtras): SessionSummary {
@@ -230,6 +282,8 @@ function summary(session: Session, atMs: number, extras: StripExtras): SessionSu
     canReset: session.expGained > 0 || hasLoot(session.held),
     lootOnly: session.expGained <= 0 && hasLoot(session.held),
     paused: session.paused === true,
+    autoPaused: session.idle === true,
+    autoPause: extras.autoPause,
     canPause: session.expGained > 0 || session.paused === true,
     closeOutBy: extras.closeOutBy,
     askForMesos: extras.askForMesos,
@@ -671,13 +725,27 @@ definePlugin({
     let savedAt = Number.NEGATIVE_INFINITY;
     // An EXP change the 5 s cap held back; the next tick past the cap saves it.
     let unsaved = false;
+    /** Pausing and ending sessions on their own (Settings): on unless the player turned it off. */
+    let auto = saved.auto !== false;
+    /** The stretch since the running session's last gain; null before one, or after End or Reset. */
+    let quiet: Quiet | null = null;
+    /** Starts the stretch afresh from now, on the map the player is on. */
+    const quietFrom = (atMs: number): Quiet => ({ map, atMs, ms: 0, played: 0, steps: [], keepMs: killTime(session.recent), left: null });
 
     /** Saves when `gapMs` has passed since the last save (0: now). */
     const persist = (atMs: number, gapMs = SAVE_EVERY_MS) => {
       if (atMs - savedAt < gapMs) return;
       const running = session.last === null && session.held === undefined ? null : session;
       const slots = source?.saved?.();
-      context.save({ version: 1, history, current: running, allTime, catalog, ...(slots === undefined ? {} : { slots }) } satisfies Saved);
+      context.save({
+        version: 1,
+        history,
+        current: running,
+        allTime,
+        catalog,
+        ...(slots === undefined ? {} : { slots }),
+        ...(auto ? {} : { auto: false }),
+      } satisfies Saved);
       savedAt = atMs;
       unsaved = false;
     };
@@ -697,7 +765,7 @@ definePlugin({
       return ledger === undefined || ledger.b === null || ledgerStale(ledger, atMs);
     };
     const show = (atMs: number) => {
-      context.setSummary(summary(session, atMs, { closeOutBy: closeOutBy(atMs), askForMesos: askForMesos(atMs) }));
+      context.setSummary(summary(session, atMs, { closeOutBy: closeOutBy(atMs), askForMesos: askForMesos(atMs), autoPause: auto }));
       const potions = source === null || !potsShown() ? null : potionsSection(session, catalog, source, readers, atMs);
       const potsPerHour = source === null || !potsShown() ? null : potRate(potTotals(session, catalog));
       context.render(view(session, history, capture, map, readers, atMs, showMore, potions, potsPerHour));
@@ -727,14 +795,88 @@ definePlugin({
         // Nothing to undo: the source's own state is all it would have touched.
       }
     };
-    /** Moves the session's clock, giving the time played to the map the player is on. */
+    /**
+     * Moves the session's clock, giving the time played to the map the player is on, and noting it
+     * in the stretch since the last gain, which a pause or an end on its own can take back.
+     */
     const tick = (atMs: number) => {
       const before = session.activeMs;
+      const captured = capture === "capturing" ? Math.min(Math.max(0, atMs - session.lastAtMs), MAX_TICK_MS) : 0;
+      const pots = potTime(atMs);
       advance(session, atMs, capture === "capturing" && session.paused !== true);
-      addTime(session, map, session.activeMs - before, session.last?.level ?? null, potTime(atMs));
+      const step = session.activeMs - before;
+      addTime(session, map, step, session.last?.level ?? null, pots);
+      if (quiet !== null) {
+        quiet.ms += captured;
+        quiet.played += step;
+        const last = quiet.steps.at(-1);
+        const same = last !== undefined && last.map === map && last.pots?.counting === pots?.counting && last.pots?.healing === pots?.healing;
+        if (step > 0 && same) last.ms += step;
+        else if (step > 0) quiet.steps.push({ map, ms: step, pots });
+      }
       if (session.expGained > 0) {
         if (map !== undefined && session.activeMs > before) since.maps.add(map);
-        if (session.paused) since.paused = true;
+        // A pause on its own isn't a trip to a shop: the player stayed on the map.
+        if (session.paused && !session.idle) since.paused = true;
+      }
+    };
+    /**
+     * Takes back the play time since the last gain past its first `keepMs`, from the session and
+     * each map it went to, newest first.
+     */
+    const takeBack = (keepMs: number) => {
+      if (quiet === null || quiet.played <= keepMs) return;
+      let over = quiet.played - keepMs;
+      session.activeMs -= over;
+      quiet.played = keepMs;
+      for (let step = quiet.steps.at(-1); over > 0 && step !== undefined; step = quiet.steps.at(-1)) {
+        const take = Math.min(step.ms, over);
+        takeTime(session, step.map, take, step.pots);
+        step.ms -= take;
+        over -= take;
+        if (step.ms <= 0) quiet.steps.pop();
+      }
+      // A meso total read in that time measured play that no longer counts.
+      if (session.lg !== undefined && session.lg.bp > session.activeMs) session.lg.bp = session.activeMs;
+    };
+    /** Saves the session to Past sessions and starts the next one at the next gain; `why` opens its notice. */
+    const endSession = (atMs: number, why = "") => {
+      const past = finishWithLoot(session, atMs, catalog);
+      if (past === null) return;
+      const said = recap(session);
+      remember("end", atMs);
+      // Sales after End count for the session where the meso total can be read.
+      const reads = readers.mesos === "reading" || readers.mesos === "learning" || (past.lg?.b ?? null) !== null;
+      waitForCloseOut(past, atMs, reads);
+      pushHistory(past);
+      session = newSession(atMs, session.last);
+      quiet = null;
+      forgetHeld();
+      readSaid = false;
+      pre = null;
+      persist(atMs, 0);
+      context.notice(`${why}${said}`, "undo-end");
+    };
+    /**
+     * Pauses the session after a minute with no EXP on its map, from about a kill after the last
+     * gain; ends it after a minute off that map with no EXP, from when the player left. Never a
+     * session the player paused: that's theirs to resume.
+     */
+    const quietCheck = (atMs: number) => {
+      if (!auto || quiet === null || session.expGained <= 0) return;
+      if (session.paused && !session.idle) return;
+      const left = quiet.left;
+      if (left !== null) {
+        if (quiet.ms - left.ms < AUTO_MS) return;
+        takeBack(left.played);
+        // The session ends when its time stopped: when the player left, or when it paused.
+        session.lastAtMs = Math.min(session.lastAtMs, session.idle ? quiet.atMs + quiet.played : left.atMs);
+        endSession(atMs, "Ended when you left the map. ");
+      } else if (!session.paused && quiet.ms >= AUTO_MS) {
+        takeBack(quiet.keepMs);
+        session.paused = true;
+        session.idle = true;
+        persist(atMs, 0);
       }
     };
     /** Starts afresh what's noted between meso totals, from the map the player is on. */
@@ -817,16 +959,15 @@ definePlugin({
         } catch {
           uses = [];
         }
+        // A session paused on its own resumes at its next gain, which counts.
+        if (event.type === "ExpChanged" && session.idle && compare(session.last, readingOf(event)).kind === "gain") {
+          delete session.paused;
+          delete session.idle;
+        }
         if (event.type === "ExpChanged" && session.paused) {
           // Paused, the bar is still followed: the strip's level stays true, and Resume counts only
           // what's gained after it. A level-up still counts, so the session's levels add up.
-          const reading = {
-            level: event.level,
-            exp: event.exp,
-            pctHundredths: event.pct_hundredths,
-            needed: event.needed,
-            expShown: event.exp_shown,
-          };
+          const reading = readingOf(event);
           const change = compare(session.last, reading);
           if (change.kind === "gain" && change.levelUp) session.levelUps += 1;
           if (change.kind === "gain") leftStorage(session);
@@ -838,14 +979,7 @@ definePlugin({
           const firstGain = session.expGained <= 0;
           const before = session.last;
           const gainedBefore = session.expGained;
-          const reading = {
-            level: event.level,
-            exp: event.exp,
-            pctHundredths: event.pct_hundredths,
-            needed: event.needed,
-            expShown: event.exp_shown,
-          };
-          const change = observe(session, reading, atMs);
+          const change = observe(session, readingOf(event), atMs);
           // Another character or a restarted game: the meso ledger starts a new segment too. After
           // End, the ended session stops counting sales and the total read before is forgotten:
           // another character's mesos are neither.
@@ -880,6 +1014,8 @@ definePlugin({
             resetSince();
           }
           if (session.expGained > gainedBefore) leftStorage(session);
+          // The stretch since the last gain starts again here, on this map.
+          if (change.kind === "gain") quiet = quietFrom(atMs);
           addExp(session, map, session.expGained - gainedBefore, event.level);
           // Saved on EXP changes too, at most every 5 s, so a close loses at most that.
           unsaved = true;
@@ -887,6 +1023,14 @@ definePlugin({
           show(atMs);
         } else if (event.type === "MapChanged") {
           map = event.map_key;
+          // Leaving is from one map to another, both names read: a name that can't be read (the
+          // minimap closed) says nothing, and one read only now is where the gain was.
+          const to = event.map_key;
+          if (quiet !== null && to !== null) {
+            if (quiet.map === null || quiet.map === undefined) quiet.map = to;
+            else if (to === quiet.map) quiet.left = null;
+            else if (quiet.left === null) quiet.left = { ms: quiet.ms, played: quiet.played, atMs };
+          }
           show(atMs);
         } else if (event.type === "MesoChanged") {
           // Counted while paused too: a change across a pause is what a shop paid or what was spent.
@@ -918,6 +1062,7 @@ definePlugin({
       },
       onTick(atMs) {
         tick(atMs);
+        quietCheck(atMs);
         if (undo !== null && atMs > undo.until) undo = null;
         // A sale read while another Undo was open says what it added now that the Undo has passed.
         if (saleLater > 0 && undo === null) {
@@ -942,27 +1087,13 @@ definePlugin({
       onAction(action, atMs) {
         tick(atMs);
         if (action === "end") {
-          // Saves the session to Past sessions and starts the next one at the next gain.
-          const past = finishWithLoot(session, atMs, catalog);
-          if (past !== null) {
-            const said = recap(session);
-            remember("end", atMs);
-            // Sales after End count for the session where the meso total can be read.
-            const reads = readers.mesos === "reading" || readers.mesos === "learning" || (past.lg?.b ?? null) !== null;
-            waitForCloseOut(past, atMs, reads);
-            pushHistory(past);
-            session = newSession(atMs, session.last);
-            forgetHeld();
-            readSaid = false;
-            pre = null;
-            persist(atMs, 0);
-            context.notice(said, "undo-end");
-          }
+          endSession(atMs);
         } else if (action === "reset") {
           // Throws the session's numbers away and starts counting afresh; history is untouched.
           if (session.expGained > 0 || session.held !== undefined) {
             remember("reset", atMs);
             session = newSession(atMs, session.last);
+            quiet = null;
             forgetHeld();
             readSaid = false;
             pre = null;
@@ -976,12 +1107,19 @@ definePlugin({
             persist(atMs, 0);
           }
         } else if (action === "resume") {
-          // Potions held back for a name before Pause or while paused aren't counted after it.
+          // Potions held back for a name before Pause or while paused aren't counted after it; a
+          // pause on its own kept the player on the map, so theirs still count. The stretch with no
+          // EXP starts again from the press.
           if (session.paused) {
+            if (!session.idle) forgetHeld();
             delete session.paused;
-            forgetHeld();
+            delete session.idle;
+            quiet = quietFrom(atMs);
             persist(atMs, 0);
           }
+        } else if (action === "auto-on" || action === "auto-off") {
+          auto = action === "auto-on";
+          persist(atMs, 0);
         } else if (action.startsWith(DELETE_SESSION)) {
           // One past session, by when it started: one click, with Undo.
           const startedAtMs = Number(action.slice(DELETE_SESSION.length));
@@ -1004,6 +1142,8 @@ definePlugin({
               ({ session, history, allTime } = undo);
               mergeLoot(session, sinceEnd);
               session.lastAtMs = atMs;
+              // Its stretch since the last gain is unknown: the next gain starts one.
+              quiet = null;
               // The session runs again: nothing waits to close out, and its meso notes start afresh.
               closeLater = false;
               pre = null;

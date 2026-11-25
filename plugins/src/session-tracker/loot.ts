@@ -182,6 +182,28 @@ export function addTime(loot: LootFields, map: string | null | undefined, step: 
   if (level !== null) entry.e = level;
 }
 
+/**
+ * Takes back play time `addTime` gave `map`: the session paused or ended on its own, from a time
+ * already counted. Never below zero.
+ */
+export function takeTime(loot: LootFields, map: string | null | undefined, step: number, pots?: PotTime): void {
+  if (step <= 0) return;
+  if (map === undefined) {
+    if (loot.unplaced !== undefined) loot.unplaced = Math.max(0, loot.unplaced - step);
+    return;
+  }
+  const entry = (loot.maps ?? []).find((m) => m.k === map);
+  if (entry === undefined) return;
+  entry.p = Math.max(0, entry.p - step);
+  if (pots?.counting) {
+    entry.h = Math.max(0, (entry.h ?? 0) - step);
+    if (pots.healing) entry.hm = Math.max(0, (entry.hm ?? 0) - step);
+  }
+  // A map only walked through after the last kill, its time all taken back, was never played.
+  const empty = entry.p === 0 && entry.x === 0 && entry.m === 0 && entry.u === undefined && entry.fm === undefined && entry.ft === undefined;
+  if (empty) loot.maps = (loot.maps ?? []).filter((m) => m !== entry);
+}
+
 /** Adds an EXP gain on `map`. */
 export function addExp(loot: LootFields, map: string | null | undefined, amount: number, level: number | null): void {
   if (map === undefined) return;

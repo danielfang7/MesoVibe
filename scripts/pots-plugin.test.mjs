@@ -51,9 +51,9 @@ const every = (start, step, end) => Array.from({ length: Math.floor((end - start
  * 500 otherwise, so each listed second is one potion. The first gain comes at once, or with `lead`
  * at 10 s, after a lead that is no potion time. `also` sends more at a given second.
  */
-function play({ seconds = 600, meat = [], lemon = [], readers = READING, bundle = synthetic, also = {}, lead = false } = {}) {
+function play({ seconds = 600, meat = [], lemon = [], readers = READING, bundle = synthetic, also = {}, lead = false, saved = null } = {}) {
   const plugin = run(bundle);
-  plugin.send({ type: "start", saved: null, atMs: T0, capture: "capturing", readers });
+  plugin.send({ type: "start", saved, atMs: T0, capture: "capturing", readers });
   plugin.send(map("aaaa", T0));
   plugin.send(exp(lead ? 230_000 : 229_990, T0));
   if (!lead) plugin.send(exp(230_000, T0));
@@ -239,10 +239,10 @@ test("HP and MP readings redraw nothing until a potion is counted", () => {
 });
 
 // Pot cost/hr's time grows only while the HP and MP numbers are read: five minutes at full HP
-// count five minutes, and no other reading state or a pause adds any. Fails if that time thins
-// out pot cost/hr.
+// count five minutes, and no other reading state or a pause adds any. Pausing on its own is off,
+// as these minutes have no EXP. Fails if that time thins out pot cost/hr.
 test("potions' read time grows only while HP and MP are read and the session isn't paused", () => {
-  const { send, sent, now } = play({ seconds: 300 });
+  const { send, sent, now } = play({ seconds: 300, saved: { version: 1, history: [], current: null, auto: false } });
   // Ten seconds in each state that isn't reading, a minute in all.
   const states = ["covered", "learning", "not_found", "missing_digits", "off", "covered"];
   states.forEach((hpMp, i) => {

@@ -160,8 +160,18 @@ export interface SessionSummary {
   canReset: boolean;
   /** The session counted loot but no EXP yet: the strip says "Pickups only so far". */
   lootOnly: boolean;
-  /** The player paused the session: no time, EXP or loot counts until Resume. */
+  /** The session is paused: no time, EXP or loot counts until Resume. */
   paused: boolean;
+  /**
+   * The session paused on its own, after a minute with no EXP on its map, and its next gain resumes
+   * it. False for a pause the player pressed.
+   */
+  autoPaused: boolean;
+  /**
+   * The player's setting: a session pauses on its own after a minute with no EXP, and ends a minute
+   * after they leave its map with no EXP. On unless turned off.
+   */
+  autoPause: boolean;
   /** Pause is offered (Resume, while paused): the session has started. */
   canPause: boolean;
   /**
