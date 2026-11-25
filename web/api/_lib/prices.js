@@ -27,8 +27,9 @@ export const HISTORY_DAYS = 30;
 const KEEP_DAYS = HISTORY_DAYS + 1;
 /**
  * A list that grows or shrinks by more than this since the last good run is held, not used: a
- * broken answer often comes back short. If the next run lists within HELD_MATCH of the held size,
- * the change lasted and is accepted, so a real change in Cozy's catalog never stops the job.
+ * broken answer often comes back short. If the next run's list, from a later Cozy update, is within
+ * HELD_MATCH of the held size, the change lasted and is accepted, so a real change in Cozy's
+ * catalog never stops the job.
  */
 const MAX_COUNT_CHANGE = 0.2;
 const HELD_MATCH = 0.05;
@@ -120,24 +121,38 @@ export async function refresh({ request, env, fetchImpl, store, now, log = conso
   }
 
   const state = readState(await store.read(STATE_PATH, { fresh: true }), log);
+  // Every world is checked on every run, so each one's hold reflects this run's answer.
   const fetched = {};
+  const holds = {};
+  const problems = [];
   for (const world of WORLDS) {
     const kept = state.worlds[world] ?? {};
     const usual = await getCozy(fetchImpl, key, "/usual-prices", world);
     const trends = usual.problem ? null : await getCozy(fetchImpl, key, "/trends", world);
     const shape = usual.problem ?? checkUsualShape(usual.body, world);
-    const size = shape ? null : checkSize(usual.body.items.length, kept.count, kept.held);
-    const problem = shape ?? size ?? trends.problem ?? checkTrends(trends.body, world);
-    if (problem) {
-      log.error(`price job: ${world}: ${problem}; keeping the last good file`);
-      if (size) {
-        // Hold this size: if the next run lists the same, the change lasted and is accepted.
-        state.worlds[world] = { ...kept, held: usual.body.items.length };
-        await store.write(STATE_PATH, JSON.stringify(state));
-      }
-      return json(502, { error: problem, world });
+    const size = shape ? { hold: null, problem: null } : checkSize(usual.body, kept);
+    holds[world] = size.hold;
+    if (size.confirmed) {
+      log.warn?.(`price job: ${world}: accepting a lasting change to ${usual.body.items.length} items`);
     }
-    fetched[world] = { usual: usual.body, trends: trends.body };
+    const problem = shape ?? size.problem ?? trends.problem ?? checkTrends(trends.body, world);
+    if (problem) problems.push({ world, problem });
+    else fetched[world] = { usual: usual.body, trends: trends.body };
+  }
+  if (problems.length > 0) {
+    for (const { world, problem } of problems) {
+      log.error(`price job: ${world}: ${problem}; keeping the last good file`);
+    }
+    // Only the holds change: a hold lasts exactly until the next run, which confirms or clears it.
+    const changed = WORLDS.some((world) => JSON.stringify(holds[world]) !== JSON.stringify(state.worlds[world]?.held ?? null));
+    if (changed) {
+      for (const world of WORLDS) {
+        const { held, ...rest } = state.worlds[world] ?? {};
+        state.worlds[world] = holds[world] ? { ...rest, held: holds[world] } : rest;
+      }
+      await store.write(STATE_PATH, JSON.stringify(state));
+    }
+    return json(502, { error: problems[0].problem, world: problems[0].world });
   }
 
   const nextState = { version: 1, worlds: {} };
@@ -180,11 +195,7 @@ async function getCozy(fetchImpl, key, path, world) {
   }
 }
 
-/** Why a usual-prices answer can't be used, or null when it's good: its shape, then its size. */
-export function checkUsual(body, world, lastCount, heldCount) {
-  return checkUsualShape(body, world) ?? checkSize(body.items.length, lastCount, heldCount);
-}
-
+/** Why a usual-prices answer can't be used because of its shape, or null when it's good. */
 function checkUsualShape(body, world) {
   const common = checkCommon(body, world);
   if (common) return common;
@@ -198,14 +209,21 @@ function checkUsualShape(body, world) {
 }
 
 /**
- * Why a list of `count` items can't be used against the last good run's count, or null. A size
- * the previous run already listed (within HELD_MATCH of `heldCount`) is accepted: it lasted.
+ * The size check against the last good run's count (`kept.count`). A list more than 20% off is
+ * held: `hold` is what this run leaves for the next one, and null clears any hold. It's accepted
+ * (`confirmed`) when the run right before held a size within 5% of it from an earlier Cozy update,
+ * so a repeated run, which sees the same update again, never confirms a hold by itself.
  */
-function checkSize(count, lastCount, heldCount) {
+function checkSize(body, kept) {
+  const count = body.items.length;
   const change = (from) => Math.abs(count - from) / from;
-  if (!lastCount || change(lastCount) <= MAX_COUNT_CHANGE) return null;
-  if (heldCount && change(heldCount) <= HELD_MATCH) return null;
-  return `usual prices list ${count} items, against ${lastCount} last time`;
+  if (!kept.count || change(kept.count) <= MAX_COUNT_CHANGE) return { hold: null, problem: null };
+  const hold = { count, updated_at: body.updated_at };
+  const held = kept.held;
+  const confirmed =
+    Number.isInteger(held?.count) && change(held.count) <= HELD_MATCH && Date.parse(body.updated_at) > Date.parse(held.updated_at);
+  if (confirmed) return { hold, problem: null, confirmed };
+  return { hold, problem: `usual prices list ${count} items, against ${kept.count} last time` };
 }
 
 /** Why a trends answer can't be used, or null when it's good. */

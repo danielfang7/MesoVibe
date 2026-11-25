@@ -9,7 +9,6 @@ import {
   FILE_PATH,
   REFRESH_SCHEDULE,
   STATE_PATH,
-  checkUsual,
   refresh,
   secondsUntilNextBuild,
   serve,
@@ -48,11 +47,11 @@ const item = (game_id, usual, extra = {}) => ({
   ...extra,
 });
 
-function usualPrices(items, world = "windia") {
+function usualPrices(items, world = "windia", updated_at = UPDATED) {
   return {
     source: "Cozy Markets",
     world,
-    updated_at: UPDATED,
+    updated_at,
     next_update_at: "2026-11-25T12:00:00.000Z",
     count: items.length,
     items,
@@ -211,27 +210,50 @@ for (const [name, override] of Object.entries(broken)) {
   });
 }
 
-// A real change in the size of Cozy's list must not stop the job for good: the first run with the
-// new size is held, and the next run with the same size is accepted. Fails if a lasting change is
-// rejected forever, or a one-off jump is accepted at once.
-test("a lasting change in the size of Cozy's list is accepted once two runs agree", async () => {
-  const sized = (n) => Array.from({ length: n }, (_, i) => item(1_000_000 + i, 100 + i));
-  const answers = (n) => ({ ...goodAnswers(), "/usual-prices": usualPrices(sized(n)) });
-  const store = memoryStore();
-  assert.equal((await run(answers(100), store)).response.status, 200);
+// Windia lists of `n` items from Cozy's update at `hour` UTC that day; Zenith stays good.
+const sized = (n) => Array.from({ length: n }, (_, i) => item(1_000_000 + i, 100 + i));
+const update = (hour) => `2026-11-25T${String(hour).padStart(2, "0")}:08:59.000Z`;
+const listing = (n, hour, extra = {}) => ({ ...goodAnswers(), "/usual-prices": usualPrices(sized(n), "windia", update(hour)), ...extra });
+const held = (store) => JSON.parse(store.data.get(STATE_PATH)).worlds.windia.held;
 
-  assert.equal((await run(answers(130), store)).response.status, 502, "a jump of 30% is held, not used");
-  assert.equal(JSON.parse(store.data.get(STATE_PATH)).worlds.windia.held, 130);
+// A real change in the size of Cozy's list must not stop the job for good: the first update with
+// the new size is held, and the next update with the same size is accepted. Fails if a lasting
+// change is rejected forever, or a one-off jump is accepted at once.
+test("a lasting change in the size of Cozy's list is accepted once the next update agrees", async () => {
+  const store = memoryStore();
+  assert.equal((await run(listing(100, 0), store)).response.status, 200);
+
+  assert.equal((await run(listing(130, 6), store)).response.status, 502, "a jump of 30% is held, not used");
+  assert.deepEqual(held(store), { count: 130, updated_at: update(6) });
   const before = store.data.get(FILE_PATH);
 
-  assert.equal((await run(answers(128), store)).response.status, 200, "the next run within 5% of the held size is accepted");
+  assert.equal((await run(listing(128, 12), store)).response.status, 200, "the next update within 5% of the held size is accepted");
   assert.notEqual(store.data.get(FILE_PATH), before);
-  const windia = JSON.parse(store.data.get(STATE_PATH)).worlds.windia;
-  assert.equal(windia.count, 128);
-  assert.equal(windia.held, undefined, "an accepted size clears the hold");
+  assert.equal(JSON.parse(store.data.get(STATE_PATH)).worlds.windia.count, 128);
+  assert.equal(held(store), undefined, "an accepted size clears the hold");
+});
 
-  assert.equal((await run(answers(60), store)).response.status, 502, "a one-off drop is held");
-  assert.equal((await run(answers(127), store)).response.status, 200, "a normal list afterwards builds as usual");
+// A repeated run (Vercel can deliver a scheduled run twice; the owner can retry by hand) sees the
+// same Cozy update again. Fails if that repeat confirms a held size and publishes a half-empty file.
+test("a repeat of the same Cozy update never confirms a held size", async () => {
+  const store = memoryStore();
+  await run(listing(100, 0), store);
+  const good = store.data.get(FILE_PATH);
+  assert.equal((await run(listing(50, 6), store)).response.status, 502);
+  assert.equal((await run(listing(50, 6), store)).response.status, 502, "the same update again is still held");
+  assert.equal(store.data.get(FILE_PATH), good, "the half-empty list was never published");
+});
+
+// A hold lasts only until the next run. Fails if a run that saw a normal list but failed for another
+// reason leaves the hold in place, letting two broken lists hours apart agree.
+test("a run that sees a normal-size list clears the hold even when it fails", async () => {
+  const store = memoryStore();
+  await run(listing(100, 0), store);
+  await run(listing(50, 6), store);
+  const badTrends = { "/trends": { ...trends(), movers: {} } };
+  assert.equal((await run(listing(100, 12, badTrends), store)).response.status, 502);
+  assert.equal(held(store), undefined, "a normal list clears the hold");
+  assert.equal((await run(listing(50, 18), store)).response.status, 502, "a later short list is held again, not accepted");
 });
 
 // Only Vercel's scheduler, signed with CRON_SECRET, may make the job call Cozy. Fails if an
@@ -327,13 +349,16 @@ test("vercel.json runs the job on the schedule the code expects", async () => {
 
 // The two limits are "more than": a list that moves by exactly 20%, or exactly 5% priced 0, still
 // builds. Fails if either check turns strict and a normal day blocks the file.
-test("the count and zero-price limits allow exactly 20% and 5%", () => {
+test("the count and zero-price limits allow exactly 20% and 5%", async () => {
   const many = (n, zero = 0) => Array.from({ length: n }, (_, i) => item(1_000_000 + i, i < zero ? 0 : 100));
-  assert.equal(checkUsual(usualPrices(many(120)), "windia", 100), null);
-  assert.equal(checkUsual(usualPrices(many(80)), "windia", 100), null);
-  assert.match(checkUsual(usualPrices(many(121)), "windia", 100), /121 items/);
-  assert.equal(checkUsual(usualPrices(many(100, 5)), "windia", null), null);
-  assert.match(checkUsual(usualPrices(many(100, 6)), "windia", null), /6 of 100/);
+  const after100 = () => memoryStore({ [STATE_PATH]: JSON.stringify({ version: 1, worlds: { windia: { count: 100, days: {} } } }) });
+  const status = async (items, store = after100()) =>
+    (await run({ ...goodAnswers(), "/usual-prices": usualPrices(items) }, store)).response.status;
+  assert.equal(await status(many(120)), 200);
+  assert.equal(await status(many(80)), 200);
+  assert.equal(await status(many(121)), 502);
+  assert.equal(await status(many(100, 5), memoryStore()), 200);
+  assert.equal(await status(many(100, 6), memoryStore()), 502);
 });
 
 // HEAD, other methods and the app's revalidation forms. Fails if HEAD sends the body, a POST is
