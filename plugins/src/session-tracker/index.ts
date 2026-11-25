@@ -25,6 +25,7 @@ import {
   ledgerProfit,
   ledgerStale,
   longest,
+  leftStorage,
   mapRates,
   MESOS_RATE_MS,
   mergeLoot,
@@ -482,7 +483,8 @@ function lootView(
       lines.push("Estimated from pickup notices");
     } else {
       const rate = ledger === undefined ? null : mesosRate(ledger);
-      const profit = ledger !== undefined && ledger.so > 0 ? formatCompact(ledgerProfit(ledger)) : "—";
+      const counted = ledger !== undefined && (ledger.so > 0 || ledger.ct > 0);
+      const profit = counted ? formatCompact(ledgerProfit(ledger)) : "—";
       cells = [map, rate === null ? "—" : formatCompact(rate), profit];
       if (ledger !== undefined && ledger.sp > 0) lines.push(`Spent ${formatCompact(ledger.sp)}`);
     }
@@ -656,6 +658,8 @@ definePlugin({
     let pre: { total: number; source: MesoSource; atMs: number } | null = null;
     /** A total read during End's Undo window, counted in the close-out once that window has passed. */
     let closeLater = false;
+    /** What sales after End added while another Undo was open, said once it has passed. */
+    let saleLater = 0;
     /** What happened since the session's last meso total: the maps played, and any pause. */
     let since = { maps: new Set<string | null>(), paused: false };
     /** "Mesos read" was said for this session, or the wait before it. */
@@ -726,7 +730,7 @@ definePlugin({
       const played = [...since.maps];
       const grinding = (key: string | null | undefined) => ((session.maps ?? []).find((m) => m.k === key)?.x ?? 0) > 0;
       const one = played.length === 1 && grinding(played[0]) ? played[0] : undefined;
-      return { playMs: session.activeMs, map: one, grinding: played.some(grinding), away: since.paused };
+      return { playMs: session.activeMs, map: one, away: since.paused };
     };
     /**
      * Counts a total read while the session just ended still counts its sales (its close-out).
@@ -739,10 +743,10 @@ definePlugin({
       const change = closeOut(last, total, source, atMs);
       persist(atMs, 0);
       if (change?.kind === "sold" && last.lg !== undefined) {
-        // Never over another Undo still open (a delete's, a count's): it would be lost. The sale
-        // still says what it added, without an Undo of its own.
+        // Never over another Undo still open (a delete's, a count's): the panel shows one notice,
+        // so its Undo would be lost. The sale says what it added once that Undo has passed.
         if (undo !== null && atMs <= undo.until && undo.kind !== "closeout") {
-          context.notice(saleNotice(change.amount, last.lg));
+          saleLater += change.amount;
           return true;
         }
         undo = { kind: "closeout", session, history, allTime, until: atMs + UNDO_MS, sold: change.amount, past: last.startedAtMs };
@@ -798,6 +802,7 @@ definePlugin({
           };
           const change = compare(session.last, reading);
           if (change.kind === "gain" && change.levelUp) session.levelUps += 1;
+          if (change.kind === "gain") leftStorage(session);
           // Another character or a restarted game: the meso ledger starts a new segment too.
           if (change.kind === "baseline" && session.last !== null) restartSegment(session);
           session.last = reading;
@@ -817,13 +822,14 @@ definePlugin({
           // Another character or a restarted game: the meso ledger starts a new segment too. After
           // End, the ended session stops counting sales and the total read before is forgotten:
           // another character's mesos are neither.
-          if (change.kind === "baseline" && before !== null) {
-            restartSegment(session);
-            if (firstGain) {
-              if (history[0] !== undefined) stopCloseOut(history[0]);
-              closeLater = false;
-              pre = null;
-            }
+          if (change.kind === "baseline" && before !== null) restartSegment(session);
+          // After End, a reading that can't follow the last one (a jump, or less EXP at the same
+          // level: another character, or rarely a death) ends the ended session's sales window and
+          // forgets the total read before, so another character's mesos are never counted there.
+          if (firstGain && before !== null && (change.kind === "baseline" || change.kind === "loss")) {
+            if (history[0] !== undefined) stopCloseOut(history[0]);
+            closeLater = false;
+            pre = null;
           }
           // A session starts at its first gain: a wait before it, such as after End or Reset,
           // keeps at most LEAD_MS, and its level and losses start from the reading before the gain.
@@ -842,6 +848,7 @@ definePlugin({
             pre = null;
             resetSince();
           }
+          if (session.expGained > gainedBefore) leftStorage(session);
           addExp(session, map, session.expGained - gainedBefore, event.level);
           // Saved on EXP changes too, at most every 5 s, so a close loses at most that.
           unsaved = true;
@@ -879,6 +886,12 @@ definePlugin({
       onTick(atMs) {
         tick(atMs);
         if (undo !== null && atMs > undo.until) undo = null;
+        // A sale read while another Undo was open says what it added now that the Undo has passed.
+        if (saleLater > 0 && undo === null) {
+          const ledger = history[0]?.lg;
+          if (ledger !== undefined) context.notice(saleNotice(saleLater, ledger));
+          saleLater = 0;
+        }
         // A total read during End's Undo window goes to the close-out once Undo has passed.
         if (closeLater && undo === null) {
           closeLater = false;

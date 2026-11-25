@@ -79,9 +79,9 @@ function stateLine(ledger: Ledger | undefined, rate: number | null, context: Loo
  * The Session view's Loot section, or null before the session's first EXP gain, and from a host
  * that doesn't read the meso total while none was read. Its headline is Mesos/hr ("?" before two
  * totals), with a line under it saying how fresh it is or how to start; then Mesos picked up, Loot
- * sold, Profit once a shop has paid, and Spent (shown apart, never taken from Profit); a line
- * about selling while nothing is sold; the net after potions once they're counted; and any rise
- * held out of Profit with a button to count it.
+ * sold, Profit once a shop has paid or a held rise was counted, and Spent (shown apart, never
+ * taken from Profit); a line about selling while nothing is sold; the net after potions once
+ * they're counted; and any rise held out of Profit with a button to count it.
  */
 export function lootSection(session: LootFields, context: LootContext): ViewNode | null {
   const ledger = session.lg;
