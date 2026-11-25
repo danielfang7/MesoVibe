@@ -7,16 +7,26 @@
 // - { type: "TestHealing", resource, on }: heals from others on or off for "hp" or "mp".
 // - { type: "TestSlot", item, count }: that many uses of the potion counted from its quick slot.
 // - { type: "TestAmounts", item, amounts }: the amounts the potion is counted at from now on.
+// - { type: "TestFault" }: the next event makes the source throw, as a faulty source might.
 
 const MEAT = 2010003;
 const LEMON = 2010005;
 
 export function wiredSource() {
   let last = null;
+  let fault = false;
   const healing = { hp: false, mp: false };
   const amounts = { [MEAT]: [160], [LEMON]: [150] };
   return {
     onEvent(event) {
+      if (event.type === "TestFault") {
+        fault = true;
+        return [];
+      }
+      if (fault) {
+        fault = false;
+        throw new Error("a faulty count source");
+      }
       if (event.type === "TestMaybe") return [{ item: event.item, count: event.count, maybe: true, source: "rises" }];
       if (event.type === "TestSlot") return [{ item: event.item, count: event.count, maybe: false, source: "slots" }];
       if (event.type === "TestAmounts") {

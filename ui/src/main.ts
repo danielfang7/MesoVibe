@@ -964,6 +964,18 @@ function shell(initial: Settings): void {
     }
   }
 
+  /** Whether MesoVibe reads your quick slots at this game size. */
+  function slotsLine(state: NonNullable<Status["slots"]>): string {
+    switch (state) {
+      case "not_found":
+        return "Can't see your quick slots. Keep them open and in view to count potions.";
+      case "unsupported":
+        return "Can't read your quick slots at this game size yet.";
+      default:
+        return "Read up to 4 times a second: which item each slot holds, and when its count changes.";
+    }
+  }
+
   function seesView(): Node[] {
     const status = panel.status;
     const reading = status?.reading === true && !panel.settings.safeMode;
@@ -996,6 +1008,9 @@ function shell(initial: Settings): void {
         reading && status?.mesos
           ? h("div", { class: "reading-box", attrs: { "data-key": "sees-mesos" } }, h("span", { class: "label" }, "Mesos"), h("span", {}, mesosLine(status.mesos)))
           : null,
+        reading && status?.slots
+          ? h("div", { class: "reading-box", attrs: { "data-key": "sees-slots" } }, h("span", { class: "label" }, "Quick slots"), h("span", {}, slotsLine(status.slots)))
+          : null,
         h(
           "dl",
           { class: "key-value" },
@@ -1021,6 +1036,7 @@ function shell(initial: Settings): void {
         h("p", {}, "The HP and MP numbers next to the EXP bar."),
         h("p", {}, "The minimap's map name, as a picture."),
         h("p", {}, "Your mesos, when your inventory, an NPC shop or storage is open: the mesos you carry, never the amount stored."),
+        h("p", {}, "Your quick slots: which item each holds and when its count changes, to count the potions you drink."),
         h("p", {}, "The chat box: whisper, party and friend lines, as pictures."),
         h("h2", { class: "label" }, "Never reads"),
         h("p", {}, "Your keyboard or mouse · the game's memory · the game's files · network traffic"),

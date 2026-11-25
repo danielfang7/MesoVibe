@@ -24,6 +24,7 @@ use mesovibe_engine::hp_mp_health::HpMpState;
 use mesovibe_engine::recognizers::chat::ChatUnreadable;
 use mesovibe_engine::recognizers::exp_bar::{Calibration, ExpBarReader, Unreadable};
 use mesovibe_engine::recognizers::meso_total::{MesoReader, MesoState};
+use mesovibe_engine::recognizers::quick_slots::QuickSlotState;
 use mesovibe_engine::runner::{Runner, Tick};
 use mesovibe_engine::unstretch;
 use serde::Serialize;
@@ -127,6 +128,9 @@ pub struct Status {
     /// How the meso total is read: `reading`, `learning` or `unsupported` (at this game size), or
     /// `None` while reading is off. Plugins hear it as `Readers.mesos`.
     pub mesos: Option<MesoState>,
+    /// How the quick slots are read: `reading`, `not_found` or `unsupported` (at this game size),
+    /// or `None` while reading is off. Plugins hear it as `Readers.slots`.
+    pub slots: Option<QuickSlotState>,
     pub at_ms: u64,
 }
 
@@ -423,6 +427,7 @@ fn off_status() -> Status {
         hp_mp_missing: None,
         map: None,
         mesos: None,
+        slots: None,
         at_ms: now_ms(),
     }
 }
@@ -492,6 +497,7 @@ fn status<B: Backend>(
             key: key.map(str::to_string),
         }),
         mesos: Some(runner.meso_state()),
+        slots: Some(runner.quick_slot_state()),
         at_ms: now_ms(),
     }
 }

@@ -46,6 +46,7 @@ use crate::recognizers::exp_bar::{self, ExpBarReader, ExpReading, Unreadable};
 use crate::recognizers::hp_mp::{HpMp, HpMpUnreadable};
 use crate::recognizers::map_name::{MapFollower, MapName};
 use crate::recognizers::meso_total::{MesoReader, MesoState, MesoView};
+use crate::recognizers::quick_slots::{self, QuickSlotReader, QuickSlotState};
 use crate::unstretch::{self, NATIVE_HEIGHT};
 
 /// The name the EXP bar reader goes by in [`Event::Unreadable`].
@@ -60,7 +61,9 @@ pub const STALE_AFTER: u32 = 8;
 /// pixels tall and scaled up from a picture `source` lines tall: what its readers need, in game
 /// rows.
 pub fn rows_needed(height: u32, source: u32) -> u32 {
-    exp_bar::rows_needed(height, source).max(chat::rows_needed(height, source))
+    exp_bar::rows_needed(height, source)
+        .max(chat::rows_needed(height, source))
+        .max(unstretch::rows_for(height, source, quick_slots::ROWS))
 }
 
 /// Who asked for a tick's whole frame. Both may, and then one frame serves both.
@@ -118,6 +121,7 @@ pub struct Runner<B> {
     chat: ChatReader,
     map: MapFollower,
     meso: MesoReader,
+    slots: QuickSlotReader,
     /// The last confirmed reading, which events are measured from.
     confirmed: Option<ExpReading>,
     /// Whether the EXP bar read last tick, so a covered bar is reported once, not every tick.
@@ -171,6 +175,7 @@ impl<B: Backend> Runner<B> {
             chat: ChatReader::new(),
             map: MapFollower::new(),
             meso,
+            slots: QuickSlotReader::new(),
             confirmed: None,
             readable: false,
             hp_mp: None,
@@ -216,6 +221,11 @@ impl<B: Backend> Runner<B> {
     /// How the meso total is read, as of the last tick: for plugins (the SDK's `Readers.mesos`).
     pub fn meso_state(&self) -> MesoState {
         self.meso.state()
+    }
+
+    /// How the quick slots are read, as of the last frame.
+    pub fn quick_slot_state(&self) -> QuickSlotState {
+        self.slots.state()
     }
 
     /// How the HP and MP numbers are being read, as of the last tick.
@@ -266,6 +276,7 @@ impl<B: Backend> Runner<B> {
             self.chat.reset();
             self.map = MapFollower::new();
             self.meso.new_look();
+            self.slots.new_look();
             self.readable = false;
             self.hp_mp = None;
             self.hp_mp_readable = false;
@@ -392,6 +403,14 @@ impl<B: Backend> Runner<B> {
                                 }
                                 let hp_mp = self.hp_mp_events(&hud.hp_mp, dark);
                                 tick.events.extend(hp_mp);
+                                let slots = self.slots.observe(&frame, self.exp.block_offset());
+                                tick.events.extend(slots.changed.into_iter().map(
+                                    |(slot, read)| Event::QuickSlotChanged {
+                                        slot,
+                                        count_key: read.count,
+                                        icon_key: read.icon,
+                                    },
+                                ));
                                 // A Retina frame's meso box is read where the HUD reader found the
                                 // pixel blocks start, rather than undoing the whole frame.
                                 if let Some(meso) =
@@ -433,6 +452,7 @@ impl<B: Backend> Runner<B> {
         if capturing && !self.was_capturing {
             self.map.recheck();
             self.meso.new_look();
+            self.slots.new_look();
         }
         self.was_capturing = capturing;
         let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -1241,7 +1261,8 @@ mod tests {
             | Event::NoticesMissed { .. } => 2,
             Event::MapChanged { .. } => 3,
             Event::HpMpChanged { .. } | Event::Unreadable { .. } => 4,
-            Event::MesoChanged { .. } => 5,
+            Event::QuickSlotChanged { .. } => 5,
+            Event::MesoChanged { .. } => 6,
         };
         let hud = Hud::new();
         let on_map = |name: &str, exp: u64, hp: u32| {
@@ -1250,6 +1271,11 @@ mod tests {
             // The inventory open, its total rising every third frame.
             let total = 5_170_316 + u64::from(900 - hp) / 3 * 50;
             MesoWindow::new(Window::Inventory, total).draw(&mut canvas);
+            // A potion count in the Shift slot going down every other frame.
+            let corner = quick_slots::test_support::corner(1366, 768);
+            let count = 300 - (900 - hp) / 2;
+            let slots = [quick_slots::test_support::item(1, count)];
+            quick_slots::test_support::draw_panel(&mut canvas, corner, &slots);
             canvas
         };
         let mut runner = Runner::new(Fake {
@@ -1286,6 +1312,13 @@ mod tests {
         assert!(
             ticks.iter().any(|t| has(t, hp) && has(t, meso)),
             "a tick with a meso total and HP: {ticks:?}"
+        );
+        let slot = |e: &Event| matches!(e, Event::QuickSlotChanged { .. });
+        assert!(
+            ticks
+                .iter()
+                .any(|t| has(t, hp) && has(t, slot) && has(t, meso)),
+            "a tick with HP, a quick slot and a meso total: {ticks:?}"
         );
     }
 

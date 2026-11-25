@@ -1,7 +1,8 @@
 // The Session Tracker's potion accounting and views, with a stand-in count source wired in
 // (scripts/fixtures/synthetic-count-source.mjs): uses per map, their cost, pot cost/hr, the
 // Potions section, the net after potions in Loot, the Loot tab's pots lines, saves and Undo. Also
-// checks that the plugin as shipped, with no source wired in, counts and shows no potions.
+// checks that the plugin as shipped counts and shows no potions on a host that doesn't read the
+// quick slots (scripts/quick-slot-source.test.mjs checks it on one that does).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -45,16 +46,17 @@ const renders = (sent) => sent.filter((m) => m.type === "render").length;
 const every = (start, step, end) => Array.from({ length: Math.floor((end - start) / step) + 1 }, (_, i) => start + i * step);
 
 /**
- * A plugin reading on map "aaaa" for `seconds`: EXP every 10 s, the first gain at 10 s, and an HP
- * and MP reading every second: HP 660 at the seconds in `meat` and 500 otherwise,
- * MP 650 at the seconds in `lemon` and 500 otherwise, so each listed second is one potion. `also`
- * sends more at a given second.
+ * A plugin reading on map "aaaa" for `seconds`: EXP every 10 s, and an HP and MP reading every
+ * second: HP 660 at the seconds in `meat` and 500 otherwise, MP 650 at the seconds in `lemon` and
+ * 500 otherwise, so each listed second is one potion. The first gain comes at once, or with `lead`
+ * at 10 s, after a lead that is no potion time. `also` sends more at a given second.
  */
-function play({ seconds = 600, meat = [], lemon = [], readers = READING, bundle = synthetic, also = {} } = {}) {
+function play({ seconds = 600, meat = [], lemon = [], readers = READING, bundle = synthetic, also = {}, lead = false } = {}) {
   const plugin = run(bundle);
   plugin.send({ type: "start", saved: null, atMs: T0, capture: "capturing", readers });
   plugin.send(map("aaaa", T0));
-  plugin.send(exp(230_000, T0));
+  plugin.send(exp(lead ? 230_000 : 229_990, T0));
+  if (!lead) plugin.send(exp(230_000, T0));
   for (let s = 1; s <= seconds; s++) {
     const at = T0 + s * 1000;
     plugin.send(tick(at));
@@ -102,10 +104,10 @@ const startWith = (saved) => {
   return plugin;
 };
 
-// With no count source wired in, as shipped, nothing about potions shows or is saved. Fails if
-// the Potions section appears before anything counts potions, or a session
-// saves read time that would later read as "no potions used".
-test("as shipped, no potions are counted or shown", () => {
+// As shipped, potions are counted from the quick slots, so from a host that doesn't read them
+// nothing about potions shows or is saved. Fails if the Potions section appears with nothing to
+// count from, or a session saves read time that would later read as "no potions used".
+test("as shipped, no potions are counted or shown without the quick slots", () => {
   const { send, sent, now } = play({ bundle: shipped, meat: every(30, 60, 600) });
   assert.equal(potions(sent), undefined);
   send(action("end", now));
@@ -274,13 +276,16 @@ test("a pause counts no potion during it, and the first one after it", () => {
 });
 
 // A potion drunk before the session's first EXP gain, on the walk to a map or in town, isn't the
-// grind's cost. Fails if it's counted, now or once EXP follows.
-test("potions before the first EXP gain aren't counted", () => {
-  const { send, sent, now } = play({ seconds: 120, meat: [5] });
+// grind's cost, nor is that time. Fails if it's counted, now or once EXP follows, or the lead
+// before the gain adds to the time potions were counted over.
+test("potions before the first EXP gain aren't counted, nor that time", () => {
+  const { send, sent, now } = play({ seconds: 120, meat: [5], lead: true });
   assert.equal(potTable(sent), undefined);
   assert.ok(potLines(sent).includes("No potions used yet."));
   send(action("end", now));
-  assert.equal(last(sent, "save").data.history[0].maps[0].u, undefined);
+  const entry = last(sent, "save").data.history[0].maps[0];
+  assert.equal(entry.u, undefined);
+  assert.equal(entry.h, 110_000, "two minutes, less the 10 s before the first gain");
 });
 
 // A potion counts on the map it was drunk on, with that map's read time, and the session adds the
@@ -397,7 +402,11 @@ test("a potion counted from its quick slot too is saved as counted both ways", (
   const { send, sent, now } = grind();
   send(event({ type: "TestSlot", item: MEAT, count: 1 }, now));
   assert.deepEqual(potTable(sent).rows[0], ["Meat", "×11", "880"]);
-  assert.deepEqual(potions(sent).children.at(-1), { kind: "text", text: "Only Meat and Lemon are counted.", variant: "muted" });
+  assert.deepEqual(potions(sent).children.at(-1), {
+    kind: "text",
+    text: "Counted from your quick slots, as their counts drop. Only Meat and Lemon are counted.",
+    variant: "muted",
+  });
   send(action("end", now));
   assert.deepEqual(last(sent, "save").data.history[0].ps, { [MEAT]: "both", 2010005: "rises" });
   // Lemon counted from its slot in the Undo window comes back counted both ways too.
@@ -406,6 +415,26 @@ test("a potion counted from its quick slot too is saved as counted both ways", (
   send(action("undo-end", now + 2_000));
   send(action("end", now + 2_000));
   assert.deepEqual(last(sent, "save").data.history[0].ps, { [MEAT]: "both", 2010005: "both" });
+});
+
+// Only a whole number of uses counts: a source's fraction or runaway count is dropped. Fails if
+// it reaches the session.
+test("a use counts only as a whole number", () => {
+  const { send, sent, now } = grind();
+  for (const count of [1.5, Infinity, Number.NaN, -1]) send(event({ type: "TestSlot", item: MEAT, count }, now));
+  assert.deepEqual(potTable(sent).rows[0], ["Meat", "×10", "800"]);
+  send(event({ type: "TestSlot", item: MEAT, count: 2 }, now));
+  assert.deepEqual(potTable(sent).rows[0], ["Meat", "×12", "960"]);
+});
+
+// A count source that throws never stops EXP counting. Fails if the event it threw on is lost.
+test("a faulty count source never stops EXP counting", () => {
+  const { send, sent, now } = play({ seconds: 60 });
+  const gained = () => last(sent, "summary").summary.expGained;
+  const before = gained();
+  send(event({ type: "TestFault" }, now));
+  send(exp(230_000 + 7 * 63, now + 1_000));
+  assert.equal(gained(), before + 63);
 });
 
 // A counted potion saves the session within five seconds, as an EXP change does, so closing
@@ -487,7 +516,7 @@ test("saves keep potion fields, and drop a malformed one with the session kept",
 // potion fields without failing, and this build reads what it saves back. Fails if a new field
 // makes the old loader drop sessions.
 test("MesoVibe 0.7.0 reads a save with potion fields", () => {
-  const { send, sent, now } = grind();
+  const { send, sent, now } = grind({ lead: true });
   send(action("end", now));
   const saved = JSON.parse(JSON.stringify(last(sent, "save").data));
   const old = load070(saved);

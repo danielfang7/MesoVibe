@@ -2,7 +2,7 @@
 
 # MesoVibe [![CI](https://github.com/danielfang7/MesoVibe/actions/workflows/ci.yml/badge.svg)](https://github.com/danielfang7/MesoVibe/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/danielfang7/MesoVibe)](https://github.com/danielfang7/MesoVibe/releases/latest)
 
-MesoVibe is a free, open-source companion for MapleStory Classic World. It reads the game window the way a stream viewer sees it and shows your EXP per hour, time to level, the mesos you pick up and what shops pay for your loot, your sessions map by map and your chat, in a panel beside the game or a small overlay on it.
+MesoVibe is a free, open-source companion for MapleStory Classic World. It reads the game window the way a stream viewer sees it and shows your EXP per hour, time to level, the mesos you pick up and what shops pay for your loot, what you spend on potions, your sessions map by map and your chat, in a panel beside the game or a small overlay on it.
 
 ## Download
 
@@ -17,13 +17,13 @@ Every release lists its files' checksums in `SHA256SUMS`.
 
 MesoVibe only looks at the game window, through the operating system's screen capture. It never sends input to the game, never reads or writes the game's memory or files, never injects code, and never touches its network traffic. Changes that would do any of these are not accepted.
 
-MesoVibe reads your HP and MP numbers and never drinks a potion for you.
+MesoVibe reads your HP and MP numbers and your quick slots to count the potions you drink, and never drinks one for you.
 
 MesoVibe is not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon.
 
 ## Project layout
 
-- [engine](engine/) - screen capture and the recognizers that read the game's EXP bar, HP and MP numbers, chat, map name and the meso total in the inventory, shop and storage windows (a pickup-notice reader is in the code but not used at present), plus the bundled item and map data in [engine/data](engine/data/)
+- [engine](engine/) - screen capture and the recognizers that read the game's EXP bar, HP and MP numbers, chat, map name and the meso total in the inventory, shop and storage windows and the quick slots (a pickup-notice reader is in the code but not used at present), plus the bundled item and map data in [engine/data](engine/data/)
 - [app](app/) - the Tauri desktop app: windows, tray, settings, session storage and updates
 - [ui](ui/) - the panel, the mini-HUD and the chat overlay
 - [sdk](sdk/) - the plugin API, `@mesovibe/sdk`

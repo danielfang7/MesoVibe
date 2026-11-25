@@ -11,6 +11,7 @@
 import { definePlugin, formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";
 import type { CaptureState, Cell, Readers, RowAction, SessionSummary, ViewNode } from "@mesovibe/sdk";
 import { wiredSource } from "./count-source.js";
+import type { PotUse } from "./count-source.js";
 import {
   addCount,
   addExp,
@@ -118,6 +119,8 @@ interface Saved {
   allTime?: AllTime;
   /** Every item key's name, tab and price, kept once rather than in each session. */
   catalog?: Catalog;
+  /** What the count source learned (which potion each quick-slot icon is), as it saved it. */
+  slots?: unknown;
 }
 
 /**
@@ -190,6 +193,7 @@ function load(saved: unknown): Saved {
           }
         : { mesos: 0, playedMs: 0 },
     catalog: validCatalog(value.catalog),
+    ...(value.slots === undefined ? {} : { slots: value.slots }),
   };
 }
 
@@ -647,7 +651,7 @@ definePlugin({
     let capture: CaptureState = startCapture;
     let readers: Readers = startReaders ?? { hpMp: "off", hpMpMissing: null };
     /** What counts potions, or null while nothing does: then none are counted or shown. */
-    const source = wiredSource();
+    const source = wiredSource(saved.slots);
     /** The map the player is on: undefined until the engine says. */
     let map: string | null | undefined;
     let showMore = false;
@@ -672,7 +676,8 @@ definePlugin({
     const persist = (atMs: number, gapMs = SAVE_EVERY_MS) => {
       if (atMs - savedAt < gapMs) return;
       const running = session.last === null && session.held === undefined ? null : session;
-      context.save({ version: 1, history, current: running, allTime, catalog } satisfies Saved);
+      const slots = source?.saved?.();
+      context.save({ version: 1, history, current: running, allTime, catalog, ...(slots === undefined ? {} : { slots }) } satisfies Saved);
       savedAt = atMs;
       unsaved = false;
     };
@@ -693,19 +698,35 @@ definePlugin({
     };
     const show = (atMs: number) => {
       context.setSummary(summary(session, atMs, { closeOutBy: closeOutBy(atMs), askForMesos: askForMesos(atMs) }));
-      const potions = source === null ? null : potionsSection(session, catalog, source, readers, atMs);
-      const potsPerHour = source === null ? null : potRate(potTotals(session, catalog));
+      const potions = source === null || !potsShown() ? null : potionsSection(session, catalog, source, readers, atMs);
+      const potsPerHour = source === null || !potsShown() ? null : potRate(potTotals(session, catalog));
       context.render(view(session, history, capture, map, readers, atMs, showMore, potions, potsPerHour));
+      // Saved potions show in the Loot tab whenever a source is wired in, reading or not.
       context.render(lootView(session, history, allTime, catalog, lootMore, source !== null, atMs), "loot");
     };
     const remember = (kind: Undo["kind"], atMs: number) => {
       undo = { kind, session: structuredClone(session), history: history.slice(), allTime, until: atMs + UNDO_MS };
     };
-    /** Whether potions are being counted now: a source is wired in and the HP and MP numbers are read. */
+    /** Whether potions can show: a source is wired in, and the host reads the quick slots if it counts from them. */
+    const potsShown = (): boolean => source !== null && (source.readsSlots !== true || readers.slots !== undefined);
+    /** Whether the quick slots are read, or the source doesn't need them. */
+    const slotsRead = (): boolean => source?.readsSlots !== true || readers.slots === "reading";
+    /**
+     * Whether potions are being counted now: a source is wired in, the HP and MP numbers are read,
+     * and so are the quick slots if it counts from them.
+     */
     const potTime = (atMs: number): PotTime | undefined =>
-      source === null || readers.hpMp !== "reading"
+      source === null || readers.hpMp !== "reading" || !slotsRead()
         ? undefined
         : { counting: true, healing: source.healing("hp", atMs) || source.healing("mp", atMs) };
+    /** Tells the count source to drop the uses it holds back; a fault in it never stops the tracker. */
+    const forgetHeld = () => {
+      try {
+        source?.forget?.();
+      } catch {
+        // Nothing to undo: the source's own state is all it would have touched.
+      }
+    };
     /** Moves the session's clock, giving the time played to the map the player is on. */
     const tick = (atMs: number) => {
       const before = session.activeMs;
@@ -788,8 +809,14 @@ definePlugin({
     return {
       onEvent(event, atMs) {
         tick(atMs);
-        // The source sees every event, paused or not, so it always knows the last reading.
-        const uses = source?.onEvent(event, atMs) ?? [];
+        // The source sees every event, paused or not, so it always knows the last reading. A fault
+        // in it never stops EXP and loot counting.
+        let uses: PotUse[] = [];
+        try {
+          uses = source?.onEvent(event, atMs) ?? [];
+        } catch {
+          uses = [];
+        }
         if (event.type === "ExpChanged" && session.paused) {
           // Paused, the bar is still followed: the strip's level stays true, and Resume counts only
           // what's gained after it. A level-up still counts, so the session's levels add up.
@@ -839,7 +866,11 @@ definePlugin({
             session.activeMs = lead;
             session.startLevel = before?.level ?? event.level;
             session.expLost = 0;
-            startLoot(session, map, lead, event.level, potTime(atMs));
+            // The lead is no potion time: a potion drunk before the first gain isn't the session's,
+            // so its time isn't either.
+            startLoot(session, map, lead, event.level);
+            // Potions held back for a name before the first gain aren't this session's.
+            forgetHeld();
             // The session just ended stops counting its sales, and a total read in the five
             // minutes before this kill opens this one.
             if (history[0] !== undefined) stopCloseOut(history[0]);
@@ -866,7 +897,9 @@ definePlugin({
         // so the first change after Resume is measured from the last one while paused. HP and MP
         // readings come four times a second, so only a counted use redraws and saves; the 1 Hz
         // tick does the rest.
-        if (uses.length > 0 && !session.paused) {
+        // From a source counting from the quick slots, uses count only while they're read, as pot
+        // time does.
+        if (uses.length > 0 && !session.paused && slotsRead()) {
           for (const use of uses) addPotUse(session, use, map, session.expGained > 0, session.last?.level ?? null);
           unsaved = true;
           persist(atMs, EXP_SAVE_EVERY_MS);
@@ -919,6 +952,7 @@ definePlugin({
             waitForCloseOut(past, atMs, reads);
             pushHistory(past);
             session = newSession(atMs, session.last);
+            forgetHeld();
             readSaid = false;
             pre = null;
             persist(atMs, 0);
@@ -929,6 +963,7 @@ definePlugin({
           if (session.expGained > 0 || session.held !== undefined) {
             remember("reset", atMs);
             session = newSession(atMs, session.last);
+            forgetHeld();
             readSaid = false;
             pre = null;
             persist(atMs, 0);
@@ -941,8 +976,10 @@ definePlugin({
             persist(atMs, 0);
           }
         } else if (action === "resume") {
+          // Potions held back for a name before Pause or while paused aren't counted after it.
           if (session.paused) {
             delete session.paused;
+            forgetHeld();
             persist(atMs, 0);
           }
         } else if (action.startsWith(DELETE_SESSION)) {

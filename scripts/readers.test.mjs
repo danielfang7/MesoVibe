@@ -10,6 +10,7 @@ const status = (over = {}) => ({
   hpMpState: "reading",
   hpMpMissing: null,
   mesos: null,
+  slots: null,
   ...over,
 });
 
@@ -36,6 +37,16 @@ test("the meso total's state reaches plugins while the engine reads it", () => {
   assert.equal("mesos" in readersOf(status({ mesos: null })), false, "reading off");
   assert.equal(readersChanged(readersOf(status({ mesos: "learning" })), readersOf(status({ mesos: "reading" }))), true);
   assert.equal(readersChanged(readersOf(status({ mesos: "reading" })), readersOf(status({ mesos: null }))), true);
+});
+
+// Plugins hear how the quick slots are read only from a host that reads them, so the Session
+// Tracker counts potions from them only then. Fails if a state is lost or reading off reports one.
+test("the quick slots' state reaches plugins while the engine reads them", () => {
+  for (const state of ["reading", "not_found", "unsupported"]) {
+    assert.equal(readersOf(status({ slots: state })).slots, state);
+  }
+  assert.equal("slots" in readersOf(status({ slots: null })), false, "reading off");
+  assert.equal(readersChanged(readersOf(status({ slots: "reading" })), readersOf(status({ slots: "not_found" }))), true);
 });
 
 // Statuses arrive four times a second; plugins hear only changes. Fails if an unchanged status is
