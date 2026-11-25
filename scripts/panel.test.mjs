@@ -240,14 +240,16 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     const opened = await page.until(row("Mesos picked up"), "All time's mesos picked up");
     await page.until(`((m) => m !== undefined && m !== ${JSON.stringify(opened)})(${row("Mesos picked up")})`, "All time's mesos rising with the Loot tab open");
 
-    // What MesoVibe sees shows the HP and MP numbers as read and the map's name as read, and Reads
-    // lists the HP and MP numbers and no longer the pickup notices. Fails if a row is missing, the
-    // HP and MP row has no values, the map row has no picture, or the notices come back.
+    // What MesoVibe sees shows the HP, MP, map and mesos rows, and Reads lists the mesos carried, not
+    // the pickup notices. Fails if a row or its value is missing, or the notices come back.
     await page.evaluate(`document.querySelector('[aria-label="What MesoVibe sees"]').click()`);
     const hpMp = `document.querySelector('[data-key="sees-hp-mp"]')?.textContent`;
     assert.match(await page.until(hpMp, "the HP and MP row"), /^HP and MPHP \d+\/1386 · MP \d+\/1140$/);
     const reads = `[...document.querySelectorAll(".view p")].some((p) => p.textContent === "The HP and MP numbers next to the EXP bar.")`;
     assert.equal(await page.evaluate(reads), true);
+    assert.equal(await page.evaluate(textOf("sees-mesos")), "MesosRead whenever your inventory, an NPC shop or storage is open.");
+    const readsMesos = `[...document.querySelectorAll(".view p")].some((p) => p.textContent === "Your mesos, when your inventory, an NPC shop or storage is open: the mesos you carry, never the amount stored.")`;
+    assert.equal(await page.evaluate(readsMesos), true);
     assert.equal(await page.evaluate(`document.querySelector('[data-key="sees-notices"]')`), null);
     assert.equal(await page.evaluate(`[...document.querySelectorAll(".view p")].some((p) => p.textContent.includes("pickup notices"))`), false);
     await page.until(`document.querySelector('[data-key="sees-map"] .game-text')?.style.maskImage`, "the map row's picture");

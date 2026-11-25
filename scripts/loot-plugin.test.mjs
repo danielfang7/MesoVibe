@@ -186,8 +186,8 @@ test("sessions from before map tracking use the same layout", () => {
   assert.equal(table.details[1][1], "Lv 41");
 });
 
-// A bad value in a save must never stop the tracker. Fails if a malformed map entry throws, or
-// the good parts of the session are lost with it.
+// A bad value in a save must never stop the tracker. Fails if a malformed map entry or meso
+// ledger throws, or the good parts of the session are lost with it.
 test("a malformed map entry in a save is dropped, the session kept", () => {
   const good = { k: "aaaa", p: 60_000, x: 300, m: 50, r: 50, l: 60_000, s: 42, e: 42 };
   const past = {
@@ -199,12 +199,15 @@ test("a malformed map entry in a save is dropped, the session kept", () => {
     startLevel: 42,
     endLevel: 42,
     maps: [good, { k: 7, p: "x" }, null, { ...good, k: "bbbb", m: -5 }],
+    lg: { b: 1_000_000, ba: 0, bp: 0, ob: 1_000_000, n: 2, pu: 50_000, so: 0, sp: 0, ct: 0, ho: "x", pt: 600_000 },
   };
   const { send, sent } = run();
   send({ type: "start", saved: { version: 1, history: [past], current: null }, atMs: T0, capture: "capturing", readers: MESOS });
   const row = pastSessions(sent)[0].rows[0];
   assert.equal(row[0].gameText, "aaaa");
   assert.equal(row[0].suffix, undefined, "the bad entries are gone");
+  // The damaged ledger is dropped, so the Loot tab shows what the session's notices counted.
+  assert.deepEqual(lootTable(sent).rows[0].slice(1), ["≈3K", "≈50"]);
 });
 
 /** A session saved by MesoVibe 0.7.0: half an hour on "aaaa", its loot counted from the pickup notices. */
@@ -380,9 +383,8 @@ test("the Loot tab's Past sessions is empty before loot tracking, and has its ow
 const grinding = (playMs, key = "aaaa") => ({ playMs, map: key, away: false });
 const ledgerOf = (fields) => fields.lg;
 
-// The first total only sets the balance; a later rise on the one grinding map is mesos picked up,
-// given to that map with the play time between the two readings. Fails if the opening total counts
-// as profit, or the map's mesos/hr uses the wrong mesos or time.
+// A later rise on one grinding map is mesos picked up, for that map's rate. Fails if the opening
+// total counts, the map's mesos/hr is wrong, or a rate shows under a minute after the last reading.
 test("a rise between two readings on one grinding map is mesos picked up, and that map's rate", () => {
   const fields = {};
   assert.deepEqual(loot.addReading(fields, 1_000_000, "inventory", T0, grinding(0)), { kind: "opening", total: 1_000_000 });
@@ -393,6 +395,13 @@ test("a rise between two readings on one grinding map is mesos picked up, and th
   const entry = fields.maps.find((m) => m.k === "aaaa");
   assert.deepEqual([entry.fm, entry.ft], [50_000, 30 * MIN]);
   assert.equal(loot.mapRates(entry, 10_000).mesos, 100_000);
+  // Mesos come in lumps: no rate until a minute of play lies between readings.
+  const quick = {};
+  loot.addReading(quick, 1_000_000, "inventory", T0, grinding(0));
+  loot.addReading(quick, 1_001_000, "inventory", T0 + MIN - 1, grinding(MIN - 1));
+  assert.deepEqual([loot.mesosRate(ledgerOf(quick)), loot.profitRate(ledgerOf(quick))], [null, null], "under a minute");
+  loot.addReading(quick, 1_001_000, "inventory", T0 + MIN, grinding(MIN));
+  assert.deepEqual([loot.mesosRate(ledgerOf(quick)), loot.profitRate(ledgerOf(quick))], [60_000, 60_000]);
 });
 
 // A map's mesos/hr comes only from a stretch between two meso totals read on it; a map without one
@@ -481,6 +490,14 @@ test("a rise after time away from the grind counts as sold", () => {
   assert.equal(ledgerOf(fields).pu, 0);
   assert.equal(fields.maps, undefined);
   assert.equal(ledgerOf(fields).pt, 25 * MIN, "the rate's clock leaves the pause out");
+  // Through the plugin: a minute on a map where the session gained no EXP (a town) makes the next
+  // inventory rise loot sold.
+  const played = play({ seconds: 120 });
+  const t = twoReadings(played);
+  played.send(map("cccc", t));
+  for (let s = 1; s <= 60; s++) played.send({ type: "tick", atMs: t + s * 1000 });
+  played.send(total(1_090_000, t + 60_000));
+  assert.deepEqual(lootFigures(played.sent), { "Mesos picked up": "50,000", "Loot sold": "40,000", Profit: "90,000" });
 });
 
 // A rise outside a shop above both 50,000 mesos and 3,000,000 an hour since the last reading is held
@@ -922,6 +939,33 @@ test("a rise across a pause is sold, and Count it adds a held rise with Undo", (
   played.send(action("undo-count", t + 2_000));
   assert.equal(notices(played.sent).at(-1).text, "+5M is held out of Profit again.");
   assert.equal(lootFigures(played.sent).Profit, "40,000");
+});
+
+// A held rise of the session just ended is listed in the Loot tab during its close-out. Fails if
+// it isn't listed, or Count it or its Undo act on any session but the ended one.
+test("a held rise in the session just ended can be counted from the Loot tab, with Undo", () => {
+  const played = play({ seconds: 120 });
+  played.send(total(1_000_000, played.now));
+  const t = grind(played, played.now, 600);
+  played.send(total(6_000_000, t));
+  played.send(action("end", t));
+  played.send({ type: "tick", atMs: t + 11_000 });
+  played.send(total(6_000_000, t + 20_000, "shop"));
+  played.send(total(6_100_000, t + 21_000, "shop"));
+  played.send({ type: "tick", atMs: t + 32_000 });
+  const lootPast = () => section(played.sent, "Past sessions", "loot").children;
+  const countIt = () => lootPast().find((n) => n.kind === "button" && n.label === "Count it");
+  assert.equal(lootTable(played.sent).rows[0][2], "100K", "the sale, without the held rise");
+  assert.ok(lootTable(played.sent).details[0].includes("Not counted: +5M"));
+  assert.ok(lootPast().some((n) => n.kind === "text" && n.text.startsWith("From the session you just ended")));
+  played.send(action(countIt().action, t + 40_000));
+  assert.deepEqual([notices(played.sent).at(-1).text, notices(played.sent).at(-1).undo], ["Counted +5M in Profit.", "undo-count"]);
+  assert.equal(lootTable(played.sent).rows[0][2], "5.1M");
+  assert.equal(countIt(), undefined, "nothing left to count");
+  played.send(action("undo-count", t + 41_000));
+  assert.equal(notices(played.sent).at(-1).text, "+5M is held out of Profit again.");
+  assert.equal(lootTable(played.sent).rows[0][2], "100K");
+  assert.ok(countIt() !== undefined, "held again in the ended session");
 });
 
 // The mini-HUD asks for the inventory while the session has no total read or only one older than
