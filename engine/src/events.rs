@@ -16,8 +16,8 @@ use crate::recognizers::notices::{Missed, Tab};
 /// 6: `HpMpChanged`, the HP and MP numbers next to the EXP bar.
 /// 7: `ExpChanged` gained `exp_shown`: late in a level the HUD shows only the percent, and `exp`
 /// is worked out from it.
-/// 8: `MesoChanged`, the meso total shown in the inventory or an NPC shop. The engine stops
-/// sending the pickup notices' events, which stay in the schema.
+/// 8: `MesoChanged`, the meso total shown in the inventory, an NPC shop or the storage window.
+/// The engine stops sending the pickup notices' events, which stay in the schema.
 pub const SCHEMA_VERSION: u32 = 8;
 
 /// Events the engine emits after a confident read (below the confidence
@@ -134,11 +134,13 @@ pub enum Event {
         max_mp: u32,
         continuous: bool,
     },
-    /// The player's meso total, as the inventory window or an NPC shop's window shows it, sent
-    /// when it changed and is trusted: read the same in several frames in a row, and a total with
-    /// more or fewer digits than the last one only when seen again a few seconds later. A total
-    /// the same as the last one isn't sent again. Nothing is sent while neither window is on
-    /// screen, so the time between two totals can be long.
+    /// The player's meso total, as the inventory window, an NPC shop's window or the storage
+    /// window shows it, sent once it's trusted: read the same in two frames in a row. It's sent
+    /// when it differs from the last total sent, when it's read in another window than that one,
+    /// and once each time a window showing it comes into view, so opening the inventory always
+    /// gives a fresh reading, unchanged or not. While a window stays open, the same total isn't
+    /// sent again. Nothing is sent while no such window is on screen, so the time between two
+    /// totals can be long.
     MesoChanged {
         #[ts(type = "number")]
         total: u64,
@@ -149,13 +151,15 @@ pub enum Event {
     Unreadable { recognizer: &'static str },
 }
 
-/// Where a meso total was read: the inventory window, or an NPC shop's window, where a rise is a
-/// sale and a fall a purchase.
+/// Where a meso total was read: the inventory window; an NPC shop's window, where a rise is a
+/// sale and a fall a purchase; or the storage window's box for the mesos on hand (never the one
+/// for the mesos stored), where a change is mesos moved in or out of storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum MesoSource {
     Inventory,
     Shop,
+    Storage,
 }
 
 #[cfg(test)]

@@ -10,9 +10,9 @@
 //! with the game window (`dock.rs`) and decides whether the panel should be built, hidden or
 //! destroyed (`presence.rs`). Nothing is captured while reading is off (Safe mode).
 //!
-//! The shapes the EXP bar reader confirms (its digits) are kept on this computer (`Store`), and the
-//! next time reading starts the reader begins from them, so it reads level and EXP from the first
-//! frame instead of learning again.
+//! The shapes the EXP bar reader confirms (its digits), and the meso total's digits once named,
+//! are kept on this computer (`Store`), and the next time reading starts the readers begin from
+//! them, so they read from the first frame instead of learning again.
 
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -23,6 +23,7 @@ use mesovibe_engine::events::Event;
 use mesovibe_engine::hp_mp_health::HpMpState;
 use mesovibe_engine::recognizers::chat::ChatUnreadable;
 use mesovibe_engine::recognizers::exp_bar::{Calibration, ExpBarReader, Unreadable};
+use mesovibe_engine::recognizers::meso_total::{MesoReader, MesoState};
 use mesovibe_engine::runner::{Runner, Tick};
 use mesovibe_engine::unstretch;
 use serde::Serialize;
@@ -123,6 +124,9 @@ pub struct Status {
     /// The map the player is on: `None` before one settled; its key, or no key when its name
     /// can't be read.
     pub map: Option<MapStatus>,
+    /// How the meso total is read: `reading`, `learning` or `unsupported` (at this game size), or
+    /// `None` while reading is off. Plugins hear it as `Readers.mesos`.
+    pub mesos: Option<MesoState>,
     pub at_ms: u64,
 }
 
@@ -216,8 +220,9 @@ fn run(app: &AppHandle, inbox: &Receiver<Command>, mut reading: bool) {
             );
             let due = last_snapshot.is_none_or(|t| t.elapsed() >= SNAPSHOT_EVERY);
             if watching && grabbed && due {
-                // Only the bottom strip, never a whole frame read for the map's name; a tick
-                // that read one leaves the picture to the next.
+                // Only the bottom strip, never a whole frame read for the map's name or the meso
+                // total; a tick that read one leaves the picture as it was. While a meso box stays
+                // in view every tick reads a whole frame, so the picture waits until it closes.
                 let strip = runner.as_ref().and_then(|runner| runner.last_strip());
                 if let Some(strip) = strip {
                     if let Some(png) = snapshot(strip) {
@@ -269,6 +274,8 @@ fn tick(
     let tick = runner.tick();
     let exp_bar = runner.exp_reader().knowledge();
     keep(app, Learned::ExpBar, exp_bar, &mut kept.exp_bar);
+    let mesos = runner.meso_reader().knowledge();
+    keep(app, Learned::MesoTotal, mesos, &mut kept.mesos);
     if let Some(error) = &tick.error {
         *blocked = Some(error.0.clone());
     }
@@ -321,24 +328,29 @@ fn tick(
     (tick.state, tick.exp.is_some() || tick.stale)
 }
 
-/// The EXP bar reader's confirmed shapes as last kept on this computer.
+/// The readers' confirmed shapes as last kept on this computer.
 #[derive(Default)]
 struct Kept {
     exp_bar: Option<String>,
+    mesos: Option<String>,
 }
 
-/// A runner whose EXP bar reader starts from the shapes kept on this computer, where they still
-/// read, and the text it would keep.
+/// A runner whose EXP bar and meso total readers start from the shapes kept on this computer,
+/// where they still read, and the text they would keep.
 fn kept_runner(app: &AppHandle) -> (Runner<Platform>, Kept) {
     let store = app.try_state::<Store>();
     let text = |reader| store.as_ref().and_then(|store| store.knowledge(reader));
     let exp = text(Learned::ExpBar)
         .and_then(|text| ExpBarReader::from_knowledge(&text))
         .unwrap_or_default();
+    let mesos = text(Learned::MesoTotal)
+        .and_then(|text| MesoReader::from_knowledge(&text))
+        .unwrap_or_default();
     let kept = Kept {
         exp_bar: exp.knowledge(),
+        mesos: mesos.knowledge(),
     };
-    (Runner::with_exp_reader(platform(), exp), kept)
+    (Runner::with_readers(platform(), exp, mesos), kept)
 }
 
 /// Keeps a reader's confirmed shapes when they change (one more learned), and forgets them when
@@ -410,6 +422,7 @@ fn off_status() -> Status {
         hp_mp_state: HpMpState::Off,
         hp_mp_missing: None,
         map: None,
+        mesos: None,
         at_ms: now_ms(),
     }
 }
@@ -478,6 +491,7 @@ fn status<B: Backend>(
         map: runner.current_map().map(|key| MapStatus {
             key: key.map(str::to_string),
         }),
+        mesos: Some(runner.meso_state()),
         at_ms: now_ms(),
     }
 }

@@ -3,8 +3,14 @@
 //!
 //! The caller drives it with [`Runner::tick`] at up to 4 Hz. A tick reads back only the
 //! rows the readers need, and only while capturing, so a paused or blocked engine reads nothing
-//! and emits nothing. Now and then a tick reads the whole game area, for the map's name at the
-//! top of the minimap ([`MapFollower`]): at the first capture, after a map change, and every 30 s.
+//! and emits nothing. Now and then a tick reads the whole game area instead: for the map's name at
+//! the top of the minimap ([`MapFollower`]), at the first capture, after a map change and every
+//! 30 s; and for the meso total in the inventory, shop or storage window ([`MesoReader`]), about
+//! once a second, and every tick while one of those windows' meso box is in view. One whole frame
+//! serves both when both ask on the same tick. The map's name is read only on whole frames it
+//! asked for, so the meso total's frames never change when it's read; the EXP bar, HP and MP and
+//! chat read every tick's frame, whole or not. Whole frames are never offered for the "What MesoVibe
+//! sees" picture ([`Runner::last_strip`]).
 //!
 //! In Full Screen on a display of another shape, the game's picture has black bars above and
 //! below it. The engine measures them on each frame and reads the picture between them
@@ -39,7 +45,8 @@ use crate::recognizers::chat::{self, ChatReader, ChatReading, ChatUnreadable};
 use crate::recognizers::exp_bar::{self, ExpBarReader, ExpReading, Unreadable};
 use crate::recognizers::hp_mp::{HpMp, HpMpUnreadable};
 use crate::recognizers::map_name::{MapFollower, MapName};
-use crate::unstretch::NATIVE_HEIGHT;
+use crate::recognizers::meso_total::{MesoReader, MesoState, MesoView};
+use crate::unstretch::{self, NATIVE_HEIGHT};
 
 /// The name the EXP bar reader goes by in [`Event::Unreadable`].
 pub const EXP_BAR: &str = "exp_bar";
@@ -54,6 +61,15 @@ pub const STALE_AFTER: u32 = 8;
 /// rows.
 pub fn rows_needed(height: u32, source: u32) -> u32 {
     exp_bar::rows_needed(height, source).max(chat::rows_needed(height, source))
+}
+
+/// Who asked for a tick's whole frame. Both may, and then one frame serves both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WholeFrameFor {
+    /// The map's name ([`MapFollower`]).
+    pub map: bool,
+    /// The meso total ([`MesoReader`]).
+    pub mesos: bool,
 }
 
 /// What one tick saw and did.
@@ -72,6 +88,11 @@ pub struct Tick {
     /// A map the player settled on this tick: its name, or `None` for a map whose name can't be
     /// read.
     pub map: Option<Option<MapName>>,
+    /// What this tick's whole frame showed of the meso total: `None` on a tick that read only the
+    /// bottom rows, or none.
+    pub mesos: Option<MesoView>,
+    /// Who asked for this tick's whole frame, when it grabbed one.
+    pub whole: Option<WholeFrameFor>,
     /// Typed events. Only ever produced while capturing.
     pub events: Vec<Event>,
     /// Why capture failed, on the tick it did.
@@ -96,6 +117,7 @@ pub struct Runner<B> {
     exp: ExpBarReader,
     chat: ChatReader,
     map: MapFollower,
+    meso: MesoReader,
     /// The last confirmed reading, which events are measured from.
     confirmed: Option<ExpReading>,
     /// Whether the EXP bar read last tick, so a covered bar is reported once, not every tick.
@@ -109,7 +131,8 @@ pub struct Runner<B> {
     hp_mp_state: HpMpState,
     /// What the engine last saw, for the "What MesoVibe sees" panel and the recorder.
     last_grab: Option<Grab>,
-    /// Whether that was a whole frame, read for the map's name rather than the usual strip.
+    /// Whether that was a whole frame, read for the map's name or the meso total rather than the
+    /// usual strip.
     last_whole: bool,
     /// Grabs in a row that brought no new frame.
     stale: u32,
@@ -135,6 +158,11 @@ impl<B: Backend> Runner<B> {
 
     /// Starts with what an EXP bar reader learned before.
     pub fn with_exp_reader(backend: B, exp: ExpBarReader) -> Self {
+        Self::with_readers(backend, exp, MesoReader::new())
+    }
+
+    /// Starts with what the EXP bar and meso total readers learned before.
+    pub fn with_readers(backend: B, exp: ExpBarReader, meso: MesoReader) -> Self {
         Runner {
             backend,
             state: CaptureState::NoGame,
@@ -142,6 +170,7 @@ impl<B: Backend> Runner<B> {
             exp,
             chat: ChatReader::new(),
             map: MapFollower::new(),
+            meso,
             confirmed: None,
             readable: false,
             hp_mp: None,
@@ -160,13 +189,14 @@ impl<B: Backend> Runner<B> {
     }
 
     /// The rows the engine read on the last tick that captured, exactly as it saw them: the
-    /// bottom strip, or now and then the whole game area for the map's name.
+    /// bottom strip, or now and then the whole game area for the map's name or the meso total.
     pub fn last_grab(&self) -> Option<&Grab> {
         self.last_grab.as_ref()
     }
 
     /// The last grab when it was the bottom strip. The "What MesoVibe sees" picture shows only
-    /// this: the whole game area, read for the map's name, holds chat and other players' names.
+    /// this: the whole game area, read for the map's name or the meso total, holds other players'
+    /// names and more.
     pub fn last_strip(&self) -> Option<&Grab> {
         self.last_grab.as_ref().filter(|_| !self.last_whole)
     }
@@ -177,6 +207,15 @@ impl<B: Backend> Runner<B> {
 
     pub fn exp_reader(&self) -> &ExpBarReader {
         &self.exp
+    }
+
+    pub fn meso_reader(&self) -> &MesoReader {
+        &self.meso
+    }
+
+    /// How the meso total is read, as of the last tick: for plugins (the SDK's `Readers.mesos`).
+    pub fn meso_state(&self) -> MesoState {
+        self.meso.state()
     }
 
     /// How the HP and MP numbers are being read, as of the last tick.
@@ -226,6 +265,7 @@ impl<B: Backend> Runner<B> {
             self.confirmed = None;
             self.chat.reset();
             self.map = MapFollower::new();
+            self.meso.new_look();
             self.readable = false;
             self.hp_mp = None;
             self.hp_mp_readable = false;
@@ -260,6 +300,8 @@ impl<B: Backend> Runner<B> {
             hp_mp: None,
             chat: None,
             map: None,
+            mesos: None,
+            whole: None,
             events: Vec::new(),
             error: None,
             stale: false,
@@ -272,19 +314,24 @@ impl<B: Backend> Runner<B> {
         let capturing = self.state == CaptureState::Capturing;
         if let Some(window) = found.filter(|_| capturing || probing) {
             // The chat reader may want more rows than at first, for a chat box the player made
-            // taller, and the map's name is at the top. Under a bar, the readers' rows start above
-            // it.
-            let whole = self.map.wants_whole_frame();
+            // taller, and the map's name and the meso total need the whole game area. Under a
+            // bar, the readers' rows start above it.
             let area = window.height.saturating_sub(self.bar.saturating_mul(2));
+            let strip =
+                rows_needed(area, self.source).max(self.chat.rows_needed(area, self.source));
+            let wants = WholeFrameFor {
+                map: self.map.wants_whole_frame(),
+                mesos: self.meso.wants_whole_frame((window.width, area)),
+            };
+            let whole = wants.map || wants.mesos;
             let rows = match whole {
                 true => window.height,
-                false => (self.bar
-                    + rows_needed(area, self.source).max(self.chat.rows_needed(area, self.source)))
-                .min(window.height),
+                false => (self.bar + strip).min(window.height),
             };
             let grab = self.backend.grab(&window, rows);
             match grab {
                 Ok(grab) => {
+                    tick.whole = whole.then_some(wants);
                     if grab.fresh {
                         self.stale = 0;
                         if probing {
@@ -316,6 +363,7 @@ impl<B: Backend> Runner<B> {
                                 let picture = (window.width, window.height, self.bar, self.source);
                                 if self.picture.is_some_and(|before| before != picture) {
                                     self.exp.recheck();
+                                    self.meso.recheck();
                                     self.hp_mp_health.new_picture();
                                 }
                                 self.picture = Some(picture);
@@ -329,7 +377,14 @@ impl<B: Backend> Runner<B> {
                                 // The game fades to black when the map changes.
                                 let dark = matches!(reading, Err(Unreadable::ScreenDark));
                                 tick.events = self.events_for(&reading);
-                                if let Some(map) = self.map.observe(&frame, dark) {
+                                // To the map, a whole frame it didn't ask for is the strip: its
+                                // name is read at its own times only.
+                                let for_map = match whole && !wants.map {
+                                    true => frame
+                                        .bottom_rows(unstretch::scaled_rows(strip, frame.scale())),
+                                    false => frame,
+                                };
+                                if let Some(map) = self.map.observe(&for_map, dark) {
                                     tick.events.push(Event::MapChanged {
                                         map_key: map.as_ref().map(|name| name.key.clone()),
                                     });
@@ -337,6 +392,16 @@ impl<B: Backend> Runner<B> {
                                 }
                                 let hp_mp = self.hp_mp_events(&hud.hp_mp, dark);
                                 tick.events.extend(hp_mp);
+                                // A Retina frame's meso box is read where the HUD reader found the
+                                // pixel blocks start, rather than undoing the whole frame.
+                                if let Some(meso) =
+                                    self.meso.observe(&frame, self.exp.block_offset())
+                                {
+                                    if let Some((total, source)) = meso.send {
+                                        tick.events.push(Event::MesoChanged { total, source });
+                                    }
+                                    tick.mesos = Some(meso.view);
+                                }
                                 tick.exp = Some(reading);
                                 tick.hp_mp = Some(hud.hp_mp);
                                 tick.chat = Some(self.chat.observe(&frame));
@@ -364,9 +429,10 @@ impl<B: Backend> Runner<B> {
         tick.source = self.source;
         tick.window = found.map(|window| letterbox::in_window(window, self.bar));
         let capturing = self.state == CaptureState::Capturing;
-        // Back from a pause: the player may have taken a portal meanwhile.
+        // Back from a pause: the player may have taken a portal, or spent mesos, meanwhile.
         if capturing && !self.was_capturing {
             self.map.recheck();
+            self.meso.new_look();
         }
         self.was_capturing = capturing;
         let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -435,7 +501,11 @@ impl<B: Backend> Runner<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::MesoSource;
     use crate::recognizers::exp_bar::test_support::{Canvas, DARK, GRIND, Hud, NEEDED_41, pct_of};
+    use crate::recognizers::map_name::CHECK_EVERY;
+    use crate::recognizers::map_name::test_support::Minimap;
+    use crate::recognizers::meso_total::test_support::{MesoWindow, Window};
 
     /// A backend driven by the test: the window it reports and the picture in it.
     #[derive(Default)]
@@ -648,7 +718,6 @@ mod tests {
     // whole frame is grabbed when nothing asked for it.
     #[test]
     fn the_map_is_read_at_the_start_and_after_each_fade() {
-        use crate::recognizers::map_name::test_support::Minimap;
         let hud = Hud::new();
         let on_map = |name: &str| {
             let mut canvas = hud_at(&hud, GRIND[0]);
@@ -660,14 +729,19 @@ mod tests {
             canvas: Some(on_map("Forest I")),
             ..Fake::default()
         });
-        let maps = |runner: &mut Runner<Fake>, ticks: usize| -> Vec<Option<String>> {
-            (0..ticks)
-                .flat_map(|_| runner.tick().events)
-                .filter_map(|e| match e {
+        // Whole frames the map asked for, counted apart from the meso total's.
+        let mut for_map = 0;
+        let mut maps = |runner: &mut Runner<Fake>, ticks: usize| -> Vec<Option<String>> {
+            let mut found = Vec::new();
+            for _ in 0..ticks {
+                let tick = runner.tick();
+                for_map += usize::from(tick.whole.is_some_and(|w| w.map));
+                found.extend(tick.events.into_iter().filter_map(|e| match e {
                     Event::MapChanged { map_key } => Some(map_key),
                     _ => None,
-                })
-                .collect()
+                }));
+            }
+            found
         };
         let forest = maps(&mut runner, 6);
         assert!(matches!(forest.as_slice(), [Some(_)]), "{forest:?}");
@@ -678,14 +752,8 @@ mod tests {
         let town = maps(&mut runner, 6);
         assert!(matches!(town.as_slice(), [Some(_)]), "{town:?}");
         assert_ne!(town, forest);
-        // Two whole frames for each map, and strips otherwise.
-        let whole = runner
-            .backend_mut()
-            .grabs
-            .iter()
-            .filter(|g| g.1 == 768)
-            .count();
-        assert_eq!(whole, 4);
+        // Two whole frames for each map; any others were the meso total's.
+        assert_eq!(for_map, 4);
     }
 
     // A player can take a portal while capture is paused (the game minimized). Fails if the map
@@ -693,7 +761,6 @@ mod tests {
     // old one for up to 30 s.
     #[test]
     fn the_map_is_read_again_when_capture_resumes() {
-        use crate::recognizers::map_name::test_support::Minimap;
         let mut canvas = hud_at(&Hud::new(), GRIND[0]);
         Minimap::new("Victoria Road", "Forest I").draw(&mut canvas);
         let mut runner = Runner::new(Fake {
@@ -712,13 +779,8 @@ mod tests {
         runner.tick();
         assert_ne!(runner.tick().state, CaptureState::Capturing);
         runner.backend_mut().window = Some(GAME);
-        let before = runner.backend_mut().grabs.len();
-        for _ in 0..3 {
-            runner.tick();
-        }
-        let whole = runner.backend_mut().grabs[before..]
-            .iter()
-            .filter(|g| g.1 == 768)
+        let whole = (0..3)
+            .filter(|_| runner.tick().whole.is_some_and(|w| w.map))
             .count();
         assert!(whole > 0, "the map was read again");
     }
@@ -727,7 +789,6 @@ mod tests {
     // for the map's name, which holds chat and other players' names, is offered for it.
     #[test]
     fn only_strips_are_offered_for_the_picture() {
-        use crate::recognizers::map_name::test_support::Minimap;
         let mut canvas = hud_at(&Hud::new(), GRIND[0]);
         Minimap::new("Victoria Road", "Forest I").draw(&mut canvas);
         let mut runner = Runner::new(Fake {
@@ -1169,7 +1230,6 @@ mod tests {
     // should follow.
     #[test]
     fn a_ticks_events_come_in_a_fixed_order() {
-        use crate::recognizers::map_name::test_support::Minimap;
         let rank = |e: &Event| match e {
             Event::ExpChanged { .. } => 0,
             Event::LevelUp { .. } => 1,
@@ -1187,6 +1247,9 @@ mod tests {
         let on_map = |name: &str, exp: u64, hp: u32| {
             let mut canvas = hud_hp(&hud, exp, hp, 600);
             Minimap::new("Victoria Road", name).draw(&mut canvas);
+            // The inventory open, its total rising every third frame.
+            let total = 5_170_316 + u64::from(900 - hp) / 3 * 50;
+            MesoWindow::new(Window::Inventory, total).draw(&mut canvas);
             canvas
         };
         let mut runner = Runner::new(Fake {
@@ -1219,5 +1282,205 @@ mod tests {
             ticks.iter().any(|t| has(t, hp) && has(t, map)),
             "a tick with a map change and HP: {ticks:?}"
         );
+        let meso = |e: &Event| matches!(e, Event::MesoChanged { .. });
+        assert!(
+            ticks.iter().any(|t| has(t, hp) && has(t, meso)),
+            "a tick with a meso total and HP: {ticks:?}"
+        );
+    }
+
+    /// The HUD at `exp` with HP `hp`, the minimap, and `windows` open.
+    fn scene(hud: &Hud, exp: u64, hp: u32, windows: &[&MesoWindow]) -> Canvas {
+        let mut canvas = hud_hp(hud, exp, hp, 600);
+        Minimap::new("Victoria Road", "Forest I").draw(&mut canvas);
+        for window in windows {
+            window.draw(&mut canvas);
+        }
+        canvas
+    }
+
+    // Map reads keep their own times among the meso reader's whole frames, counted by who asked.
+    // Fails if meso frames are taken for map reads, or a map read comes early, late or never.
+    #[test]
+    fn map_reads_keep_their_times_among_the_meso_totals_whole_frames() {
+        let hud = Hud::new();
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(scene(&hud, GRIND[0], 700, &[])),
+            ..Fake::default()
+        });
+        let (mut for_map, mut for_mesos, mut whole) = (Vec::new(), 0, Vec::new());
+        let ticks = 4 + CHECK_EVERY as usize + 4;
+        for n in 1..=ticks {
+            if let Some(asked) = runner.tick().whole {
+                whole.push(n);
+                if asked.map {
+                    for_map.push(n);
+                }
+                for_mesos += usize::from(asked.mesos);
+            }
+        }
+        assert_eq!(for_map, [2, 3, 4 + CHECK_EVERY as usize]);
+        // The meso total looks about once a second while no box is in view: a whole frame at
+        // least every fourth tick, its own or the map's.
+        assert!(whole.windows(2).all(|w| w[1] - w[0] <= 4), "{whole:?}");
+        assert!(for_mesos >= ticks / 4 - 2, "{for_mesos}");
+    }
+
+    // Whole frames read for the meso total never reach the "What MesoVibe sees" picture. Fails
+    // if one, which holds other players' names, is offered for the picture.
+    #[test]
+    fn meso_whole_frames_never_reach_the_picture() {
+        let hud = Hud::new();
+        let inventory = MesoWindow::new(Window::Inventory, 5_170_316);
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(scene(&hud, GRIND[0], 700, &[&inventory])),
+            ..Fake::default()
+        });
+        let height = |g: &Grab| g.height - g.first_row;
+        let mut meso_frames = 0;
+        for _ in 0..12 {
+            let tick = runner.tick();
+            meso_frames += usize::from(tick.whole.is_some_and(|w| w.mesos));
+            assert_ne!(runner.last_strip().map(height), Some(768));
+            if tick.whole.is_some() {
+                assert_eq!(runner.last_grab().map(height), Some(768));
+            }
+        }
+        assert!(
+            meso_frames >= 10,
+            "every tick once the box is in view: {meso_frames}"
+        );
+    }
+
+    // When the map and the meso total both want a whole frame on the same tick, one grab serves
+    // both. Fails if the tick grabs twice, or either reader misses the frame.
+    #[test]
+    fn one_whole_frame_serves_the_map_and_the_meso_total() {
+        let hud = Hud::new();
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            canvas: Some(scene(&hud, GRIND[0], 700, &[])),
+            ..Fake::default()
+        });
+        for _ in 0..6 {
+            runner.tick();
+        }
+        // Minimized and back: both read again at once.
+        runner.backend_mut().window = Some(GameWindow {
+            minimized: true,
+            ..GAME
+        });
+        runner.tick();
+        runner.backend_mut().window = Some(GAME);
+        runner.tick();
+        let grabs = runner.backend_mut().grabs.len();
+        let tick = runner.tick();
+        assert_eq!(
+            tick.whole,
+            Some(WholeFrameFor {
+                map: true,
+                mesos: true
+            })
+        );
+        assert_eq!(runner.backend_mut().grabs.len(), grabs + 1, "one grab");
+        assert_eq!(
+            tick.mesos,
+            Some(MesoView::NotOpen),
+            "the meso total looked at it"
+        );
+    }
+
+    // The EXP bar, HP and MP and chat read every tick's frame, whole or not, and HP and MP stay
+    // continuous across whole frames. Fails if a whole frame skips a reader or breaks the chain.
+    #[test]
+    fn exp_hp_mp_and_chat_read_every_tick_whole_or_not() {
+        let hud = Hud::new();
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            ..Fake::default()
+        });
+        let (mut whole, mut strips) = (0, 0);
+        let mut changes = Vec::new();
+        for (i, &exp) in GRIND.iter().chain(&GRIND).enumerate() {
+            let hp = 900 - i as u32;
+            runner.backend_mut().canvas = Some(scene(&hud, exp, hp, &[]));
+            let tick = runner.tick();
+            assert!(
+                tick.exp.is_some() && tick.hp_mp.is_some() && tick.chat.is_some(),
+                "tick {i}"
+            );
+            match tick.whole {
+                Some(_) => whole += 1,
+                None => strips += 1,
+            }
+            changes.extend(hp_mp_events(&tick));
+        }
+        assert!(whole >= 4 && strips >= 4, "{whole} whole, {strips} strips");
+        // Once read, every change follows on from the one before.
+        assert!(changes.len() > 10, "{changes:?}");
+        assert!(
+            changes[1..].iter().all(|e| matches!(
+                e,
+                Event::HpMpChanged {
+                    continuous: true,
+                    ..
+                }
+            )),
+            "{changes:?}"
+        );
+    }
+
+    // A meso total reaches plugins once named and read the same twice, then when it changes.
+    // Fails if a total is sent from one frame, sent again unchanged, or never.
+    #[test]
+    fn trusted_meso_totals_reach_plugins() {
+        let hud = Hud::new();
+        let mut runner = Runner::new(Fake {
+            window: Some(GAME),
+            ..Fake::default()
+        });
+        assert_eq!(runner.meso_state(), MesoState::Learning);
+        let mut sent = Vec::new();
+        for (i, &exp) in GRIND.iter().enumerate() {
+            let total = if i < 10 { 5_170_316 } else { 5_170_369 };
+            let inventory = MesoWindow::new(Window::Inventory, total);
+            runner.backend_mut().canvas = Some(scene(&hud, exp, 700, &[&inventory]));
+            sent.extend(runner.tick().events.into_iter().filter_map(|e| match e {
+                Event::MesoChanged { total, source } => Some((total, source)),
+                _ => None,
+            }));
+        }
+        assert_eq!(
+            sent,
+            [
+                (5_170_316, MesoSource::Inventory),
+                (5_170_369, MesoSource::Inventory)
+            ]
+        );
+        assert_eq!(runner.meso_state(), MesoState::Reading);
+        assert!(runner.meso_reader().knowledge().is_some());
+    }
+
+    // At a game size the meso box hasn't been checked at, no whole frame is read for it and
+    // plugins hear it can't be read. Fails if the engine reads whole frames it can't use.
+    #[test]
+    fn no_meso_frames_at_an_unchecked_size() {
+        let hud = Hud::new();
+        let window = GameWindow {
+            width: 1024,
+            ..GAME
+        };
+        let mut runner = Runner::new(Fake {
+            window: Some(window),
+            ..Fake::default()
+        });
+        for &exp in &GRIND {
+            runner.backend_mut().canvas = Some(hud_hp_at(&hud, (1024, 768), exp, 700, 600));
+            let tick = runner.tick();
+            assert!(!tick.whole.is_some_and(|w| w.mesos));
+        }
+        assert_eq!(runner.meso_state(), MesoState::Unsupported);
     }
 }

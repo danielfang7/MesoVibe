@@ -425,6 +425,21 @@ test("shop sales count as loot sold, and spending shows apart", () => {
   assert.equal(fields.maps, undefined, "a stretch away from the grind is no map's rate");
 });
 
+// The storage window's total is sent too, but the ledger doesn't yet tell a transfer to or from
+// storage from loot. Fails if a withdrawal read in storage counts as mesos picked up or sold.
+test("a total read in the storage window isn't counted yet", () => {
+  const plugin = play();
+  const t = twoReadings(plugin);
+  const before = lootFigures(plugin.sent);
+  plugin.send(total(1_250_000, t + 1000, "storage"));
+  plugin.send({ type: "tick", atMs: t + 2000 });
+  assert.deepEqual(lootFigures(plugin.sent), before);
+  // The next inventory total is measured from the last one counted, not from storage's.
+  const later = grind(plugin, t + 2000, 120);
+  plugin.send(total(1_060_000, later));
+  assert.equal(lootFigures(plugin.sent)["Mesos picked up"], "60,000");
+});
+
 // Without a shop reading, a rise after time in town or across a pause is what a shop paid, not
 // mesos picked up, so it never raises a map's mesos/hr. Fails if it counts as picked up or goes
 // to a map.

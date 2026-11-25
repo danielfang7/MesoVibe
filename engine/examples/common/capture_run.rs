@@ -253,6 +253,57 @@ pub fn load(run: &Path, png_path: &Path) -> Result<Image, String> {
     })
 }
 
+/// The whole game area at the game's own pixel size: one pixel from each block of a frame at a
+/// backing scale, `None` at scale 1 or for a frame holding only its bottom rows.
+///
+/// The macOS capture helper's frames hold, in their top rows, the window's edge under its title
+/// bar, which isn't drawn in the game's blocks, so `unstretch::unscale` (which wants every block
+/// whole) refuses them. This picks where the blocks start by the fewest blocks that aren't one
+/// color, over a sample of the frame away from its edges. For replays only: the engine never
+/// undoes a whole frame, and its readers find the blocks in the rows they read.
+// Each replay builds this file on its own, and only some undo whole frames.
+#[allow(dead_code)]
+pub fn whole_1x(image: &Image) -> Option<Image> {
+    let frame = image.frame();
+    let s = frame.scale();
+    if s < 2 || frame.first_row() != 0 || frame.width() < 4 * s || frame.height() < 4 * s {
+        return None;
+    }
+    let (w, h) = (frame.width(), frame.height());
+    let mixed = |(px, py): (u32, u32)| {
+        let mut count = 0u32;
+        let mut y = py + 2 * s;
+        while y + s + 2 * s <= h {
+            let mut x = px + 2 * s;
+            while x + s + 2 * s <= w {
+                let first = frame.bgra(x, y);
+                if (0..s).any(|dy| (0..s).any(|dx| frame.bgra(x + dx, y + dy) != first)) {
+                    count += 1;
+                }
+                x += 7 * s;
+            }
+            y += 7 * s;
+        }
+        count
+    };
+    let offsets = (0..s).flat_map(|py| (0..s).map(move |px| (px, py)));
+    let (px, py) = offsets.min_by_key(|&offset| mixed(offset))?;
+    let (gw, gh) = (w / s, h / s);
+    let mut bgra = Vec::with_capacity((gw * gh * 4) as usize);
+    for y in 0..gh {
+        for x in 0..gw {
+            bgra.extend_from_slice(&frame.bgra(px + s * x, py + s * y));
+        }
+    }
+    Some(Image {
+        width: gw,
+        height: gh,
+        first_row: 0,
+        scale: 1,
+        bgra,
+    })
+}
+
 /// What the engine carries from frame to frame about the game's picture: the black bar Full
 /// Screen leaves above and below it on a display of another shape, and the height of the picture
 /// the game scales up (768 lines, or a smaller size chosen in Full Screen). Kept across runs, a

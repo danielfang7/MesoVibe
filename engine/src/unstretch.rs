@@ -114,13 +114,35 @@ pub fn unscale(frame: &Frame) -> Option<Picture> {
     unscale_found_in(frame, frame)
 }
 
-/// [`unscale`], with where the blocks start found in `probe`: the frame, or part of it.
-fn unscale_found_in(frame: &Frame, probe: &Frame) -> Option<Picture> {
-    let scale = frame.scale();
-    if scale < 2 {
+/// [`unscale`], and where the blocks start: (x, y) in captured pixels, each below the scale. A
+/// reader that needs only a few game pixels of a larger frame at the same scale can read them at
+/// that offset ([`block_offset`]) instead of undoing the whole frame.
+pub fn unscale_with_offset(frame: &Frame) -> Option<(Picture, (u32, u32))> {
+    let offset = block_offset(frame)?;
+    Some((sample(frame, offset), offset))
+}
+
+/// Where the blocks start in a frame that declares a backing scale above 1: (x, y) in captured
+/// pixels, each below the scale, so game pixel (x, y) is captured pixel
+/// (x0 + scale * x, y0 + scale * y). `None` at scale 1, or when no placement of the blocks makes
+/// every block one color.
+pub fn block_offset(frame: &Frame) -> Option<(u32, u32)> {
+    if frame.scale() < 2 {
         return None;
     }
-    let (px, py) = (phase(probe, false)?, phase(probe, true)?);
+    Some((phase(frame, false)?, phase(frame, true)?))
+}
+
+/// [`unscale`], with where the blocks start found in `probe`: the frame, or part of it.
+fn unscale_found_in(frame: &Frame, probe: &Frame) -> Option<Picture> {
+    let offset = block_offset(probe)?;
+    (frame.scale() >= 2).then(|| sample(frame, offset))
+}
+
+/// One pixel from each block of a frame at a backing scale, with the blocks starting at
+/// `(px, py)`.
+fn sample(frame: &Frame, (px, py): (u32, u32)) -> Picture {
+    let scale = frame.scale();
     let (width, height) = (frame.width() / scale, frame.height() / scale);
     // The first game row whose block starts inside the rows the frame holds.
     let first_row = frame.first_row().saturating_sub(py).div_ceil(scale);
@@ -130,13 +152,13 @@ fn unscale_found_in(frame: &Frame, probe: &Frame) -> Option<Picture> {
             bgra.extend_from_slice(&frame.bgra(px + scale * c, py + scale * k));
         }
     }
-    Some(Picture {
+    Picture {
         width,
         height,
         first_row,
         bgra,
         source: frame.source(),
-    })
+    }
 }
 
 /// Where the blocks start along one direction, in captured pixels: the first offset at which
@@ -930,7 +952,11 @@ mod tests {
             let frame = Frame::bottom(2 * width, 2 * height, from, stride, strip)
                 .and_then(|f| f.with_scale(2))
                 .unwrap();
-            let recovered = unscale(&frame).unwrap();
+            let (recovered, offset) = unscale_with_offset(&frame).unwrap();
+            assert_eq!(
+                offset, phase,
+                "where the blocks start, for readers that sample there"
+            );
             let recovered = recovered.frame();
             assert_eq!((recovered.width(), recovered.height()), (width, height));
             assert!(recovered.first_row() <= height - rows, "{phase:?}");

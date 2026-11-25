@@ -1,6 +1,7 @@
 //! What MesoVibe keeps on this computer: settings, each plugin's own data (JSON files), and the
-//! shapes the EXP bar reader confirmed (its digits in `exp-bar.txt`, so later sessions read from
-//! the first frame), all in the app's data folder. Nothing leaves the device.
+//! shapes the readers named (the EXP bar's digits in `exp-bar.txt`, the meso total's in
+//! `meso-total.txt`, so later sessions read from the first frame), all in the app's data folder.
+//! Nothing leaves the device.
 //!
 //! Writes go to a temporary file that is then renamed over the old one, so a crash never leaves a
 //! half-written file. A file whose contents can't be understood (a hand edit, a damaged disk) is
@@ -27,12 +28,16 @@ pub enum Learned {
     /// Builds that read the pickup notices also kept their letters in `notices.txt`; nothing reads
     /// or removes that file now.
     ExpBar,
+    /// The meso total's digits
+    /// ([`mesovibe_engine::recognizers::meso_total::MesoReader::knowledge`]).
+    MesoTotal,
 }
 
 impl Learned {
     fn file(self) -> &'static str {
         match self {
             Learned::ExpBar => "exp-bar.txt",
+            Learned::MesoTotal => "meso-total.txt",
         }
     }
 }
@@ -401,6 +406,34 @@ mod tests {
         again.keep_knowledge(Learned::ExpBar, None).unwrap();
         let last = Store::open(dir.clone());
         assert_eq!(last.knowledge(Learned::ExpBar), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // Each reader keeps what it named in a file of its own, so forgetting one leaves the other.
+    // Fails if the meso total's shapes and the EXP bar's share a file, or don't survive a restart.
+    #[test]
+    fn the_meso_totals_shapes_are_kept_apart_from_the_exp_bars() {
+        let dir = temp_dir("learned-mesos");
+        let store = Store::open(dir.clone());
+        assert_eq!(store.knowledge(Learned::MesoTotal), None);
+        store
+            .keep_knowledge(Learned::MesoTotal, Some("mesovibe meso-total 1\n"))
+            .unwrap();
+        store
+            .keep_knowledge(Learned::ExpBar, Some("mesovibe exp-bar 1\n"))
+            .unwrap();
+        let again = Store::open(dir.clone());
+        assert_eq!(
+            again.knowledge(Learned::MesoTotal).as_deref(),
+            Some("mesovibe meso-total 1\n")
+        );
+        again.keep_knowledge(Learned::MesoTotal, None).unwrap();
+        let last = Store::open(dir.clone());
+        assert_eq!(last.knowledge(Learned::MesoTotal), None);
+        assert_eq!(
+            last.knowledge(Learned::ExpBar).as_deref(),
+            Some("mesovibe exp-bar 1\n")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

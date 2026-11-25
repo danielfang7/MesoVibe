@@ -832,8 +832,10 @@ definePlugin({
         } else if (event.type === "MapChanged") {
           map = event.map_key;
           show(atMs);
-        } else if (event.type === "MesoChanged") {
+        } else if (event.type === "MesoChanged" && event.source !== "storage") {
           // Counted while paused too: a change across a pause is what a shop paid or what was spent.
+          // The storage window's total isn't counted yet: the ledger doesn't yet tell a transfer
+          // to or from storage from loot, so it's left out as it was before storage was read.
           countMesos(event.total, event.source, atMs);
           show(atMs);
         }
