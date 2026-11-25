@@ -719,6 +719,14 @@ definePlugin({
       source === null || readers.hpMp !== "reading" || !slotsRead()
         ? undefined
         : { counting: true, healing: source.healing("hp", atMs) || source.healing("mp", atMs) };
+    /** Tells the count source to drop the uses it holds back; a fault in it never stops the tracker. */
+    const forgetHeld = () => {
+      try {
+        source?.forget?.();
+      } catch {
+        // Nothing to undo: the source's own state is all it would have touched.
+      }
+    };
     /** Moves the session's clock, giving the time played to the map the player is on. */
     const tick = (atMs: number) => {
       const before = session.activeMs;
@@ -862,7 +870,7 @@ definePlugin({
             // so its time isn't either.
             startLoot(session, map, lead, event.level);
             // Potions held back for a name before the first gain aren't this session's.
-            source?.forget?.();
+            forgetHeld();
             // The session just ended stops counting its sales, and a total read in the five
             // minutes before this kill opens this one.
             if (history[0] !== undefined) stopCloseOut(history[0]);
@@ -944,7 +952,7 @@ definePlugin({
             waitForCloseOut(past, atMs, reads);
             pushHistory(past);
             session = newSession(atMs, session.last);
-            source?.forget?.();
+            forgetHeld();
             readSaid = false;
             pre = null;
             persist(atMs, 0);
@@ -955,7 +963,7 @@ definePlugin({
           if (session.expGained > 0 || session.held !== undefined) {
             remember("reset", atMs);
             session = newSession(atMs, session.last);
-            source?.forget?.();
+            forgetHeld();
             readSaid = false;
             pre = null;
             persist(atMs, 0);
@@ -971,7 +979,7 @@ definePlugin({
           // Potions held back for a name before Pause or while paused aren't counted after it.
           if (session.paused) {
             delete session.paused;
-            source?.forget?.();
+            forgetHeld();
             persist(atMs, 0);
           }
         } else if (action.startsWith(DELETE_SESSION)) {

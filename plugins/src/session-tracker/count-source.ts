@@ -10,15 +10,16 @@
  *
  * An icon's potion is learned from its uses: each rise of a potion's amount, short of the max (a
  * rise the max capped says nothing of the amount) and near no other item's count change, is a vote
- * for that potion, and a rise short of its amount (a smaller potion, or a hit) is one against; a
- * rise past it is that potion plus recovery. Two votes, and more votes than against, name it, and
- * the name is kept. Uses before that wait, and count once it's named; the
+ * for that potion, and a rise just short of its amount (a slightly smaller potion) is one against;
+ * one well short (a hit, or a skill's cost) or past it (recovery) is neither. Two votes, and more
+ * votes than against, name it, and the name is kept. Uses before that wait, and count once it's named; the
  * tracker drops them when the session pauses, ends or starts, since they're no longer its.
  *
  * Once named, a use counts on a looser rise: half the amount (a hit in the same frame), or a fifth
  * of it reaching the max (topped up to full; less is natural recovery). Two potions a moment apart
  * can show as one count change, so a change counts every rise before it of the potion's amount,
- * or else its one latest rise that fits loosely: a Heal just before a potion isn't a second potion.
+ * or else its one latest rise that fits loosely: a Heal just before a potion isn't a second potion,
+ * though a burst of potions cut short by hits counts fewer than were drunk.
  */
 
 import type { Event } from "@mesovibe/sdk";
@@ -111,7 +112,7 @@ interface Waiting {
 
 /**
  * A rise near an unnamed icon's count change: a vote to name it `item`, or with `item` null one
- * that fits no potion, against each potion of its resource whose amount it falls short of.
+ * that fits no potion, against each potion of its resource whose amount it falls just short of.
  */
 interface Ballot {
   icon: string;
@@ -198,18 +199,18 @@ export function slotSource(saved?: unknown): CountSource {
   /**
    * Names each waiting icon whose settled ballots (rises no other change can claim any more, older
    * than PAIR_MS, and not counted for a named icon) give a potion two votes and more votes than
-   * rises short of its amount, then counts its uses that waited no longer than WAIT_MS before the
-   * name came.
+   * rises just short of its amount, then counts its uses that waited no longer than WAIT_MS before
+   * the name came. An icon is named on its votes even if its waiting uses were dropped.
    */
   const name = (atMs: number): PotUse[] => {
     const uses: PotUse[] = [];
-    for (const icon of new Set(waiting.map((w) => w.icon))) {
+    for (const icon of new Set(ballots.map((b) => b.icon))) {
       const settled = ballots.filter(
         (b) => b.icon === icon && !contested.has(b.rise) && !spent.has(b.rise) && atMs - b.rise.atMs > PAIR_MS,
       );
       const potion = POTIONS.find((p) => {
         const votes = settled.filter((b) => b.item === p.id).length;
-        const short = (r: Rise) => r.resource === p.resource && r.amount < p.amount && r.amount * 2 >= p.amount;
+        const short = (r: Rise) => r.resource === p.resource && r.amount < p.amount && r.amount >= p.amount - NAME_SLACK;
         const against = settled.filter((b) => b.item === null && short(b.rise)).length;
         return votes >= NAME_VOTES && votes > against;
       });
@@ -238,9 +239,10 @@ export function slotSource(saved?: unknown): CountSource {
       const known = POTIONS.find((p) => p.id === icons.get(change.icon));
       const before = rises.filter((r) => r.atMs < change.atMs && change.atMs - r.atMs <= PAIR_MS);
       if (known !== undefined) {
-        // A rise in the change's own frame only when none before it fits.
+        // A rise in the change's own frame only when none before it fits, and only of the
+        // potion's amount: a Heal in that frame with a pickup isn't a potion.
         let taken = counted(known, before);
-        if (taken.length === 0) taken = counted(known, rises.filter((r) => r.atMs === change.atMs));
+        if (taken.length === 0) taken = rises.filter((r) => r.atMs === change.atMs && fits(known, r, false)).slice(0, 1);
         if (taken.length === 0) continue;
         changes = changes.filter((c) => c !== change);
         for (const r of taken) uses.push(use(known, r));
@@ -255,6 +257,7 @@ export function slotSource(saved?: unknown): CountSource {
       }
       waiting.push({ icon: change.icon, rises: before, atMs: change.atMs });
     }
+    uses.push(...name(atMs));
     waiting = waiting.filter((w) => atMs - w.atMs <= WAIT_MS).slice(-MAX_WAITING);
     ballots = ballots.filter((b) => atMs - b.rise.atMs <= BALLOT_MS);
     return uses;

@@ -259,6 +259,10 @@ test("a named icon's change takes a rise in its own frame when none came before"
   game.send(hpMp(hp + 160, mp, at + 250));
   game.send(slot(6, "c376", "meat-icon", at + 250));
   assert.deepEqual(used(game.sent), { Meat: "×1" });
+  // Meat picked up in the frame of a Heal: the Heal's rise isn't a Meat's amount, so no use.
+  game.send(hpMp(hp + 360, mp, at + 5_000));
+  game.send(slot(6, "c386", "meat-icon", at + 5_000));
+  assert.deepEqual(used(game.sent), { Meat: "×1" });
 });
 
 // A player drinking less than once every ten minutes still gets the icon named; only the uses
@@ -298,6 +302,31 @@ test("rises short of a potion's amount keep an icon from being named it", () => 
   for (let i = 0; i < 6; i++) game.second();
   assert.deepEqual(used(game.sent), {});
   assert.equal(last(game.sent, "save").data.slots?.icons.some(([icon]) => icon === "orange-icon") ?? false, false);
+});
+
+// A Lemon whose rises are often cut by a skill's MP cost in the same reading still gets named: a
+// rise well short of the amount says nothing against it. Fails if those rises keep it unnamed.
+test("rises cut well short by a skill's cost don't keep an icon unnamed", () => {
+  const game = grinding();
+  [130, 150, 130, 150].forEach((mp, i) => game.use({ mp, slots: [[0, `c${273 - i}`, "lemon-icon"]] }));
+  game.settle();
+  assert.deepEqual(used(game.sent), { Lemon: "×4" });
+});
+
+// An icon with enough votes is named and saved though its waiting uses were dropped at Resume, so
+// its next use counts at once. Fails if the name waits for another change.
+test("an icon is named on its votes after its waiting uses were dropped", () => {
+  const game = grinding();
+  game.use({ hp: 160, slots: [[6, "c376", "meat-icon"]] });
+  game.use({ hp: 160, slots: [[6, "c375", "meat-icon"]] });
+  game.send({ type: "action", action: "pause", atMs: game.state.at });
+  game.send({ type: "action", action: "resume", atMs: game.state.at + 1 });
+  game.settle();
+  assert.deepEqual(used(game.sent), {}, "the two before Pause aren't counted");
+  for (let i = 0; i < 6; i++) game.second();
+  assert.deepEqual(last(game.sent, "save").data.slots.icons, [["meat-icon", MEAT]], "saved before its next use");
+  game.use({ hp: 160, slots: [[6, "c374", "meat-icon"]] });
+  assert.deepEqual(used(game.sent), { Meat: "×1" });
 });
 
 // Uses held back for a name aren't counted after Pause: a potion drunk before Pause, or while
