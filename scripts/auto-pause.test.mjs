@@ -66,7 +66,7 @@ function session(saved = null, { noMap = false, pots = false } = {}) {
   const goTo = (key) => plugin.send(event({ type: "MapChanged", map_key: key }, state.at));
   const total = (amount) => plugin.send(event({ type: "MesoChanged", total: amount, source: "inventory" }, state.at));
   const capture = (to) => plugin.send({ type: "capture", state: to, atMs: state.at });
-  /** Whether the host reads the EXP bar: "reading" or "unread". */
+  /** Whether something is over the EXP bar: "clear" or "covered". */
   const expBar = (to) => plugin.send({ type: "readers", readers: { ...readers, expBar: to }, atMs: state.at });
   return { ...plugin, state, idle, kill, grind, goTo, total, capture, expBar };
 }
@@ -424,15 +424,15 @@ test("a map first read during the idle minute gives back the time the pause take
   );
 });
 
-// While the EXP bar can't be read (a cursor over it), gains can't be seen, so that time doesn't
-// count towards the minute. Fails if the session pauses while the player may be killing, then
-// counts the stretch's EXP against almost no time.
-test("time the EXP bar can't be read doesn't count towards the minute with no EXP", () => {
+// While something is over the EXP bar (a cursor), gains can't be seen, so that time doesn't count
+// towards the minute. Fails if the session pauses while the player may be killing, then counts the
+// stretch's EXP against almost no time.
+test("time with the EXP bar covered doesn't count towards the minute with no EXP", () => {
   const game = session();
   game.grind(120);
-  game.expBar("unread");
+  game.expBar("covered");
   game.idle(300);
-  game.expBar("reading");
+  game.expBar("clear");
   game.kill();
   assert.equal(summary(game.sent).paused, false);
   assert.equal(summary(game.sent).activeMs, 421_000, "the unread stretch is play");

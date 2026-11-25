@@ -226,10 +226,12 @@ export interface Readers {
 }
 
 /**
- * Whether the EXP bar was read on the engine's last tick: `reading`, or `unread` (covered, the game
- * fading between maps, or not captured). Absent from hosts that don't say.
+ * Whether something is over the EXP bar's numbers on the engine's last tick: `covered` (the HUD is
+ * there but its text can't be read, as with a cursor over it, so a gain can't be seen) or `clear`
+ * (read, or no HUD to read at all: a map fading, character select, the Cash Shop). Absent from
+ * hosts that don't say.
  */
-export type ExpBarState = "reading" | "unread";
+export type ExpBarState = "clear" | "covered";
 
 /**
  * How the meso total is read: `reading` (it's read whenever the inventory or a shop is open long

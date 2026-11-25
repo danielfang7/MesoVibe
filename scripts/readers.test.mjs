@@ -49,17 +49,21 @@ test("the quick slots' state reaches plugins while the engine reads them", () =>
   assert.equal(readersChanged(readersOf(status({ slots: "reading" })), readersOf(status({ slots: "not_found" }))), true);
 });
 
-// Statuses arrive four times a second; plugins hear only changes. Fails if an unchanged status is
-// sent on, or a change is missed, including a field one side has and the other doesn't.
-// Whether the EXP bar was read reaches plugins: the Session Tracker counts the minute with no EXP
-// only while it is. Fails if an unread bar looks read, or the change isn't sent on.
-test("whether the EXP bar is read reaches plugins", () => {
-  assert.equal(readersOf(status({ exp: { confirmed: true } })).expBar, "reading");
-  assert.equal(readersOf(status({ exp: { confirmed: false } })).expBar, "unread", "not confirmed yet");
-  assert.equal(readersOf(status({ exp: null })).expBar, "unread");
-  assert.equal(readersChanged(readersOf(status({ exp: { confirmed: true } })), readersOf(status({ exp: null }))), true);
+// Something over the EXP bar's numbers reaches plugins: the Session Tracker doesn't count that time
+// towards its minute with no EXP. A missing HUD, a map fading or a stale frame isn't covered. Fails
+// if one of them holds the minute back for good, or a covered bar doesn't.
+test("whether something is over the EXP bar reaches plugins", () => {
+  for (const unreadable of ["no_text", "unknown_glyph", "garbled"]) {
+    assert.equal(readersOf(status({ unreadable })).expBar, "covered", unreadable);
+  }
+  for (const unreadable of ["hud_not_found", "screen_dark", "learning", null]) {
+    assert.equal(readersOf(status({ unreadable })).expBar, "clear", String(unreadable));
+  }
+  assert.equal(readersChanged(readersOf(status({ unreadable: "no_text" })), readersOf(status({ unreadable: null }))), true);
 });
 
+// Statuses arrive four times a second; plugins hear only changes. Fails if an unchanged status is
+// sent on, or a change is missed, including a field one side has and the other doesn't.
 test("only changes are sent on", () => {
   assert.equal(readersChanged(readersOf(status()), readersOf(status())), false);
   assert.equal(readersChanged(readersOf(status()), readersOf(status({ hpMpState: "covered" }))), true);

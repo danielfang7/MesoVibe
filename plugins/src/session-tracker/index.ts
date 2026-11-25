@@ -137,8 +137,8 @@ interface Saved {
 
 /**
  * The stretch since the session's last EXP gain, to pause or end it on its own: the gain's map, the
- * time since with the EXP bar read (paused or not: a gain can't be seen while it isn't), the play
- * time counted since and where it went, and when the player left that map.
+ * capture time since with nothing over the EXP bar (paused or not: a gain can't be seen through a
+ * cursor over it), the play time counted since and where it went, and when the player left that map.
  */
 interface Quiet {
   map: string | null | undefined;
@@ -801,8 +801,8 @@ definePlugin({
      */
     const tick = (atMs: number) => {
       const before = session.activeMs;
-      // A host that doesn't say whether the EXP bar is read counts all capture time.
-      const seen = capture === "capturing" && readers.expBar !== "unread";
+      // A host that doesn't say whether the EXP bar is covered counts all capture time.
+      const seen = capture === "capturing" && readers.expBar !== "covered";
       const captured = seen ? Math.min(Math.max(0, atMs - session.lastAtMs), MAX_TICK_MS) : 0;
       const pots = potTime(atMs);
       advance(session, atMs, capture === "capturing" && session.paused !== true);
