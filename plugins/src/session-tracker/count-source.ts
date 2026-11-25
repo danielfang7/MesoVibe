@@ -10,9 +10,10 @@
  *
  * An icon's potion is learned from its uses: each rise of a potion's amount, short of the max (a
  * rise the max capped says nothing of the amount) and near no other item's count change, is a vote
- * for that potion, and a rise just short of its amount (a slightly smaller potion) is one against;
- * one well short (a hit, or a skill's cost) or past it (recovery) is neither. Two votes, and more
- * votes than against, name it, and the name is kept. Uses before that wait, and count once it's named; the
+ * for that potion, and a rise just short of its amount (a slightly smaller potion) is one against.
+ * An MP rise short by exactly a skill's cost (a Lemon drunk as a skill is cast) votes too; any
+ * other rise well short (a hit) or past the amount (recovery) is neither. Two votes, and more votes
+ * than against, name it, and the name is kept. Uses before that wait, and count once it's named; the
  * tracker drops them when the session pauses, ends or starts, since they're no longer its.
  *
  * Once named, a use counts on a looser rise: half the amount (a hit in the same frame), or a fifth
@@ -87,6 +88,12 @@ const WAIT_MS = 10 * 60_000;
 const MAX_WAITING = 20;
 /** How long a vote to name an icon lasts: a player may drink less than once every ten minutes. */
 const BALLOT_MS = 60 * 60_000;
+/**
+ * A skill's MP cost is an MP drop seen at least twice in the 10 s before a rise: a skill costs the
+ * same every cast, while a hit or a drain varies.
+ */
+const COST_MS = 10_000;
+const COST_SEEN = 2;
 
 /** A rise of the HP or MP numbers between two readings in a row. */
 interface Rise {
@@ -94,6 +101,8 @@ interface Rise {
   amount: number;
   /** It reached the max: a potion near full restores less than its amount. */
   full: boolean;
+  /** For MP, the costs of the skills being cast just before it; for HP none. */
+  costs: number[];
   atMs: number;
 }
 
@@ -153,6 +162,18 @@ function fits(potion: Potion, rise: Rise, known: boolean): boolean {
   return !rise.full && rise.amount >= potion.amount && rise.amount <= potion.amount + NAME_SLACK;
 }
 
+/**
+ * Whether `rise` votes to name an icon `potion`: a rise of its amount, or one short of it by a
+ * skill's cost, the skill cast in the same reading as the potion. Only MP rises have costs: HP
+ * drops are mostly hits, which vary, and adding one back could make a smaller potion look like
+ * Meat. A rise just short of the amount stays a vote against, whatever the cost.
+ */
+function names(potion: Potion, rise: Rise): boolean {
+  if (fits(potion, rise, false)) return true;
+  if (rise.amount >= potion.amount - NAME_SLACK) return false;
+  return rise.costs.some((cost) => fits(potion, { ...rise, amount: rise.amount + cost }, false));
+}
+
 /** The count source that pairs quick-slot count changes with HP and MP rises. */
 export function slotSource(saved?: unknown): CountSource {
   const icons = keptIcons(saved);
@@ -161,6 +182,8 @@ export function slotSource(saved?: unknown): CountSource {
   let changes: Change[] = [];
   let waiting: Waiting[] = [];
   let ballots: Ballot[] = [];
+  /** MP drops in the last COST_MS, to find the costs of the skills being cast. */
+  let drops: { amount: number; atMs: number }[] = [];
   /** Rises near two items' count changes: they name neither. */
   const contested = new WeakSet<Rise>();
   /** Rises counted as a use: one rise is never two uses, nor a vote for another icon. */
@@ -252,7 +275,7 @@ export function slotSource(saved?: unknown): CountSource {
       changes = changes.filter((c) => c !== change);
       if (before.length === 0) continue;
       for (const r of before.filter((r) => !r.full)) {
-        const [only, ...more] = POTIONS.filter((p) => fits(p, r, false));
+        const [only, ...more] = POTIONS.filter((p) => names(p, r));
         if (more.length === 0) vote(change.icon, only?.id ?? null, r);
       }
       waiting.push({ icon: change.icon, rises: before, atMs: change.atMs });
@@ -277,9 +300,17 @@ export function slotSource(saved?: unknown): CountSource {
   const onHpMp = (event: HpMpChanged, atMs: number) => {
     const before = last;
     last = event;
+    drops = drops.filter((d) => atMs - d.atMs <= COST_MS);
     if (before === null || !event.continuous) return;
-    if (event.hp > before.hp) rises.push({ resource: "hp", amount: event.hp - before.hp, full: event.hp >= event.max_hp, atMs });
-    if (event.mp > before.mp) rises.push({ resource: "mp", amount: event.mp - before.mp, full: event.mp >= event.max_mp, atMs });
+    if (event.hp > before.hp) {
+      rises.push({ resource: "hp", amount: event.hp - before.hp, full: event.hp >= event.max_hp, costs: [], atMs });
+    }
+    if (event.mp > before.mp) {
+      const amounts = drops.map((d) => d.amount);
+      const costs = [...new Set(amounts)].filter((cost) => amounts.filter((a) => a === cost).length >= COST_SEEN);
+      rises.push({ resource: "mp", amount: event.mp - before.mp, full: event.mp >= event.max_mp, costs, atMs });
+    }
+    if (event.mp < before.mp) drops.push({ amount: before.mp - event.mp, atMs });
   };
 
   return {

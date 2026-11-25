@@ -313,6 +313,42 @@ test("rises cut well short by a skill's cost don't keep an icon unnamed", () => 
   assert.deepEqual(used(game.sent), { Lemon: "×4" });
 });
 
+// A player who drinks Lemons while casting a 16 MP skill sees +134, never +150: those rises name
+// the Lemon. Fails if a rise short by a skill's cost doesn't vote.
+test("a Lemon drunk as a skill is cast is named from rises short by the skill's cost", () => {
+  const game = grinding();
+  for (const count of ["c273", "c272"]) {
+    game.use({ mp: -16 });
+    game.use({ mp: -16 });
+    game.use({ mp: 134, slots: [[0, count, "lemon-icon"]] });
+  }
+  game.settle();
+  assert.deepEqual(used(game.sent), { Lemon: "×2" });
+});
+
+// Only a skill's MP cost, seen repeating, makes up a short rise: not an MP drop seen once, not a
+// repeating HP drop, and not for a rise just short of the amount. Fails if any of these names an icon.
+test("only a skill's repeating MP cost makes up a rise short of a potion's amount", () => {
+  const game = grinding();
+  const quiet = () => {
+    for (let i = 0; i < 12; i++) game.second();
+  };
+  const twice = (icon, slotIndex, before, rise) => {
+    game.send(slot(slotIndex, "c51", icon, game.state.at));
+    for (const count of ["c50", "c49"]) {
+      for (const drop of before) game.use(drop);
+      game.use({ ...rise, slots: [[slotIndex, count, icon]] });
+      quiet();
+    }
+  };
+  twice("once-icon", 1, [{ mp: -16 }], { mp: 134 });
+  twice("hp-icon", 2, [{ hp: -20 }, { hp: -20 }], { hp: 140 });
+  twice("smaller-icon", 3, [{ mp: -5 }, { mp: -5 }], { mp: 145 });
+  game.settle();
+  assert.deepEqual(used(game.sent), {});
+  assert.deepEqual(last(game.sent, "save").data.slots?.icons ?? [], []);
+});
+
 // An icon with enough votes is named and saved though its waiting uses were dropped at Resume, so
 // its next use counts at once. Fails if the name waits for another change.
 test("an icon is named on its votes after its waiting uses were dropped", () => {
