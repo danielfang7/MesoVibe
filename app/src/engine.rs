@@ -10,9 +10,9 @@
 //! with the game window (`dock.rs`) and decides whether the panel should be built, hidden or
 //! destroyed (`presence.rs`). Nothing is captured while reading is off (Safe mode).
 //!
-//! The shapes the readers confirm (the EXP bar's digits, the pickup notices' letters) are kept on
-//! this computer (`Store`), and the next time reading starts the readers begin from them, so they
-//! read level, EXP and pickups from the first frame instead of learning again.
+//! The shapes the EXP bar reader confirms (its digits) are kept on this computer (`Store`), and the
+//! next time reading starts the reader begins from them, so it reads level and EXP from the first
+//! frame instead of learning again.
 
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -21,10 +21,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use mesovibe_engine::capture::{Backend, CaptureState, Grab};
 use mesovibe_engine::events::Event;
 use mesovibe_engine::hp_mp_health::HpMpState;
-use mesovibe_engine::notice_health::NoticeState;
 use mesovibe_engine::recognizers::chat::ChatUnreadable;
 use mesovibe_engine::recognizers::exp_bar::{Calibration, ExpBarReader, Unreadable};
-use mesovibe_engine::recognizers::notices::NoticeReader;
 use mesovibe_engine::runner::{Runner, Tick};
 use mesovibe_engine::unstretch;
 use serde::Serialize;
@@ -114,10 +112,6 @@ pub struct Status {
     pub calibration: &'static str,
     /// This tick brought no new frame.
     pub stale: bool,
-    /// The pickup notices: `off`, `learning`, `reading`, `covered`, `blocked` or `not_found`.
-    pub notices: NoticeState,
-    /// Mesos amounts waiting for a digit to be learned before they're counted.
-    pub waiting_mesos: usize,
     /// The HP and MP numbers this tick, when they were read.
     pub hp_mp: Option<HpMpReading>,
     /// How the HP and MP numbers are being read: `off`, `learning`, `reading`, `covered`,
@@ -275,8 +269,6 @@ fn tick(
     let tick = runner.tick();
     let exp_bar = runner.exp_reader().knowledge();
     keep(app, Learned::ExpBar, exp_bar, &mut kept.exp_bar);
-    let notices = runner.notice_reader().knowledge();
-    keep(app, Learned::Notices, notices, &mut kept.notices);
     if let Some(error) = &tick.error {
         *blocked = Some(error.0.clone());
     }
@@ -329,29 +321,24 @@ fn tick(
     (tick.state, tick.exp.is_some() || tick.stale)
 }
 
-/// The readers' confirmed shapes as last kept on this computer.
+/// The EXP bar reader's confirmed shapes as last kept on this computer.
 #[derive(Default)]
 struct Kept {
     exp_bar: Option<String>,
-    notices: Option<String>,
 }
 
-/// A runner whose readers start from the shapes kept on this computer, where they still read,
-/// and the text each would keep.
+/// A runner whose EXP bar reader starts from the shapes kept on this computer, where they still
+/// read, and the text it would keep.
 fn kept_runner(app: &AppHandle) -> (Runner<Platform>, Kept) {
     let store = app.try_state::<Store>();
     let text = |reader| store.as_ref().and_then(|store| store.knowledge(reader));
     let exp = text(Learned::ExpBar)
         .and_then(|text| ExpBarReader::from_knowledge(&text))
         .unwrap_or_default();
-    let notices = text(Learned::Notices)
-        .and_then(|text| NoticeReader::from_knowledge(&text))
-        .unwrap_or_default();
     let kept = Kept {
         exp_bar: exp.knowledge(),
-        notices: notices.knowledge(),
     };
-    (Runner::with_readers(platform(), exp, notices), kept)
+    (Runner::with_exp_reader(platform(), exp), kept)
 }
 
 /// Keeps a reader's confirmed shapes when they change (one more learned), and forgets them when
@@ -419,8 +406,6 @@ fn off_status() -> Status {
         chat: None,
         calibration: "learning",
         stale: false,
-        notices: NoticeState::Off,
-        waiting_mesos: 0,
         hp_mp: None,
         hp_mp_state: HpMpState::Off,
         hp_mp_missing: None,
@@ -479,8 +464,6 @@ fn status<B: Backend>(
             Calibration::Confirmed => "confirmed",
         },
         stale: tick.stale,
-        notices: runner.notice_state(),
-        waiting_mesos: runner.notice_reader().waiting_mesos(),
         hp_mp: match tick.hp_mp {
             Some(Ok(r)) => Some(HpMpReading {
                 hp: r.hp,

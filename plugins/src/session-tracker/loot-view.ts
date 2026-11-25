@@ -1,17 +1,17 @@
 /**
- * The Session view's Loot section: the session's money in one place, headed by one Profit/hr.
+ * The Session view's Loot section: the session's mesos, measured from the meso totals read in the
+ * inventory and shop windows (the meso ledger in loot.ts).
  *
- * Profit/hr means the same thing whatever it's measured from: mesos picked up plus what shops
- * paid. Measured from two meso totals read in the inventory or a shop it's exact; until then it's
- * an estimate from the pickup notices, marked "≈", which miss pickups on busy maps. Items not sold
- * yet show apart as "Unsold items", never in Profit, so reading the inventory never makes the
- * headline drop.
+ * Its headline is Mesos/hr: mesos picked up over the play time between two totals, never an
+ * estimate. What the loot picked up is worth isn't known until it's sold, so Loot sold shows "—"
+ * until a shop pays, and Profit (mesos picked up plus what shops paid) waits for that too. Sales
+ * up to 30 minutes after End still count for the session (its close-out, in index.ts).
  */
 
 import { formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";
 import type { Cell, Readers, ViewNode } from "@mesovibe/sdk";
-import { MESOS_RATE_MS, itemsValue, ledgerProfit, ledgerRate, ledgerStale, sessionItems, totalMesos } from "./loot.js";
-import type { Catalog, Ledger, LootFields } from "./loot.js";
+import { STALE_MS, ledgerProfit, mesosRate, profitRate } from "./loot.js";
+import type { Ledger, LootFields } from "./loot.js";
 
 /** The action that counts a held rise into Profit, by when it was read. */
 export const COUNT_HELD = "count-held:";
@@ -22,34 +22,11 @@ const SHOWN_HELD = 3;
 export interface LootContext {
   readers: Readers;
   atMs: number;
-  /** Capture is running, so pickups are being read. */
-  reading: boolean;
   /** The session has gained EXP. */
   started: boolean;
   paused: boolean;
   /** Pot cost/hr while potions are counted, for the net line; null otherwise. */
   potsPerHour: number | null;
-}
-
-/** Whether a rate from the pickup notices means anything: not while they're learned or covered. */
-function noticesRead(readers: Readers): boolean {
-  return readers.notices !== "learning" && readers.notices !== "blocked";
-}
-
-/** Mesos per hour from the pickup notices, over the time they were read; null under a minute. */
-export function noticeMesosRate(loot: LootFields): number | null {
-  const maps = loot.maps ?? [];
-  const read = maps.reduce((sum, m) => sum + m.l, 0);
-  const mesos = maps.reduce((sum, m) => sum + m.r, 0);
-  if (read < MESOS_RATE_MS || mesos <= 0) return null;
-  return (mesos * 3_600_000) / read;
-}
-
-/** The Loot section's headline rate and whether it's an estimate, for the strip and mini-HUD too. */
-export function lootHeadline(loot: LootFields, readers: Readers): { rate: number | null; approx: boolean } {
-  const exact = loot.lg === undefined ? null : ledgerRate(loot.lg);
-  if (exact !== null) return { rate: exact, approx: false };
-  return { rate: noticesRead(readers) ? noticeMesosRate(loot) : null, approx: true };
 }
 
 /** "just now", "4 min ago", or "1h 5m ago". */
@@ -64,75 +41,83 @@ function signed(n: number): string {
   return n < 0 ? `−${formatCompact(-n)}` : formatCompact(n);
 }
 
-/**
- * The Session view's Loot section, or null with nothing to show yet. Its headline is Profit/hr,
- * with a muted line under it saying where the figure comes from and how fresh it is; then the
- * net after potions once both are known, Profit, Spent and Unsold items, and any rise held out of
- * Profit with a button to count it. Asking for the inventory waits for a host that reads the
- * meso total (`readers.mesos`), so no player is asked for a reading nothing makes.
- */
-export function lootSection(session: LootFields, catalog: Catalog, context: LootContext): ViewNode | null {
-  const ledger = session.lg;
-  const { rate, approx } = lootHeadline(session, context.readers);
-  const mesos = totalMesos(session);
-  const unsold = itemsValue(sessionItems(session), catalog);
-  const exactPair = ledger !== undefined && ledger.n >= 2;
-  const children: ViewNode[] = [];
+function muted(text: string): ViewNode {
+  return { kind: "text", text, variant: "muted" };
+}
 
-  if (rate !== null) {
-    const stale = !approx && ledger !== undefined && ledgerStale(ledger, context.atMs);
-    children.push({
+/**
+ * Whether the headline's figure is old: its last total was read over 15 minutes ago, or a new
+ * segment (another character) is waiting for its first total.
+ */
+function stale(ledger: Ledger, atMs: number): boolean {
+  return ledger.b === null || atMs - ledger.ba > STALE_MS;
+}
+
+/**
+ * The line under the headline, by state: paused, the meso digits being learned or unreadable at
+ * this size, how long ago mesos were read, or what to do to start. It asks for the inventory only
+ * when the host reads the meso total (`readers.mesos`), so no player is asked for a reading
+ * nothing makes.
+ */
+function stateLine(ledger: Ledger | undefined, rate: number | null, context: LootContext): ViewNode | null {
+  const { readers, atMs } = context;
+  if (context.paused) return muted("Session paused");
+  if (readers.mesos === "learning") return muted("Learning to read your mesos. Keep the inventory open a few seconds.");
+  if (readers.mesos === "unsupported") return { kind: "partial", text: "MesoVibe can't read mesos at this game size." };
+  const asks = readers.mesos === "reading";
+  if (ledger !== undefined && rate !== null) {
+    const read = `Mesos read ${ago(atMs - ledger.ba)}`;
+    return muted(stale(ledger, atMs) && asks ? `${read}. Open your inventory to update.` : read);
+  }
+  if (ledger !== undefined && ledger.b !== null) {
+    return muted(`Mesos read: ${formatDigits(ledger.b)}.${asks ? " Open your inventory again later to see mesos/hr." : ""}`);
+  }
+  return asks ? muted("Open your inventory to start counting mesos.") : null;
+}
+
+/**
+ * The Session view's Loot section, or null before the session's first EXP gain, and from a host
+ * that doesn't read the meso total while none was read. Its headline is Mesos/hr ("?" before two
+ * totals), with a line under it saying how fresh it is or how to start; then Mesos picked up, Loot
+ * sold, Profit once a shop has paid, and Spent (shown apart, never taken from Profit); a line
+ * about selling while nothing is sold; the net after potions once they're counted; and any rise
+ * held out of Profit with a button to count it.
+ */
+export function lootSection(session: LootFields, context: LootContext): ViewNode | null {
+  const ledger = session.lg;
+  if (!context.started || (ledger === undefined && context.readers.mesos === undefined)) return null;
+  const rate = ledger === undefined ? null : mesosRate(ledger);
+  const children: ViewNode[] = [
+    {
       kind: "stat",
-      label: "Profit/hr",
-      value: `${approx ? "≈" : ""}${formatCompact(rate)}`,
-      detail: approx ? `About ${formatDigits(rate)} mesos per hour, from pickup notices` : `${formatDigits(rate)} mesos of profit per hour`,
-      ...(context.paused || stale ? { variant: "muted" as const } : {}),
-    });
-    let line: string;
-    if (context.paused) line = "Session paused";
-    else if (!approx && ledger !== undefined) {
-      line = stale
-        ? `Mesos read ${ago(context.atMs - ledger.ba)}. Open your inventory to update.`
-        : `Mesos read ${ago(context.atMs - ledger.ba)}`;
-    } else if (ledger?.ob != null) {
-      line = `Mesos at start ${formatDigits(ledger.ob)}. Open your inventory again later for exact profit.`;
-    } else if (context.readers.mesos === "learning") {
-      line = "Learning to read your mesos. Keep the inventory open a few seconds.";
-    } else if (context.readers.mesos === "reading") {
-      line = "From pickup notices, which miss some. Open your inventory for 2 seconds for exact mesos.";
-    } else line = "From pickup notices, which miss some.";
-    children.push({ kind: "text", text: line, variant: "muted" });
-    if (approx && context.readers.mesos === "unsupported") {
-      children.push({ kind: "partial", text: "MesoVibe can't read mesos at this game size." });
-    }
-    if (!approx && context.potsPerHour !== null) {
-      children.push({
-        kind: "text",
-        text: `${signed(rate - context.potsPerHour)}/hr after ${formatCompact(context.potsPerHour)}/hr on potions`,
-        variant: "muted",
-      });
-    }
-  } else if (
-    (mesos > 0 || unsold > 0) &&
-    noticesRead(context.readers) &&
-    context.reading &&
-    context.started &&
-    (session.maps ?? []).reduce((sum, m) => sum + m.l, 0) < MESOS_RATE_MS
-  ) {
-    children.push({ kind: "empty", text: "Profit/hr shows after a minute of pickups." });
+      label: "Mesos/hr",
+      value: rate === null ? null : formatCompact(rate),
+      ...(rate === null ? {} : { detail: `${formatDigits(rate)} mesos picked up per hour` }),
+      ...(ledger !== undefined && rate !== null && (context.paused || stale(ledger, context.atMs)) ? { variant: "muted" as const } : {}),
+    },
+  ];
+  const line = stateLine(ledger, rate, context);
+  if (line !== null) children.push(line);
+
+  const sold = ledger !== undefined && ledger.so > 0;
+  const rows: [string, Cell][] = [];
+  if (ledger !== undefined && ledger.n >= 2) rows.push(["Mesos picked up", formatDigits(ledger.pu)]);
+  rows.push(["Loot sold", sold ? formatDigits(ledger.so) : "—"]);
+  if (sold) rows.push(["Profit", formatDigits(ledgerProfit(ledger))]);
+  if (ledger !== undefined && ledger.sp > 0) rows.push(["Spent", formatDigits(ledger.sp)]);
+  children.push({ kind: "keyValue", items: rows });
+
+  if (!sold && context.readers.mesos !== undefined && context.readers.mesos !== "unsupported") {
+    children.push(muted("Sell your loot at a shop to see what it's worth. Sales up to 30 minutes after End count for this session."));
+  }
+  // Net after potions: from Profit/hr once loot is sold, from Mesos/hr until then.
+  const base = sold ? profitRate(ledger) : rate;
+  if (context.potsPerHour !== null && base !== null) {
+    children.push(muted(`${signed(base - context.potsPerHour)}/hr after ${formatCompact(context.potsPerHour)}/hr on potions`));
   }
 
-  const rows: [string, Cell][] = [];
-  if (exactPair) rows.push(["Profit", formatDigits(ledgerProfit(ledger))]);
-  else if (mesos > 0) rows.push(["Profit", `≈${formatDigits(mesos)}`]);
-  if (exactPair && ledger.sp > 0) rows.push(["Spent", formatDigits(ledger.sp)]);
-  // Once a shop has paid for items, what they sold for is in Profit, and an estimate of the same
-  // items beside it would read as counting them twice.
-  if (unsold > 0 && !(ledger !== undefined && ledger.so > 0)) rows.push(["Unsold items", `≈${formatDigits(unsold)}`]);
-  if (rows.length > 0) children.push({ kind: "keyValue", items: rows });
-
   if (ledger !== undefined) children.push(...heldLines(ledger));
-  return children.length === 0 ? null : { kind: "section", title: "Loot", children };
+  return { kind: "section", title: "Loot", children };
 }
 
 /**

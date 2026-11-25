@@ -4,7 +4,7 @@
 // (./mock.ts), so every state can be looked at without the game. Release builds leave it out.
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import type { Event as GameEvent, HpMpState, NoticeState, SessionSummary } from "@mesovibe/sdk";
+import type { Event as GameEvent, HpMpState, SessionSummary } from "@mesovibe/sdk";
 
 /** A corner of the game area, for the mini-HUD (app/src/dock.rs). */
 export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -109,12 +109,11 @@ export interface HudSummary {
   level: number | null;
   pctHundredths: number | null;
   minutesToLevel: number | null;
+  /** Mesos picked up per hour, from the meso totals read. */
   lootPerHour: number | null;
-  /** `lootPerHour` is an estimate from the pickup notices; absent from an older panel. */
-  lootApprox?: boolean;
-  /** When the session just ended stops waiting for its close-out; absent or null when none waits. */
+  /** Until when the session just ended counts sales at a shop; absent or null when none waits. */
   closeOutBy?: number | null;
-  /** Ask once for the inventory, for exact mesos; absent from an older panel. */
+  /** Ask for the inventory: no meso total read this session, or only an old one; absent from an older panel. */
   askForMesos?: boolean;
 }
 
@@ -151,10 +150,6 @@ export interface Status {
   chat: "reading" | "not_found" | "scrolled_back" | "unsupported" | null;
   calibration: "learning" | "provisional" | "confirmed";
   stale: boolean;
-  /** How the pickup notices are being read. */
-  notices: NoticeState;
-  /** Mesos amounts waiting for a digit to be learned before they're counted. */
-  waitingMesos: number;
   /** The HP and MP numbers this tick, when they were read. */
   hpMp: { hp: number; maxHp: number; mp: number; maxMp: number } | null;
   /** How the HP and MP numbers are being read. */
@@ -242,7 +237,6 @@ export function hudSummary(summary: SessionSummary): HudSummary {
     pctHundredths: whole(summary.pctHundredths),
     minutesToLevel: summary.minutesToLevel,
     lootPerHour: summary.lootPerHour,
-    lootApprox: summary.lootApprox,
     closeOutBy: summary.closeOutBy,
     askForMesos: summary.askForMesos,
   };

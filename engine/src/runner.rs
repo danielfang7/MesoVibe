@@ -15,9 +15,8 @@
 //! engine assumes 768 until the EXP bar can't be read, then looks for the HUD at the game's other
 //! sizes of that shape and reads at the one where it shows ([`exp_bar::other_source`]).
 //!
-//! When the picture changes (its size, bars or scale), the HUD and the pickups may be drawn
-//! differently, so the readers check what they learned before against it, and learn again if it
-//! no longer fits.
+//! When the picture changes (its size, bars or scale), the HUD may be drawn differently, so the
+//! readers check what they learned before against it, and learn again if it no longer fits.
 //!
 //! The HP and MP numbers are read in the EXP bar's pass, so each frame's numbers come with that
 //! frame. `HpMpChanged` is `continuous` only when the frame just before also read them: any frame
@@ -34,15 +33,12 @@ use std::time::Instant;
 
 use crate::capture::{Backend, CaptureError, CaptureSignal, CaptureState, GameWindow, Grab};
 use crate::events::Event;
-use crate::game_data;
 use crate::hp_mp_health::{HpMpHealth, HpMpState};
 use crate::letterbox;
-use crate::notice_health::{NoticeHealth, NoticeState};
 use crate::recognizers::chat::{self, ChatReader, ChatReading, ChatUnreadable};
 use crate::recognizers::exp_bar::{self, ExpBarReader, ExpReading, Unreadable};
 use crate::recognizers::hp_mp::{HpMp, HpMpUnreadable};
 use crate::recognizers::map_name::{MapFollower, MapName};
-use crate::recognizers::notices::{self, Notice, NoticeReader, NoticeReading, NoticeUnreadable};
 use crate::unstretch::NATIVE_HEIGHT;
 
 /// The name the EXP bar reader goes by in [`Event::Unreadable`].
@@ -57,9 +53,7 @@ pub const STALE_AFTER: u32 = 8;
 /// pixels tall and scaled up from a picture `source` lines tall: what its readers need, in game
 /// rows.
 pub fn rows_needed(height: u32, source: u32) -> u32 {
-    exp_bar::rows_needed(height, source)
-        .max(chat::rows_needed(height, source))
-        .max(notices::rows_needed(height, source))
+    exp_bar::rows_needed(height, source).max(chat::rows_needed(height, source))
 }
 
 /// What one tick saw and did.
@@ -75,8 +69,6 @@ pub struct Tick {
     /// New chat lines this tick: `None` unless capturing. Chat stays out of `events`, so plugins
     /// never see it.
     pub chat: Option<Result<ChatReading, ChatUnreadable>>,
-    /// New pickup notices this tick: `None` unless capturing.
-    pub notices: Option<Result<NoticeReading, NoticeUnreadable>>,
     /// A map the player settled on this tick: its name, or `None` for a map whose name can't be
     /// read.
     pub map: Option<Option<MapName>>,
@@ -92,13 +84,17 @@ pub struct Tick {
 }
 
 /// The engine: one capture backend and the readers.
+///
+/// The pickup notices at the bottom right ("You have gained mesos (+N)", items picked up) aren't
+/// read: on a busy map they miss many pickups, so mesos come from the meso total the inventory
+/// and shop windows show ([`Event::MesoChanged`]) instead. Their reader stays in
+/// [`notices`](crate::recognizers::notices), with its tests and the `replay_notices` example.
 pub struct Runner<B> {
     backend: B,
     state: CaptureState,
     window: Option<GameWindow>,
     exp: ExpBarReader,
     chat: ChatReader,
-    notices: NoticeReader,
     map: MapFollower,
     /// The last confirmed reading, which events are measured from.
     confirmed: Option<ExpReading>,
@@ -117,10 +113,7 @@ pub struct Runner<B> {
     last_whole: bool,
     /// Grabs in a row that brought no new frame.
     stale: u32,
-    /// How the pickup notices are being read, decided each tick.
-    health: NoticeHealth,
-    notice_state: NoticeState,
-    /// When the runner started: the clock `health` measures time on.
+    /// When the runner started: the clock `hp_mp_health` measures time on.
     started: Instant,
     /// Capturing on the last tick, so a resumed capture checks the map again.
     was_capturing: bool,
@@ -137,18 +130,17 @@ pub struct Runner<B> {
 
 impl<B: Backend> Runner<B> {
     pub fn new(backend: B) -> Self {
-        Self::with_readers(backend, ExpBarReader::new(), NoticeReader::new())
+        Self::with_exp_reader(backend, ExpBarReader::new())
     }
 
-    /// Starts with what an EXP bar reader and a notice reader learned before.
-    pub fn with_readers(backend: B, exp: ExpBarReader, notices: NoticeReader) -> Self {
+    /// Starts with what an EXP bar reader learned before.
+    pub fn with_exp_reader(backend: B, exp: ExpBarReader) -> Self {
         Runner {
             backend,
             state: CaptureState::NoGame,
             window: None,
             exp,
             chat: ChatReader::new(),
-            notices,
             map: MapFollower::new(),
             confirmed: None,
             readable: false,
@@ -159,8 +151,6 @@ impl<B: Backend> Runner<B> {
             last_grab: None,
             last_whole: false,
             stale: 0,
-            health: NoticeHealth::new(),
-            notice_state: NoticeState::Off,
             started: Instant::now(),
             was_capturing: false,
             bar: 0,
@@ -187,15 +177,6 @@ impl<B: Backend> Runner<B> {
 
     pub fn exp_reader(&self) -> &ExpBarReader {
         &self.exp
-    }
-
-    pub fn notice_reader(&self) -> &NoticeReader {
-        &self.notices
-    }
-
-    /// How the pickup notices are being read, as of the last tick.
-    pub fn notice_state(&self) -> NoticeState {
-        self.notice_state
     }
 
     /// How the HP and MP numbers are being read, as of the last tick.
@@ -244,7 +225,6 @@ impl<B: Backend> Runner<B> {
             // A game started again may be another character: don't measure from the old one.
             self.confirmed = None;
             self.chat.reset();
-            self.notices.restart();
             self.map = MapFollower::new();
             self.readable = false;
             self.hp_mp = None;
@@ -279,7 +259,6 @@ impl<B: Backend> Runner<B> {
             exp: None,
             hp_mp: None,
             chat: None,
-            notices: None,
             map: None,
             events: Vec::new(),
             error: None,
@@ -333,11 +312,10 @@ impl<B: Backend> Runner<B> {
                                     .unwrap_or(frame)
                                     .with_source(self.source);
                                 // Another size or scale (windowed to Full Screen, or another size
-                                // in Full Screen) can draw the HUD and the pickups differently.
+                                // in Full Screen) can draw the HUD differently.
                                 let picture = (window.width, window.height, self.bar, self.source);
                                 if self.picture.is_some_and(|before| before != picture) {
                                     self.exp.recheck();
-                                    self.notices.recheck();
                                     self.hp_mp_health.new_picture();
                                 }
                                 self.picture = Some(picture);
@@ -350,12 +328,7 @@ impl<B: Backend> Runner<B> {
                                 }
                                 // The game fades to black when the map changes.
                                 let dark = matches!(reading, Err(Unreadable::ScreenDark));
-                                let notices = match dark {
-                                    true => Ok(self.notices.screen_dark()),
-                                    false => self.notices.observe(&frame, reading.as_ref().ok()),
-                                };
                                 tick.events = self.events_for(&reading);
-                                tick.events.extend(notice_events(&notices));
                                 if let Some(map) = self.map.observe(&frame, dark) {
                                     tick.events.push(Event::MapChanged {
                                         map_key: map.as_ref().map(|name| name.key.clone()),
@@ -367,7 +340,6 @@ impl<B: Backend> Runner<B> {
                                 tick.exp = Some(reading);
                                 tick.hp_mp = Some(hud.hp_mp);
                                 tick.chat = Some(self.chat.observe(&frame));
-                                tick.notices = Some(notices);
                             }
                         }
                         None => tick.error = Some(CaptureError("a malformed frame".to_string())),
@@ -381,10 +353,6 @@ impl<B: Backend> Runner<B> {
                 self.state = self.state.next(CaptureSignal::CaptureFailed);
                 self.backend.stop();
             }
-        }
-        // Not reading: pickups may come and go unseen until it reads again.
-        if self.state != CaptureState::Capturing {
-            self.notices.reset();
         }
         // A tick that read no frame, other than a stale grab while capturing, may have missed a
         // change: the next reading isn't continuous.
@@ -401,18 +369,7 @@ impl<B: Backend> Runner<B> {
             self.map.recheck();
         }
         self.was_capturing = capturing;
-        let gained = tick
-            .events
-            .iter()
-            .any(|e| matches!(e, Event::ExpChanged { .. }));
         let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.notice_state = self.health.observe(
-            now,
-            capturing,
-            tick.notices.as_ref(),
-            self.notices.confirmed(),
-            gained,
-        );
         let read = tick.exp.as_ref().zip(tick.hp_mp.as_ref());
         let confirmed = self.exp.calibration() == exp_bar::Calibration::Confirmed;
         self.hp_mp_state = self.hp_mp_health.observe(now, capturing, read, confirmed);
@@ -475,50 +432,10 @@ impl<B: Backend> Runner<B> {
     }
 }
 
-/// The events a notice reading brings: its mesos and items, and whether lines may have been
-/// missed. None while the reader is still learning its letters.
-fn notice_events(reading: &Result<NoticeReading, NoticeUnreadable>) -> Vec<Event> {
-    let Some(reading) = reading.as_ref().ok().filter(|r| r.confirmed) else {
-        return Vec::new();
-    };
-    let gained = reading.notices.iter().filter_map(|notice| match notice {
-        Notice::Mesos { amount, shaped } => Some(Event::MesosGained {
-            amount: *amount,
-            late: false,
-            shaped: *shaped,
-        }),
-        Notice::LateMesos { amount, shaped } => Some(Event::MesosGained {
-            amount: *amount,
-            late: true,
-            shaped: *shaped,
-        }),
-        Notice::Item { name, count, tab } => {
-            let found = game_data::name_item(&name.letters, *tab);
-            let range = found.as_ref().and_then(|f| f.sell_range());
-            Some(Event::ItemGained {
-                item_key: name.key.clone(),
-                count: *count,
-                tab: *tab,
-                item_id: found.as_ref().and_then(|f| f.id()),
-                sell: found.as_ref().and_then(|f| f.sell()),
-                sell_min: range.map(|(min, _)| min),
-                sell_max: range.map(|(_, max)| max),
-                name: found.and_then(|f| f.name),
-            })
-        }
-        Notice::PartyBonus(amount) => Some(Event::PartyBonus { amount: *amount }),
-        // EXP comes from the EXP bar.
-        Notice::Exp(_) | Notice::Other => None,
-    });
-    let missed = reading.missed.map(|reason| Event::NoticesMissed { reason });
-    gained.chain(missed).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recognizers::exp_bar::test_support::{Canvas, DARK, GRIND, Hud, NEEDED_41, pct_of};
-    use crate::recognizers::notices::{Missed, Tab};
 
     /// A backend driven by the test: the window it reports and the picture in it.
     #[derive(Default)]
@@ -878,264 +795,6 @@ mod tests {
         assert_eq!(tick.state, CaptureState::Capturing);
         assert_eq!(tick.exp, Some(Err(Unreadable::Learning)));
         assert!(!tick.stale);
-    }
-
-    // Pickups reach plugins as events only once the notice reader's letters are confirmed, and a
-    // spell of not reading says pickups may be missing. Fails if a pickup is lost between the
-    // reader and the events, one shows while learning, or a pause passes silently.
-    #[test]
-    fn pickups_become_events_once_the_letters_are_confirmed() {
-        use crate::recognizers::notices::test_support::{
-            Game, Scene, WHITE, confirmed_reader, item, mesos,
-        };
-        let mut game = Game::new(Scene::Rock);
-        let mut learning = Runner::new(Fake {
-            window: Some(GAME),
-            canvas: Some(lit(game.next(&[], 0))),
-            ..Fake::default()
-        });
-        learning.tick();
-        learning.backend_mut().canvas = Some(lit(game.next(&[(&mesos("12"), WHITE)], 0)));
-        let tick = learning.tick();
-        assert!(matches!(&tick.notices, Some(Ok(r)) if !r.confirmed));
-        assert!(pickups(tick.events).is_empty(), "nothing while learning");
-
-        let reader = confirmed_reader(&mut game);
-        let mut runner = Runner::with_readers(
-            Fake {
-                window: Some(GAME),
-                canvas: Some(lit(game.next(&[], 0))),
-                ..Fake::default()
-            },
-            ExpBarReader::new(),
-            reader,
-        );
-        assert!(runner.notice_reader().confirmed());
-        assert!(
-            pickups(runner.tick().events).is_empty(),
-            "lines already on screen"
-        );
-        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("75"), WHITE)], 0)));
-        assert_eq!(
-            pickups(runner.tick().events),
-            [Event::MesosGained {
-                amount: 75,
-                late: false,
-                shaped: false
-            }]
-        );
-        runner.backend_mut().canvas =
-            Some(lit(game.next(&[(&item("Red Potion", 2, "Use"), WHITE)], 0)));
-        let events = pickups(runner.tick().events);
-        // The game has two items named Red Potion, so the name and price come without one ID.
-        assert!(
-            matches!(
-                events.as_slice(),
-                [Event::ItemGained {
-                    item_key,
-                    count: 2,
-                    tab: Some(Tab::Use),
-                    item_id: None,
-                    name: Some(name),
-                    sell: Some(5),
-                    sell_min: Some(5),
-                    sell_max: Some(5),
-                }] if item_key.len() == 16 && name == "Red Potion"
-            ),
-            "{events:?}"
-        );
-        // Minimized and back: whatever arrived meanwhile went unseen.
-        runner.backend_mut().window = Some(GameWindow {
-            minimized: true,
-            ..GAME
-        });
-        runner.tick();
-        runner.backend_mut().window = Some(GAME);
-        runner.backend_mut().canvas = Some(lit(game.next(&[], 0)));
-        assert_eq!(
-            pickups(runner.tick().events),
-            [Event::NoticesMissed {
-                reason: Missed::Lost
-            }]
-        );
-        // Closed and started again: nothing could be picked up meanwhile.
-        runner.backend_mut().window = None;
-        runner.tick();
-        runner.backend_mut().window = Some(GameWindow { id: 8, ..GAME });
-        assert!(pickups(runner.tick().events).is_empty());
-        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("12"), WHITE)], 0)));
-        assert_eq!(
-            pickups(runner.tick().events),
-            [Event::MesosGained {
-                amount: 12,
-                late: false,
-                shaped: false
-            }]
-        );
-    }
-
-    /// The notices over the scene, with white where the HUD's text would be: a frame with nothing
-    /// white there is a screen the game dimmed to change maps.
-    fn lit(mut canvas: Canvas) -> Canvas {
-        canvas.fill(300, canvas.height - 10, 2, 2, [255, 255, 255]);
-        canvas
-    }
-
-    /// The events but the map's: the frames these tests draw have no minimap.
-    fn pickups(events: Vec<Event>) -> Vec<Event> {
-        events
-            .into_iter()
-            .filter(|e| !matches!(e, Event::MapChanged { .. }))
-            .collect()
-    }
-
-    // Pickups on screen when the player takes a portal stay on screen over the new map, still
-    // fading. Fails if they're counted again when the new map shows, or the dark screen between
-    // is reported as pickups missed.
-    #[test]
-    fn a_map_change_counts_no_pickup_twice() {
-        use crate::recognizers::notices::test_support::{
-            Game, Scene, WHITE, confirmed_reader, mesos,
-        };
-        let mut game = Game::new(Scene::Rock);
-        let reader = confirmed_reader(&mut game);
-        let mut runner = Runner::with_readers(
-            Fake {
-                window: Some(GAME),
-                canvas: Some(lit(game.next(&[], 0))),
-                ..Fake::default()
-            },
-            ExpBarReader::new(),
-            reader,
-        );
-        runner.tick();
-        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("75"), WHITE)], 0)));
-        assert_eq!(
-            pickups(runner.tick().events),
-            [Event::MesosGained {
-                amount: 75,
-                late: false,
-                shaped: false
-            }]
-        );
-        let mut events = Vec::new();
-        for _ in 0..2 {
-            game.next(&[], 0);
-            runner.backend_mut().canvas = Some(Canvas::new(1366, 768));
-            events.extend(runner.tick().events);
-        }
-        game.scene = Scene::Cloud;
-        for _ in 0..3 {
-            runner.backend_mut().canvas = Some(lit(game.next(&[], 0)));
-            events.extend(runner.tick().events);
-        }
-        assert_eq!(pickups(events), []);
-        runner.backend_mut().canvas = Some(lit(game.next(&[(&mesos("12"), WHITE)], 0)));
-        assert_eq!(
-            pickups(runner.tick().events),
-            [Event::MesosGained {
-                amount: 12,
-                late: false,
-                shaped: false
-            }]
-        );
-    }
-
-    // A pickup whose name fits no item in the game data still counts, with no name, ID or price.
-    // Fails if an unknown item is dropped or gets a made-up name.
-    #[test]
-    fn an_item_no_game_data_fits_has_no_name() {
-        use crate::recognizers::NamePicture;
-        use crate::recognizers::notices::{ItemName, NameLetter};
-        let letters = "Zzqx"
-            .chars()
-            .enumerate()
-            .map(|(i, c)| NameLetter {
-                known: Some(c),
-                shape: i as u16,
-            })
-            .collect();
-        let reading = NoticeReading {
-            notices: vec![Notice::Item {
-                name: ItemName {
-                    key: "0000000000000000".into(),
-                    text: "Zzqx".into(),
-                    picture: NamePicture {
-                        width: 0,
-                        height: 0,
-                        coverage: Vec::new(),
-                    },
-                    letters,
-                },
-                count: 3,
-                tab: Some(Tab::Etc),
-            }],
-            missed: None,
-            confirmed: true,
-        };
-        assert_eq!(
-            notice_events(&Ok(reading)),
-            [Event::ItemGained {
-                item_key: "0000000000000000".into(),
-                count: 3,
-                tab: Some(Tab::Etc),
-                item_id: None,
-                name: None,
-                sell: None,
-                sell_min: None,
-                sell_max: None,
-            }]
-        );
-    }
-
-    // Plugins tell a mesos amount read late (reported missed when it arrived) from one read at
-    // once, and one read with a digit named by its shape; a party bonus line becomes its own
-    // event. Fails if any of them comes out the same as a plain amount, or the bonus is dropped.
-    #[test]
-    fn mesos_read_late_or_by_shape_say_so() {
-        let reading = NoticeReading {
-            notices: vec![
-                Notice::Mesos {
-                    amount: 30,
-                    shaped: false,
-                },
-                Notice::LateMesos {
-                    amount: 75,
-                    shaped: false,
-                },
-                Notice::Mesos {
-                    amount: 58,
-                    shaped: true,
-                },
-                Notice::PartyBonus(4),
-            ],
-            missed: Some(Missed::ShapesWrong),
-            confirmed: true,
-        };
-        assert_eq!(
-            notice_events(&Ok(reading)),
-            [
-                Event::MesosGained {
-                    amount: 30,
-                    late: false,
-                    shaped: false
-                },
-                Event::MesosGained {
-                    amount: 75,
-                    late: true,
-                    shaped: false
-                },
-                Event::MesosGained {
-                    amount: 58,
-                    late: false,
-                    shaped: true
-                },
-                Event::PartyBonus { amount: 4 },
-                Event::NoticesMissed {
-                    reason: Missed::ShapesWrong
-                }
-            ]
-        );
     }
 
     /// The HUD at `exp` in Full Screen on a 1512x982 screen: the 1366x768 picture scaled to the
@@ -1505,9 +1164,9 @@ mod tests {
         assert_eq!(after, [changed(380, 600, false)], "after a new size");
     }
 
-    // A tick's events come in one order (the EXP bar's, the pickups', the map's, then HP and
-    // MP's), as the SDK promises plugins. Fails if HpMpChanged ever comes before an event of the
-    // same tick that it should follow.
+    // A tick's events come in one order (the EXP bar's, the map's, then HP and MP's), as the SDK
+    // promises plugins. Fails if HpMpChanged ever comes before an event of the same tick that it
+    // should follow.
     #[test]
     fn a_ticks_events_come_in_a_fixed_order() {
         use crate::recognizers::map_name::test_support::Minimap;
@@ -1515,6 +1174,7 @@ mod tests {
             Event::ExpChanged { .. } => 0,
             Event::LevelUp { .. } => 1,
             Event::Unreadable { recognizer } if *recognizer == EXP_BAR => 1,
+            // Pickup events: in the schema, but the live engine doesn't send them.
             Event::MesosGained { .. }
             | Event::ItemGained { .. }
             | Event::PartyBonus { .. }

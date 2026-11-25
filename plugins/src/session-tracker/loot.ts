@@ -1,27 +1,20 @@
 /**
- * The Session Tracker's loot arithmetic: mesos, items and time per map, kept free of the host so
- * it can be tested on its own.
+ * The Session Tracker's loot arithmetic, kept free of the host so it can be tested on its own:
+ * time and EXP by map, potions drunk, and the meso ledger.
  *
- * A session's play is split by map, in first-visit order. Mesos/hr is measured only over the time
- * the pickup notices were being read: the mesos counted then over that time, so a stretch with
- * the notices covered (a party's HP list, a monster walking behind them) neither raises nor
- * lowers it. Items count the same way, valued at what an NPC shop pays for them, so loot/hr is
- * mesos plus that value over the read time. Loot picked up before the session's first EXP gain is
- * held: it joins the session if
- * EXP follows within five minutes on the same map, so a walk to the grinding map doesn't count as
- * play and an errand in town doesn't become a session.
+ * A session's play is split by map, in first-visit order. Its mesos come from the meso totals read
+ * in the inventory and shop windows ([`Ledger`]), which miss nothing: what changed between two
+ * totals is mesos picked up, what a shop paid or what was spent, and a stretch between two totals
+ * with only one grinding map played gives that map its mesos/hr.
+ *
+ * Sessions saved before then counted mesos and items from the pickup notices, which miss pickups
+ * on busy maps. What they counted is kept as saved and shown as an estimate, apart from anything
+ * measured from meso totals.
  *
  * Potions drunk count on the map from the session's first EXP gain (a potion on the walk to a map
  * isn't the grind's cost), measured over their own read time, the time the HP and MP numbers were
  * read, so pot cost/hr leaves out a stretch where a potion couldn't have been seen.
- *
- * The pickup notices miss pickups on busy maps, so what they count is an estimate. The meso
- * ledger ([`Ledger`]) measures the session from the meso totals read in the inventory and shop
- * windows instead, which miss nothing; once it has two totals, its Profit and Profit/hr replace the
- * notices' figures, which stay as the estimate between readings and as the list of items seen.
  */
-
-import type { Event, NoticeState } from "@mesovibe/sdk";
 
 /**
  * One map's share of a session. Saved with short keys, since 500 sessions are kept.
@@ -33,24 +26,26 @@ export interface MapEntry {
   p: number;
   /** EXP gained on it. */
   x: number;
-  /** Mesos counted on it. */
+  /**
+   * Mesos the pickup notices counted on it, all of them and those read while the notices were in
+   * view, and the time they were in view. Only sessions saved before mesos came from meso totals
+   * have any; later ones keep 0, so older builds still load them.
+   */
   m: number;
-  /** Mesos counted while the pickup notices were being read: mesos/hr's numerator. */
   r: number;
-  /** Time on it while the pickup notices were being read: mesos/hr's denominator. */
   l: number;
   /** The level when the session reached it, and when it last played it. */
   s: number | null;
   e: number | null;
-  /** Mesos counted with a digit named by its shape, which may turn out wrong. */
+  /**
+   * From the pickup notices, in older sessions: mesos counted with a digit named by its shape, a
+   * pickup missed, a party bonus line read, the items picked up (in the order first picked up),
+   * and the NPC value of those picked up while the notices were in view.
+   */
   sm?: number;
-  /** A pickup was missed while on it. */
   mi?: true;
-  /** A party bonus line was read while on it. */
   pa?: true;
-  /** The items picked up on it, in the order first picked up. */
   i?: ItemEntry[];
-  /** The NPC value of the items picked up on it while the notices were read: loot/hr's share. */
   rv?: number;
   /** Potions drunk on it, by potion. */
   u?: PotCount[];
@@ -75,7 +70,10 @@ export interface PotCount {
 
 /** One kind of item picked up, by its key in the [`Catalog`]. */
 export interface ItemEntry {
-  /** The item's key: see [`itemKey`]. */
+  /**
+   * The item's key: "#<item ID>" when the game data named one item, "=<name>" when several items
+   * share the name or start it, "?<tab>" when no item fit.
+   */
   k: string;
   /** How many were picked up. */
   c: number;
@@ -101,16 +99,13 @@ export function leastPrice(info: ItemInfo | undefined): number | null {
   return info?.v ?? info?.r?.[0] ?? null;
 }
 
-/** An item event's lowest and highest price, when they differ. */
-function priceRange(event: Extract<Event, { type: "ItemGained" }>): [number, number] | undefined {
-  const { sell_min: min, sell_max: max } = event;
-  return min != null && max != null && min < max ? [min, max] : undefined;
-}
-
 /** Item keys and what's known about them. */
 export type Catalog = Record<string, ItemInfo>;
 
-/** Loot picked up before the session's first EXP gain. */
+/**
+ * Loot the pickup notices counted before the session's first EXP gain, in a session an older build
+ * left running.
+ */
 export interface Held {
   /** The map it was picked up on (undefined: not known yet). */
   map: string | null | undefined;
@@ -128,9 +123,8 @@ export interface LootFields {
   held?: Held;
   /** Time played before the map was known, given to the first map known. */
   unplaced?: number;
-  /** A pickup may have been missed: totals are at least what's shown. */
+  /** From the pickup notices, in older sessions: a pickup may have been missed, or a digit misread. */
   missed?: true;
-  /** A digit named by its shape turned out wrong: amounts counted with it may be wrong. */
   shapesWrong?: true;
   /** Where each potion's count came from, by item ID: rises, its quick slot, or both in turn. */
   ps?: Record<string, PotSource>;
@@ -149,9 +143,12 @@ export interface PotTime {
   healing: boolean;
 }
 
-/** How long held loot waits for EXP on its map. */
+/**
+ * How long before the first EXP gain a meso total may open the session, and how long loot an older
+ * build held before it waited.
+ */
 export const HOLD_MS = 5 * 60_000;
-/** The least read time a mesos rate is shown for: mesos come in lumps. */
+/** The least play time a mesos rate is shown for: mesos come in lumps. */
 export const MESOS_RATE_MS = 60_000;
 
 /** The entry for `key`, made with the level now if it's new. */
@@ -166,18 +163,10 @@ export function entryFor(loot: LootFields, key: string | null, level: number | n
 }
 
 /**
- * Adds `step` of play on `map`; `reading` when the pickup notices were being read, `pots` when
- * potions were being counted. Before the map is known the time waits, and goes to the first map
- * known, so the maps add up to the session.
+ * Adds `step` of play on `map`; `pots` when potions were being counted. Before the map is known
+ * the time waits, and goes to the first map known, so the maps add up to the session.
  */
-export function addTime(
-  loot: LootFields,
-  map: string | null | undefined,
-  step: number,
-  reading: boolean,
-  level: number | null,
-  pots?: PotTime,
-): void {
+export function addTime(loot: LootFields, map: string | null | undefined, step: number, level: number | null, pots?: PotTime): void {
   if (step <= 0) return;
   if (map === undefined) {
     loot.unplaced = (loot.unplaced ?? 0) + step;
@@ -186,7 +175,6 @@ export function addTime(
   const entry = entryFor(loot, map, level);
   entry.p += step + (loot.unplaced ?? 0);
   delete loot.unplaced;
-  if (reading) entry.l += step;
   if (pots?.counting) {
     entry.h = (entry.h ?? 0) + step;
     if (pots.healing) entry.hm = (entry.hm ?? 0) + step;
@@ -207,16 +195,6 @@ export function addCount(list: ItemEntry[], key: string, count: number): void {
   const entry = list.find((e) => e.k === key);
   if (entry === undefined) list.push({ k: key, c: count });
   else entry.c += count;
-}
-
-/**
- * The key an item pickup is counted under: "#<item ID>" when the game data names one item, the name
- * when several items share it or start it ("=<name>"), or the tab when no item fits ("?<tab>").
- */
-export function itemKey(event: Extract<Event, { type: "ItemGained" }>): string {
-  if (event.item_id !== null) return `#${event.item_id}`;
-  if (event.name !== null) return `=${event.name}`;
-  return `?${event.tab ?? ""}`;
 }
 
 /** Adds `count` uses of potion `item`, or that many maybe uses, to `list`. */
@@ -268,129 +246,18 @@ export function hasLoot(held: Held | undefined): boolean {
 }
 
 /**
- * Counts an item pickup, as [`addPickup`] counts mesos: on the map, or held before the session's
- * first EXP gain. Its name, tab and price go into `catalog`.
+ * The session's first EXP gain: the maps start afresh with the session's `lead` of play (the
+ * session's clock restarts at its first gain, keeping a short lead).
  */
-export function addItem(
-  loot: LootFields,
-  catalog: Catalog,
-  event: Extract<Event, { type: "ItemGained" }>,
-  map: string | null | undefined,
-  started: boolean,
-  reading: boolean,
-  atMs: number,
-  level: number | null,
-): void {
-  // The game never shows x0: a count read as 0 is a misread pickup, so it counts as missed.
-  if (!(event.count > 0)) {
-    loot.missed = true;
-    return;
-  }
-  const key = itemKey(event);
-  // A pickup no single item fits is counted under its tab ("?Etc"), one key for all of them: a
-  // price there would price every unread pickup of the tab, in every session, so it keeps none.
-  // Otherwise a price once known stays when a later pickup of the same key brings none (one whose
-  // tab wasn't read can fit items in several tabs that sell for different prices).
-  const price = key.startsWith("?") ? null : (event.sell ?? catalog[key]?.v ?? null);
-  // A name several items fit at different prices has no one price, but its range is kept the
-  // same way, and it counts at the lowest.
-  const range = key.startsWith("?") || price !== null ? undefined : (priceRange(event) ?? catalog[key]?.r);
-  catalog[key] = range === undefined ? { n: event.name, t: event.tab, v: price } : { n: event.name, t: event.tab, v: price, r: range };
-  const least = price ?? range?.[0] ?? null;
-  if (!started) {
-    if (loot.held === undefined || loot.held.map !== map) {
-      loot.held = { map, atMs, mesos: 0, shaped: 0, missed: false };
-    }
-    addCount((loot.held.items ??= []), key, event.count);
-    return;
-  }
-  if (map === undefined) return;
-  const entry = entryFor(loot, map, level);
-  addCount((entry.i ??= []), key, event.count);
-  if (reading && least !== null) entry.rv = (entry.rv ?? 0) + least * event.count;
-}
-
-/**
- * Counts a pickup event. `started`: the session has its first EXP gain; before it, loot is held.
- * `reading`: the notices are being read now, so mesos count toward the rate.
- */
-export function addPickup(
-  loot: LootFields,
-  event: Event,
-  map: string | null | undefined,
-  started: boolean,
-  reading: boolean,
-  atMs: number,
-  level: number | null,
-): void {
-  if (event.type === "MesosGained") {
-    if (!started) {
-      // Another map than the held loot's: that loot was an errand, and starts over here.
-      if (loot.held === undefined || loot.held.map !== map) {
-        loot.held = { map, atMs, mesos: 0, shaped: 0, missed: false };
-      }
-      loot.held.mesos += event.amount;
-      if (event.shaped) loot.held.shaped += event.amount;
-      return;
-    }
-    if (map === undefined) return;
-    const entry = entryFor(loot, map, level);
-    entry.m += event.amount;
-    if (reading) entry.r += event.amount;
-    if (event.shaped) entry.sm = (entry.sm ?? 0) + event.amount;
-  } else if (event.type === "PartyBonus") {
-    if (started && map !== undefined) entryFor(loot, map, level).pa = true;
-  } else if (event.type === "NoticesMissed") {
-    switch (event.reason) {
-      // Waiting for a digit: counted late, nothing missed.
-      case "not_learned":
-        return;
-      case "shapes_wrong":
-        loot.shapesWrong = true;
-        for (const entry of loot.maps ?? []) if ((entry.sm ?? 0) > 0) entry.mi = true;
-        return;
-      default:
-        loot.missed = true;
-        if (!started && loot.held !== undefined) loot.held.missed = true;
-        else if (started && map !== undefined) entryFor(loot, map, level).mi = true;
-    }
-  }
-}
-
-/**
- * The session's first EXP gain: held loot joins it when it was picked up on this map within
- * [`HOLD_MS`], and is dropped otherwise. The maps start afresh with the session's `lead` of play
- * (the session's clock restarts at its first gain, keeping a short lead).
- */
-export function start(
-  loot: LootFields,
-  map: string | null | undefined,
-  lead: number,
-  reading: boolean,
-  level: number | null,
-  atMs: number,
-  pots?: PotTime,
-): void {
-  // A list, even empty, marks a session as one from after map and mesos tracking began.
+export function start(loot: LootFields, map: string | null | undefined, lead: number, level: number | null, pots?: PotTime): void {
+  // A list, even empty, marks a session as one from after map tracking began.
   loot.maps = [];
   delete loot.unplaced;
-  const held = loot.held;
   delete loot.held;
-  addTime(loot, map, lead, reading, level, pots);
-  if (held !== undefined && held.map === map && map !== undefined && atMs - held.atMs <= HOLD_MS) {
-    const entry = entryFor(loot, map, level);
-    // Its mesos count in the totals, not in the rate: they came before the time measured.
-    entry.m += held.mesos;
-    for (const item of held.items ?? []) addCount((entry.i ??= []), item.k, item.c);
-    if (held.shaped > 0) entry.sm = (entry.sm ?? 0) + held.shaped;
-    if (held.missed) {
-      entry.mi = true;
-      loot.missed = true;
-    }
-  }
+  addTime(loot, map, lead, level, pots);
 }
 
-/** Mesos counted in the session, held loot included. */
+/** Mesos the pickup notices counted in an older session, held loot included. */
 export function totalMesos(loot: LootFields): number {
   return (loot.maps ?? []).reduce((sum, m) => sum + m.m, 0) + (loot.held?.mesos ?? 0);
 }
@@ -402,7 +269,7 @@ export function sumItems(lists: Iterable<readonly ItemEntry[]>): ItemEntry[] {
   return [...counts].map(([k, c]) => ({ k, c }));
 }
 
-/** Every item the session picked up, held loot included, in the order first picked up. */
+/** Every item an older session's pickup notices counted, held loot included, in the order first picked up. */
 export function sessionItems(loot: LootFields): ItemEntry[] {
   return sumItems([...(loot.maps ?? []).map((entry) => entry.i ?? []), loot.held?.items ?? []]);
 }
@@ -416,33 +283,32 @@ export function itemsValue(items: ItemEntry[], catalog: Catalog): number {
 }
 
 /**
- * Mesos and the NPC value of items per hour, over the time the notices were read, or null before
- * that means anything.
+ * Mesos per hour an older session's pickup notices counted, over the time they were in view, or
+ * null under a minute of it.
  */
-export function lootRate(loot: LootFields): number | null {
+export function noticeMesosRate(loot: LootFields): number | null {
   const maps = loot.maps ?? [];
   const read = maps.reduce((sum, m) => sum + m.l, 0);
-  const value = maps.reduce((sum, m) => sum + m.r + (m.rv ?? 0), 0);
-  if (read < MESOS_RATE_MS || value <= 0) return null;
-  return (value * 3_600_000) / read;
+  const mesos = maps.reduce((sum, m) => sum + m.r, 0);
+  if (read < MESOS_RATE_MS || mesos <= 0) return null;
+  return (mesos * 3_600_000) / read;
 }
 
-/** A map's own EXP/hr and mesos/hr, each null when there's too little time for it. */
+/**
+ * A map's own EXP/hr and mesos/hr, each null when there's too little time for it. Mesos/hr comes
+ * only from the meso ledger ([`fieldRate`]): a map without a stretch between two meso totals read
+ * on it has none, whatever its pickup notices counted.
+ */
 export function mapRates(entry: MapEntry, minExpMs: number): { exp: number | null; mesos: number | null } {
   return {
     exp: entry.p >= minExpMs && entry.x > 0 ? (entry.x * 3_600_000) / entry.p : null,
-    mesos: entry.l >= MESOS_RATE_MS ? (entry.r * 3_600_000) / entry.l : null,
+    mesos: fieldRate(entry),
   };
 }
 
 /** The map played longest, which a past session's row is named for. */
 export function longest(maps: MapEntry[]): MapEntry | null {
   return maps.reduce<MapEntry | null>((best, m) => (best === null || m.p > best.p ? m : best), null);
-}
-
-/** Whether the notices state lets loot count toward a rate. */
-export function reads(state: NoticeState): boolean {
-  return state === "reading";
 }
 
 /** Where a trusted meso total was read: the inventory window or an NPC shop's. */
@@ -482,7 +348,7 @@ export interface Ledger {
   ho: [number, number][];
   /** Play time between readings, pauses left out: Profit/hr's clock. */
   pt: number;
-  /** When an ended session stops waiting for its close-out reading (wall clock). */
+  /** Until when an ended session counts what's sold at a shop (wall clock): its close-out. */
   co?: number;
 }
 
@@ -512,7 +378,7 @@ export type LedgerChange =
 export const HOLD_MIN = 50_000;
 /** ...and more than this many mesos an hour since the last reading: faster than any farming. */
 export const HOLD_PER_HOUR = 3_000_000;
-/** How long an ended session waits for the reading that adds its sales. */
+/** How long after End what's sold at a shop still counts for the session. */
 export const CLOSE_OUT_MS = 30 * 60_000;
 /** A balance read longer ago than this shows as stale. */
 export const STALE_MS = 15 * 60_000;
@@ -601,27 +467,46 @@ export function restartSegment(loot: LootFields): void {
   if (loot.lg !== undefined) loot.lg.b = null;
 }
 
-/** Ends the session: it waits [`CLOSE_OUT_MS`] for a reading that adds what was sold after End. */
-export function waitForCloseOut(loot: LootFields, atMs: number): void {
-  if (loot.lg !== undefined && loot.lg.b !== null) loot.lg.co = atMs + CLOSE_OUT_MS;
-}
-
-/** Stops waiting for the close-out: the next session's first EXP gain, or MesoVibe quitting. */
-export function stopCloseOut(loot: LootFields): void {
-  if (loot.lg !== undefined) delete loot.lg.co;
+/**
+ * Ends the session: what's sold at a shop in the next [`CLOSE_OUT_MS`] still counts for it (its
+ * close-out). Only where meso totals can be read (`reads`), so no player is asked to sell for a
+ * reading nothing makes. A session that read no total gets a ledger here, and the close-out's
+ * first total sets its balance.
+ */
+export function waitForCloseOut(loot: LootFields, atMs: number, reads: boolean): void {
+  if (reads) (loot.lg ??= newLedger()).co = atMs + CLOSE_OUT_MS;
 }
 
 /**
- * The close-out: the first trusted total read after End, within [`CLOSE_OUT_MS`]. The time since
- * End wasn't play, so a rise is what shops paid (held when it's too big and not read in a shop), a
- * fall is spent, and Profit/hr's clock doesn't move. Null when nothing is waiting for it.
+ * Ends the close-out: its time ran out, the next session gained its first EXP, or MesoVibe quit. A
+ * ledger that never read a total goes with it.
+ */
+export function stopCloseOut(loot: LootFields): void {
+  const ledger = loot.lg;
+  if (ledger === undefined) return;
+  delete ledger.co;
+  if (ledger.n === 0 && ledger.ho.length === 0) delete loot.lg;
+}
+
+/**
+ * Counts a trusted total read during the close-out. Selling takes several readings (the shop's
+ * total before the first sale, then a rise per sale), so every total until the close-out ends
+ * counts, not only the first. The time since End wasn't play: a rise is what a shop paid (held
+ * when it's too big for farming and not read in a shop), a fall is spent, and Profit/hr's clock
+ * doesn't move. The first total of a session that read none only sets the balance. Null when no
+ * close-out is open, or its time has run out (which ends it).
  */
 export function closeOut(loot: LootFields, total: number, source: MesoSource, atMs: number): LedgerChange | null {
   const ledger = loot.lg;
   if (ledger?.co === undefined) return null;
-  const due = ledger.co;
-  delete ledger.co;
-  if (atMs > due || ledger.b === null) return null;
+  if (atMs > ledger.co) {
+    stopCloseOut(loot);
+    return null;
+  }
+  if (ledger.b === null) {
+    rebase(ledger, total, atMs, ledger.bp);
+    return { kind: "opening", total };
+  }
   const delta = total - ledger.b;
   let change: LedgerChange;
   if (delta < 0) {
@@ -638,6 +523,14 @@ export function closeOut(loot: LootFields, total: number, source: MesoSource, at
   }
   rebase(ledger, total, atMs, ledger.bp);
   return change;
+}
+
+/**
+ * Undoes a sale the close-out counted: the rise wasn't a sale (a trade, a storage withdrawal). The
+ * balance stays as read, so the next total is measured from it and the rise isn't counted again.
+ */
+export function uncountSale(loot: LootFields, amount: number): void {
+  if (loot.lg !== undefined) loot.lg.so = Math.max(0, loot.lg.so - amount);
 }
 
 /** Counts the held rise at `index` into profit; its amount and when it was read, for Undo. */
@@ -662,8 +555,17 @@ export function ledgerProfit(ledger: Ledger): number {
   return ledger.pu + ledger.so + ledger.ct;
 }
 
-/** Profit/hr, over play time between readings, or null without two readings a minute apart. */
-export function ledgerRate(ledger: Ledger): number | null {
+/**
+ * Mesos picked up per hour, over play time between readings: the Loot section's headline. Null
+ * without two readings a minute of play apart.
+ */
+export function mesosRate(ledger: Ledger): number | null {
+  if (ledger.n < 2 || ledger.pt < MESOS_RATE_MS) return null;
+  return (ledger.pu * 3_600_000) / ledger.pt;
+}
+
+/** Profit per hour, over the same play time as [`mesosRate`], or null when it has none. */
+export function profitRate(ledger: Ledger): number | null {
   if (ledger.n < 2 || ledger.pt < MESOS_RATE_MS) return null;
   return (ledgerProfit(ledger) * 3_600_000) / ledger.pt;
 }
@@ -699,10 +601,10 @@ function mergeLedger(into: LootFields, from: Ledger): void {
 }
 
 /**
- * Adds `from`'s loot into `into`: Undo puts a session back, keeping pickups since and potions
- * counted since. A potion counts only once a session has EXP, so one drunk after End and before
- * the next gain isn't brought back. Neither read time is added, so mesos/hr and pot cost/hr keep
- * the same base after an Undo.
+ * Adds `from`'s loot into `into`: Undo puts a session back, keeping the mesos and potions counted
+ * since. A potion counts only once a session has EXP, so one drunk after End and before the next
+ * gain isn't brought back. Neither clock is added to, so mesos/hr and pot cost/hr keep the same
+ * base after an Undo.
  */
 export function mergeLoot(into: LootFields, from: LootFields): void {
   for (const entry of from.maps ?? []) {
@@ -768,10 +670,7 @@ export function validMaps(value: unknown): MapEntry[] | undefined {
   return maps;
 }
 
-/**
- * A saved meso ledger, or undefined when it's malformed: the session then keeps everything else,
- * and its mesos show as estimates from the pickup notices.
- */
+/** A saved meso ledger, or undefined when it's malformed: the session then keeps everything else. */
 export function validLedger(value: unknown): Ledger | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const l = value as Record<string, unknown>;
@@ -837,7 +736,7 @@ export function validPotSources(value: unknown): Record<string, PotSource> | und
   return Object.keys(sources).length > 0 ? sources : undefined;
 }
 
-/** What an item key looks like: "#<item ID>", "=<name>" or "?<tab>" (itemKey). */
+/** What an item key looks like: "#<item ID>", "=<name>" or "?<tab>" ([`ItemEntry`]). */
 const ITEM_KEY = /^(#\d+|=.+|\?.*)$/s;
 
 /** A saved catalog, with anything malformed dropped. It has no prototype, so no key reads one. */

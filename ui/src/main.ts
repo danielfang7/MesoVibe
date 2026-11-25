@@ -681,14 +681,14 @@ function shell(initial: Settings): void {
       }
     }
     if (undoHadFocus && undoButton === null) strip.focus({ preventScroll: true });
-    // After End, the session waits for the inventory to add what was sold: a fixed time, never a
-    // countdown, under the notice row and above the update line.
+    // After End, what's sold at a shop still counts for the session for a while: a fixed time,
+    // never a countdown, under the notice row and above the update line.
     const due = summary?.closeOutBy ?? null;
     const closeKey = due === null ? "" : String(due);
     if (closeKey !== paintedCloseOut) {
       paintedCloseOut = closeKey;
       const by = due === null ? "" : new Date(due).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-      replace(closeOutSlot, due === null ? null : h("div", { class: "notice-body" }, h("span", {}, `Open your inventory by ${by} to add your sales to this session.`)));
+      replace(closeOutSlot, due === null ? null : h("div", { class: "notice-body" }, h("span", {}, `Sell your loot at a shop by ${by} to add it to this session.`)));
     }
     paintUpdate();
   }
@@ -916,27 +916,6 @@ function shell(initial: Settings): void {
     );
   }
 
-  /** What What MesoVibe sees says about the pickup notices, in words the player can act on. */
-  function noticesLine(status: Status): string {
-    switch (status.notices) {
-      case "off":
-        return "Not reading: capture is paused.";
-      case "learning":
-        return "Learning the pickup text from your EXP lines.";
-      case "covered":
-        return "Covered for a moment: a few pickups may be missing. Nothing to do.";
-      case "blocked":
-        return "Covered often, or by a party list.";
-      case "not_found":
-        return "Notices not found while EXP went up. Keep the bottom of the game window in view.";
-      case "reading": {
-        const waiting = status.waitingMesos;
-        if (waiting === 0) return "Reading";
-        return `Reading · ${waiting} ${waiting === 1 ? "amount waits" : "amounts wait"} for a digit to be learned`;
-      }
-    }
-  }
-
   /** What What MesoVibe sees says about the HP and MP numbers: the values read, or why not. */
   function hpMpLine(status: Status): string {
     const r = status.hpMp;
@@ -1002,7 +981,6 @@ function shell(initial: Settings): void {
         reading && status
           ? h("div", { class: "reading-box", attrs: { "data-key": "sees-hp-mp" } }, h("span", { class: "label" }, "HP and MP"), h("span", status.hpMp ? { class: "number" } : {}, hpMpLine(status)))
           : null,
-        reading && status ? h("div", { class: "reading-box", attrs: { "data-key": "sees-notices" } }, h("span", { class: "label" }, "Pickup notices"), h("span", {}, noticesLine(status))) : null,
         reading && status ? h("div", { class: "reading-box", attrs: { "data-key": "sees-map" } }, h("span", { class: "label" }, "Map name"), mapLine(status)) : null,
         h(
           "dl",
@@ -1027,7 +1005,6 @@ function shell(initial: Settings): void {
         h("h2", { class: "label" }, "Reads"),
         h("p", {}, "The EXP bar: your level, EXP and percent."),
         h("p", {}, "The HP and MP numbers next to the EXP bar."),
-        h("p", {}, "The pickup notices at the bottom right: the EXP, mesos and items you pick up."),
         h("p", {}, "The minimap's map name, as a picture."),
         h("p", {}, "The chat box: whisper, party and friend lines, as pictures."),
         h("h2", { class: "label" }, "Never reads"),

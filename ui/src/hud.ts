@@ -91,22 +91,14 @@ function paint(hud: Hud): void {
   );
   const loot = summary?.lootPerHour ?? null;
   if (loot !== null && (issue === null || issue.tone === "live")) {
-    // Profit/hr, the same figure and mark as the Session view's Loot headline, so the two never
-    // disagree: "≈" while it's an estimate from the pickup notices.
-    const approx = summary?.lootApprox ?? false;
+    // Mesos/hr, the same figure as the Session view's Loot headline: mesos picked up over the play
+    // time between two meso totals read in the inventory or a shop.
     rows.push(
       h(
         "p",
-        {
-          class: "hud-line hud-loot",
-          attrs: {
-            title: approx ? `About ${formatDigits(loot)} mesos per hour, from pickup notices` : `${formatDigits(loot)} mesos of profit per hour`,
-          },
-        },
-        approx ? h("span", { attrs: { "aria-hidden": "true" } }, "≈") : null,
-        approx ? h("span", { class: "visually-hidden" }, "about ") : null,
+        { class: "hud-line hud-loot", attrs: { title: `${formatDigits(loot)} mesos picked up per hour` } },
         h("span", { class: "number" }, formatCompact(loot)),
-        " profit/hr",
+        " mesos/hr",
       ),
     );
   }
@@ -122,12 +114,17 @@ function paint(hud: Hud): void {
       ),
     );
   }
-  // A hint takes the progress row: the card has room for four rows, profit/hr's included. What's
-  // wrong comes first; then, for players who never see the panel, the close-out after End, and once
-  // ever, how to get exact mesos.
+  // A hint takes the progress row: the card has room for four rows, mesos/hr's included. What's
+  // wrong comes first; then, for players who never see the panel, selling after End, and a meso
+  // total when the session has none or only an old one.
+  const closeOutBy = summary?.closeOutBy ?? null;
   const hint =
     issue?.hint ??
-    (summary?.closeOutBy != null ? "Open inventory to close out" : summary?.askForMesos ? "Open inventory 2s for exact mesos" : undefined);
+    (closeOutBy !== null
+      ? `Sell at a shop by ${new Date(closeOutBy).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
+      : summary?.askForMesos
+        ? "Open inventory for mesos/hr"
+        : undefined);
   if (hint !== undefined) {
     rows.push(h("p", { class: "hud-line" }, hint));
   } else if (summary?.pctHundredths != null) {

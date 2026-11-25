@@ -7,8 +7,6 @@ import type { Status } from "./ipc.js";
 /** The readers' states in a status, as plugins receive them. */
 export function readersOf(status: Status): Readers {
   return {
-    notices: status.notices,
-    waitingMesos: status.waitingMesos,
     hpMp: status.hpMpState,
     hpMpMissing: status.hpMpMissing,
   };

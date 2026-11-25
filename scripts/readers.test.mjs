@@ -7,8 +7,6 @@ import { readersChanged, readersOf } from "../ui/src/readers.ts";
 
 /** An engine status with the readers' fields that matter here. */
 const status = (over = {}) => ({
-  notices: "reading",
-  waitingMesos: 0,
   hpMpState: "reading",
   hpMpMissing: null,
   ...over,
@@ -28,9 +26,9 @@ test("a change to the HP and MP state alone reaches plugins", () => {
 });
 
 // Statuses arrive four times a second; plugins hear only changes. Fails if an unchanged status is
-// sent on, or a pickup-notice change is missed.
+// sent on, or a change is missed, including a field one side has and the other doesn't.
 test("only changes are sent on", () => {
   assert.equal(readersChanged(readersOf(status()), readersOf(status())), false);
-  assert.equal(readersChanged(readersOf(status()), readersOf(status({ waitingMesos: 2 }))), true);
-  assert.equal(readersChanged(readersOf(status()), readersOf(status({ notices: "blocked" }))), true);
+  assert.equal(readersChanged(readersOf(status()), readersOf(status({ hpMpState: "covered" }))), true);
+  assert.equal(readersChanged(readersOf(status()), { ...readersOf(status()), mesos: "reading" }), true);
 });

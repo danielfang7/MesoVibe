@@ -11,7 +11,7 @@
  * if plugins later run isolated in a Web Worker.
  */
 
-import type { Event, HpMpState, NoticeState } from "./generated/events.js";
+import type { Event, HpMpState } from "./generated/events.js";
 
 export type { Event, HpMpState, NoticeState } from "./generated/events.js";
 export { SCHEMA_VERSION } from "./generated/events.js";
@@ -147,16 +147,13 @@ export interface SessionSummary {
   /** Time played while capturing, in milliseconds. */
   activeMs: number;
   /**
-   * The Session view's Loot headline: profit per hour, mesos picked up plus what shops paid. Exact
-   * once two meso totals were read in the inventory or a shop, an estimate from the pickup notices
-   * before that (`lootApprox`); null until loot is counted, and while the notices are still being
-   * learned or are blocked.
+   * The Session view's Loot headline: mesos picked up per hour, over the play time between two
+   * meso totals read in the inventory or a shop. Null until two totals a minute of play apart
+   * were read.
    *
-   * @experimental May change before the Loot Tracker's item list is released.
+   * @experimental May change before the meso total is read.
    */
   lootPerHour: number | null;
-  /** `lootPerHour` is an estimate from the pickup notices, which miss some: show it with "≈". */
-  lootApprox: boolean;
   /** The session has EXP, or loot without EXP, worth keeping: End is offered. */
   canEnd: boolean;
   /** The session has something to throw away: Reset is offered. */
@@ -168,15 +165,15 @@ export interface SessionSummary {
   /** Pause is offered (Resume, while paused): the session has started. */
   canPause: boolean;
   /**
-   * The session just ended waits until then (epoch milliseconds) for a meso total that adds what
-   * was sold after End: the strip asks for the inventory by that time. Null when nothing waits.
+   * The session just ended counts what's sold at a shop until then (epoch milliseconds): the
+   * strip asks the player to sell their loot by that time. Null when nothing waits.
    *
    * @experimental May change before the meso total is read.
    */
   closeOutBy: number | null;
   /**
-   * No meso total has ever been read though MesoVibe can read one: the mini-HUD asks for the
-   * inventory once.
+   * MesoVibe can read the meso total, and the session has none read yet or only one older than
+   * 15 minutes: the mini-HUD asks for the inventory.
    *
    * @experimental May change before the meso total is read.
    */
@@ -202,18 +199,15 @@ export interface SessionSummary {
 export type HpMpChanged = Extract<Event, { type: "HpMpChanged" }>;
 
 /**
- * How the engine is reading the pickup notices and the HP and MP numbers. `waitingMesos` is how many
- * mesos amounts wait for a digit to be learned before they're counted. While `hpMp` is
+ * How the engine is reading the HP and MP numbers and the meso total. While `hpMp` is
  * `missing_digits`, `hpMpMissing` lists the digits the EXP field hasn't shown yet, such as "7" or
  * "045": the one the HP and MP numbers wait for is among them. It is null otherwise. `mesos` says
  * how the meso total in the inventory and shop windows is read; it's absent from a host that
  * doesn't read it.
  *
- * @experimental May change before the Loot Tracker's first release.
+ * @experimental May change before the meso total is read.
  */
 export interface Readers {
-  notices: NoticeState;
-  waitingMesos: number;
   hpMp: HpMpState;
   hpMpMissing: string | null;
   mesos?: MesoState;
@@ -273,7 +267,7 @@ export interface PluginContext {
 export interface Handlers {
   onEvent?(event: Event, atMs: number): void;
   onCapture?(state: CaptureState, atMs: number): void;
-  /** How the pickup notices or the HP and MP numbers are read changed. @experimental */
+  /** How the HP and MP numbers or the meso total are read changed. @experimental */
   onReaders?(readers: Readers, atMs: number): void;
   onAction?(action: string, atMs: number): void;
   /** Once a second, for clocks and rates. */

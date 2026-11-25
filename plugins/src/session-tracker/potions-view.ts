@@ -6,9 +6,7 @@
  * doesn't jump as it changes from "?" to a rate; while there's no rate or no potion yet, a line
  * under it says so. A stat's detail is only a tooltip, so nothing the player needs goes there.
  *
- * No net (loot minus pot cost) is shown: loot/hr comes from the pickup notices, which miss pickups
- * on busy maps, so a net built on it would read too low. Net comes back once mesos are read from
- * the inventory.
+ * The net after potions shows in the Loot section (loot-view.ts), beside the mesos it's taken from.
  */
 
 import { formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";

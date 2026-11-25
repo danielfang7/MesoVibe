@@ -105,7 +105,7 @@ export class PluginHost {
   view: ViewNode[] = [];
   /** The plugin's other pages, as it last drew them. */
   readonly pages: Partial<Record<PluginPage, ViewNode[]>> = {};
-  private readers: Readers = { notices: "off", waitingMesos: 0, hpMp: "off", hpMpMissing: null };
+  private readers: Readers = { hpMp: "off", hpMpMissing: null };
   /** The pictures the plugin's views name, kept for drawing them. */
   readonly pictures: NamePictures;
 
@@ -173,7 +173,7 @@ export class PluginHost {
     this.post({ type: "capture", state, atMs: Date.now() });
   }
 
-  /** How the pickup notices and the HP and MP numbers are being read; sent on to the plugin when any of it changes. */
+  /** How the HP and MP numbers and the meso total are being read; sent on to the plugin when any of it changes. */
   setReaders(readers: Readers): void {
     if (!readersChanged(this.readers, readers)) return;
     this.readers = readers;

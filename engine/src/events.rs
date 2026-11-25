@@ -16,7 +16,8 @@ use crate::recognizers::notices::{Missed, Tab};
 /// 6: `HpMpChanged`, the HP and MP numbers next to the EXP bar.
 /// 7: `ExpChanged` gained `exp_shown`: late in a level the HUD shows only the percent, and `exp`
 /// is worked out from it.
-/// 8: `MesoChanged`, the meso total shown in the inventory or an NPC shop.
+/// 8: `MesoChanged`, the meso total shown in the inventory or an NPC shop. The engine stops
+/// sending the pickup notices' events, which stay in the schema.
 pub const SCHEMA_VERSION: u32 = 8;
 
 /// Events the engine emits after a confident read (below the confidence
@@ -25,10 +26,14 @@ pub const SCHEMA_VERSION: u32 = 8;
 /// As JSON, an event is an object whose `type` names the variant, with its fields beside it.
 ///
 /// The events of one engine tick always come in this order: the EXP bar's (`ExpChanged`, then
-/// `LevelUp`), the pickup notices' (`MesosGained`, `ItemGained`, `PartyBonus`, `NoticesMissed`),
-/// `MapChanged`, `HpMpChanged`, then `MesoChanged`. So a plugin comparing two HP and MP readings sees a level-up
-/// or a map change the engine read between them first. The numbers can read while the EXP field
-/// can't (a cursor over it): a level-up then shows as a higher max HP or MP before `LevelUp`.
+/// `LevelUp`), `MapChanged`, `HpMpChanged`, then `MesoChanged`. So a plugin comparing two HP and
+/// MP readings sees a level-up or a map change the engine read between them first. The numbers
+/// can read while the EXP field can't (a cursor over it): a level-up then shows as a higher max
+/// HP or MP before `LevelUp`.
+///
+/// The pickup notices' events (`MesosGained`, `ItemGained`, `PartyBonus`, `NoticesMissed`) stay
+/// in the schema, but the engine doesn't send them: the notices miss pickups on busy maps, so
+/// mesos come from `MesoChanged` instead.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(tag = "type")]
 pub enum Event {
@@ -51,21 +56,21 @@ pub enum Event {
     },
     /// The level went up by one or more.
     LevelUp { level: u16 },
-    /// Mesos picked up: the game's "You have gained mesos (+N)". `late` when it was picked up
-    /// earlier, while a digit of the amount wasn't learned yet (a `NoticesMissed` with
-    /// `not_learned` said so then), and is read only now. `shaped` when a digit of the amount was
-    /// named by its shape rather than learned from an EXP line; a `NoticesMissed` with
-    /// `shapes_wrong` later means such amounts may be wrong.
+    /// Not sent at present (see above). Mesos picked up: the game's "You have gained mesos (+N)".
+    /// `late` when it was picked up earlier, while a digit of the amount wasn't learned yet (a
+    /// `NoticesMissed` with `not_learned` said so then), and is read only now. `shaped` when a
+    /// digit of the amount was named by its shape rather than learned from an EXP line; a
+    /// `NoticesMissed` with `shapes_wrong` later means such amounts may be wrong.
     MesosGained {
         #[ts(type = "number")]
         amount: u64,
         late: bool,
         shaped: bool,
     },
-    /// An item picked up: the game's `<name> xN earned. (<tab>)`. `item_key` identifies the
-    /// item's name by its exact shape, the same every time the same item is picked up, whether or
-    /// not its letters are known yet: it's a key for the name's picture, not the name. `tab` is the
-    /// inventory tab it went to, when its letters are known.
+    /// Not sent at present (see above). An item picked up: the game's `<name> xN earned. (<tab>)`.
+    /// `item_key` identifies the item's name by its exact shape, the same every time the same item
+    /// is picked up, whether or not its letters are known yet: it's a key for the name's picture,
+    /// not the name. `tab` is the inventory tab it went to, when its letters are known.
     ///
     /// `name` is the item's name as text, found in the game data from the letters read so far.
     /// When several items fit (the game cut a long name short, has two items of that name, or the
@@ -91,8 +96,8 @@ pub enum Event {
         sell_min: Option<u32>,
         sell_max: Option<u32>,
     },
-    /// The game's "Bonus EXP for PARTY (+N)": the player is in a party. Its EXP is already in the
-    /// EXP bar's reading.
+    /// Not sent at present (see above). The game's "Bonus EXP for PARTY (+N)": the player is in a
+    /// party. Its EXP is already in the EXP bar's reading.
     PartyBonus {
         #[ts(type = "number")]
         amount: u64,
@@ -102,8 +107,8 @@ pub enum Event {
     /// computer (a key for the name's picture, not the name), or is `null` when the name can't be
     /// read (the minimap closed or covered).
     MapChanged { map_key: Option<String> },
-    /// Pickup notices may have been missed, so the mesos and items counted from them are at
-    /// least what was picked up. `reason`: `unaligned` (the notices moved in a way that lines up
+    /// Not sent at present (see above). Pickup notices may have been missed, so the mesos and
+    /// items counted from them are at least what was picked up. `reason`: `unaligned` (the notices moved in a way that lines up
     /// with nothing, as when something covered them), `unreadable` (a new line couldn't be read),
     /// `not_learned` (a mesos amount has a digit not learned yet; it's counted late, as a
     /// `MesosGained` with `late`), `exp_short` or `exp_over` (the EXP lines read don't add up to

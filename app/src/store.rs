@@ -1,7 +1,6 @@
 //! What MesoVibe keeps on this computer: settings, each plugin's own data (JSON files), and the
-//! shapes the readers confirmed (the EXP bar's digits in `exp-bar.txt`, the pickup notices'
-//! letters in `notices.txt`, so later sessions read from the first frame), all in the app's data
-//! folder. Nothing leaves the device.
+//! shapes the EXP bar reader confirmed (its digits in `exp-bar.txt`, so later sessions read from
+//! the first frame), all in the app's data folder. Nothing leaves the device.
 //!
 //! Writes go to a temporary file that is then renamed over the old one, so a crash never leaves a
 //! half-written file. A file whose contents can't be understood (a hand edit, a damaged disk) is
@@ -25,17 +24,15 @@ const MAX_PLUGIN_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Learned {
     /// The EXP bar's digits ([`mesovibe_engine::recognizers::exp_bar::ExpBarReader::knowledge`]).
+    /// Builds that read the pickup notices also kept their letters in `notices.txt`; nothing reads
+    /// or removes that file now.
     ExpBar,
-    /// The pickup notices' letters and digits
-    /// ([`mesovibe_engine::recognizers::notices::NoticeReader::knowledge`]).
-    Notices,
 }
 
 impl Learned {
     fn file(self) -> &'static str {
         match self {
             Learned::ExpBar => "exp-bar.txt",
-            Learned::Notices => "notices.txt",
         }
     }
 }
@@ -385,34 +382,25 @@ mod tests {
         dir
     }
 
-    // Each reader's shapes come back after a restart, apart from the other's, until forgotten.
-    // Fails if one reader's file overwrites the other's, or forgetting leaves the file behind.
+    // The EXP bar reader's shapes come back after a restart, until forgotten. Fails if a restart
+    // loses them, or they come back after being forgotten.
     #[test]
-    fn what_the_readers_learned_survives_a_restart_until_forgotten() {
+    fn what_the_reader_learned_survives_a_restart_until_forgotten() {
         let dir = temp_dir("learned");
         let store = Store::open(dir.clone());
         assert_eq!(store.knowledge(Learned::ExpBar), None);
-        assert_eq!(store.knowledge(Learned::Notices), None);
         store
             .keep_knowledge(Learned::ExpBar, Some("mesovibe exp-bar 1\n"))
-            .unwrap();
-        store
-            .keep_knowledge(Learned::Notices, Some("mesovibe notices 1\n"))
             .unwrap();
         let again = Store::open(dir.clone());
         assert_eq!(
             again.knowledge(Learned::ExpBar).as_deref(),
             Some("mesovibe exp-bar 1\n")
         );
-        assert_eq!(
-            again.knowledge(Learned::Notices).as_deref(),
-            Some("mesovibe notices 1\n")
-        );
         again.keep_knowledge(Learned::ExpBar, None).unwrap();
         again.keep_knowledge(Learned::ExpBar, None).unwrap();
         let last = Store::open(dir.clone());
         assert_eq!(last.knowledge(Learned::ExpBar), None);
-        assert!(last.knowledge(Learned::Notices).is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
 

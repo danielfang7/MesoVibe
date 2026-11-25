@@ -72,15 +72,31 @@ function chatter(handler: (lines: ChatLine[]) => void): void {
   }, 1000);
 }
 
-/** Pickups the loot scenario draws from: matched items, one name several items share, and one no item fits. */
-const MOCK_ITEMS: GameEvent[] = [
-  { type: "ItemGained", item_key: "00000000000000a1", count: 1, tab: "Etc", item_id: 4000028, name: "Tablecloth", sell: 34, sell_min: 34, sell_max: 34 },
-  { type: "ItemGained", item_key: "00000000000000a2", count: 1, tab: "Etc", item_id: 4000018, name: "Jr. Necki Skin", sell: 21, sell_min: 21, sell_max: 21 },
-  { type: "ItemGained", item_key: "00000000000000a3", count: 1, tab: "Use", item_id: null, name: "Blue Potion", sell: 22, sell_min: 22, sell_max: 22 },
-  { type: "ItemGained", item_key: "00000000000000a4", count: 1, tab: "Etc", item_id: null, name: null, sell: null, sell_min: null, sell_max: null },
-  // The game cuts long names short: this one is Blue Jangoon Armor or Shoes.
-  { type: "ItemGained", item_key: "00000000000000a5", count: 1, tab: "Equip", item_id: null, name: "Blue Jangoon…", sell: null, sell_min: 4200, sell_max: 7000 },
-];
+/**
+ * What the `loot` scenario starts with saved: one session from a build that counted loot from the
+ * pickup notices, which the Loot tab still shows, as an estimate.
+ */
+function noticeEraSave(now: number): unknown {
+  const startedAtMs = now - 86_400_000;
+  return {
+    version: 1,
+    history: [
+      {
+        startedAtMs,
+        endedAtMs: startedAtMs + 1_800_000,
+        activeMs: 1_800_000,
+        expGained: 41_667,
+        expLost: 0,
+        startLevel: 41,
+        endLevel: 42,
+        maps: [{ k: "0a1b2c3d4e5f6071", p: 1_800_000, x: 41_667, m: 57_800, r: 57_800, l: 1_800_000, s: 41, e: 42, i: [{ k: "#4000028", c: 30 }] }],
+      },
+    ],
+    current: null,
+    allTime: { mesos: 0, playedMs: 0 },
+    catalog: { "#4000028": { n: "Tablecloth", t: "Etc", v: 34 } },
+  };
+}
 
 export function mockHost(scenario: string): Host {
   const problem = scenario === "moved" ? "Move MesoVibe to your Applications folder and open it from there first." : null;
@@ -115,7 +131,7 @@ export function mockHost(scenario: string): Host {
   };
   const statusHandlers: ((status: Status) => void)[] = [];
   const eventHandlers: ((event: GameEvent, atMs: number) => void)[] = [];
-  const stored = new Map<string, unknown>();
+  const stored = new Map<string, unknown>(scenario === "loot" ? [["session-tracker", noticeEraSave(Date.now())]] : []);
   /** Plugin reads and saves, for the panel tests (`window.__mockStorage`). */
   const storage = { reads: 0, saves: 0 };
   (window as unknown as { __mockStorage: typeof storage }).__mockStorage = storage;
@@ -123,6 +139,9 @@ export function mockHost(scenario: string): Host {
   let exp = scenario === "levelup" ? NEEDED - 400 : 230_000;
   let level = 42;
   let lastGain = 0;
+  /** The `loot` scenario's meso total, as the inventory shows it, and the last one sent. */
+  let mesos = 1_204_330;
+  let sentMesos = 0;
 
   const status = (): Status => {
     const now = Date.now();
@@ -132,8 +151,6 @@ export function mockHost(scenario: string): Host {
       atMs: now,
       stale: false,
       chat: null,
-      notices: "off" as const,
-      waitingMesos: 0,
       hpMp: null,
       hpMpState: "off" as const,
       hpMpMissing: null,
@@ -158,14 +175,13 @@ export function mockHost(scenario: string): Host {
     if (scenario === "dark") return darkStatus(started, game);
     if (scenario === "fullscreen") return fullScreenStatus(started);
     if (t < 4000) {
-      return { ...base, state: "capturing", game, exp: null, unreadable: "learning", error: null, chat: "reading", calibration: "learning", notices: "learning", hpMpState: "learning" };
+      return { ...base, state: "capturing", game, exp: null, unreadable: "learning", error: null, chat: "reading", calibration: "learning", hpMpState: "learning" };
     }
     const pctHundredths = Math.round((exp * 10_000) / NEEDED);
     return {
       ...base,
       state: "capturing",
       chat: "reading",
-      notices: "reading",
       // A potion every few seconds, spent again in between.
       hpMp: { hp: 1386 - (Math.floor(t / 250) % 12) * 40, maxHp: 1386, mp: 1140 - (Math.floor(t / 250) % 9) * 16, maxMp: 1140 },
       hpMpState: "reading",
@@ -209,14 +225,13 @@ export function mockHost(scenario: string): Host {
           lastMap = map;
           for (const handler of eventHandlers) handler({ type: "MapChanged", map_key: map }, s.atMs);
         }
-        // Mesos about every other kill, and an item about every third.
-        if (Math.random() < 0.5) {
-          const mesos: GameEvent = { type: "MesosGained", amount: 40 + Math.round(Math.random() * 80), late: false, shaped: false };
-          for (const handler of eventHandlers) handler(mesos, s.atMs);
-        }
-        if (Math.random() < 0.34) {
-          const item = MOCK_ITEMS[Math.floor(Math.random() * MOCK_ITEMS.length)] as GameEvent;
-          for (const handler of eventHandlers) handler(item, s.atMs);
+        // Mesos picked up about every other kill, with the inventory open: its total is sent, like
+        // the engine's, whenever it changed.
+        if (Math.random() < 0.5) mesos += 40 + Math.round(Math.random() * 80);
+        if (mesos !== sentMesos) {
+          sentMesos = mesos;
+          const total: GameEvent = { type: "MesoChanged", total: mesos, source: "inventory" };
+          for (const handler of eventHandlers) handler(total, s.atMs);
         }
       }
     }
@@ -316,8 +331,6 @@ function darkStatus(started: number, game: Status["game"]): Status {
     unreadable: "screen_dark",
     error: null,
     calibration: "learning",
-    notices: "reading",
-    waitingMesos: 0,
     hpMp: null,
     hpMpState: "reading",
     hpMpMissing: null,
@@ -365,7 +378,7 @@ function namePicture(name: string): GamePicture {
  */
 export function mockHudHost(scenario: string): HudHost {
   const summary: HudSummary | null =
-    scenario === "grind" || scenario === "fullscreen-grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51, lootPerHour: 21_480, lootApprox: true } : null;
+    scenario === "grind" || scenario === "fullscreen-grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51, lootPerHour: 21_480 } : null;
   const started = Date.now();
   const status = (): Status => {
     const base = {
@@ -375,8 +388,6 @@ export function mockHudHost(scenario: string): HudHost {
       chat: null,
       game: { width: 1366, height: 768, scale: 2 },
       fullScreen: false,
-      notices: "reading" as const,
-      waitingMesos: 0,
       hpMp: null,
       hpMpState: "reading" as const,
       hpMpMissing: null,
