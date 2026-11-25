@@ -4,15 +4,21 @@
  * prices them and shows them, the same way whichever source found them.
  *
  * The source wired in counts from the quick slots: a potion use shows as a slot's count changing
- * in the same moment the HP or MP numbers rise. The engine doesn't read the count's digits, only
- * that its picture changed, so the rise is what makes it a use (a potion picked up or bought
- * changes the count with no rise) and says which potion the slot holds: +160 HP is Meat, +150 MP
- * Lemon. An icon's potion is learned from two uses whose rises are that potion's amount, short of
- * the max (a rise capped by the max says nothing of the amount), each near no other item's count
- * change; then it's kept. Uses before that wait, and count once it's named. After that a use of it
- * may rise by less (HP topped up to full, or a hit in the same frame) or a little more (natural
- * recovery in the same frame), and one count change takes every rise before it that fits: two
- * potions a moment apart can show as one change.
+ * just after the HP or MP numbers rise. The engine doesn't read the count's digits, only that its
+ * picture changed, so the rise is what makes it a use (a potion picked up or bought changes the
+ * count with no rise) and says which potion the slot holds: +160 HP is Meat, +150 MP Lemon.
+ *
+ * An icon's potion is learned from its uses: each rise of a potion's amount, short of the max (a
+ * rise the max capped says nothing of the amount) and near no other item's count change, is a vote
+ * for that potion, and a rise short of its amount (a smaller potion, or a hit) is one against; a
+ * rise past it is that potion plus recovery. Two votes, and more votes than against, name it, and
+ * the name is kept. Uses before that wait, and count once it's named; the
+ * tracker drops them when the session pauses, ends or starts, since they're no longer its.
+ *
+ * Once named, a use counts on a looser rise: half the amount (a hit in the same frame), or a fifth
+ * of it reaching the max (topped up to full; less is natural recovery). Two potions a moment apart
+ * can show as one count change, so a change counts every rise before it of the potion's amount,
+ * or else its one latest rise that fits loosely: a Heal just before a potion isn't a second potion.
  */
 
 import type { Event } from "@mesovibe/sdk";
@@ -50,6 +56,11 @@ export interface CountSource {
   /** What the source learned, to keep with the tracker's data and hand back next time. */
   saved?(): unknown;
   /**
+   * Drops the uses it holds back (waiting for an icon's name): the session paused, ended or
+   * started, and they aren't the running session's.
+   */
+  forget?(): void;
+  /**
    * It counts from the quick slots: potions count only while the host reads them, and not at all
    * from a host that doesn't.
    */
@@ -59,9 +70,9 @@ export interface CountSource {
 /**
  * How long after an HP or MP rise a slot's count change may come and still be one use with it: a
  * slot's change is sent once two frames agree, a frame after the rise, and frames come up to a
- * second apart. So a change's rise always comes before it, never with it or after: a rise in the
- * frame a change is sent belongs to another slot's change, sent the next frame, and one after a
- * change (potions picked up, then a heal) is no use.
+ * second apart. So a change's rise comes before it: a rise in the very frame a change is sent most
+ * likely belongs to another slot's change, sent the next frame, and is taken only by a named icon
+ * that has no earlier one. A rise after a change (potions picked up, then a heal) is no use.
  */
 export const PAIR_MS = 1_500;
 /** How far past a potion's amount the rise that names an icon may go: natural recovery in the same frame. */
@@ -73,6 +84,8 @@ const MAX_ICONS = 32;
 /** How long a use of an icon not named yet waits for its name, and how many wait. */
 const WAIT_MS = 10 * 60_000;
 const MAX_WAITING = 20;
+/** How long a vote to name an icon lasts: a player may drink less than once every ten minutes. */
+const BALLOT_MS = 60 * 60_000;
 
 /** A rise of the HP or MP numbers between two readings in a row. */
 interface Rise {
@@ -96,10 +109,13 @@ interface Waiting {
   atMs: number;
 }
 
-/** A rise of a potion's amount near an unnamed icon's count change: a vote to name it that potion. */
+/**
+ * A rise near an unnamed icon's count change: a vote to name it `item`, or with `item` null one
+ * that fits no potion, against each potion of its resource whose amount it falls short of.
+ */
 interface Ballot {
   icon: string;
-  item: number;
+  item: number | null;
   rise: Rise;
 }
 
@@ -146,7 +162,7 @@ export function slotSource(saved?: unknown): CountSource {
   let ballots: Ballot[] = [];
   /** Rises near two items' count changes: they name neither. */
   const contested = new WeakSet<Rise>();
-  /** Rises counted as a use: one rise is never two uses. */
+  /** Rises counted as a use: one rise is never two uses, nor a vote for another icon. */
   const spent = new WeakSet<Rise>();
   let last: HpMpChanged | null = null;
 
@@ -163,8 +179,16 @@ export function slotSource(saved?: unknown): CountSource {
     while (icons.size > MAX_ICONS) icons.delete(icons.keys().next().value as string);
   };
 
-  /** A rise of `item`'s amount near an unnamed icon's change; a rise near two icons' changes names neither. */
-  const vote = (icon: string, item: number, rise: Rise) => {
+  /** The rises a change of a named icon counts: every one of the potion's amount, or its latest loose fit. */
+  const counted = (potion: Potion, near: Rise[]): Rise[] => {
+    const exact = near.filter((r) => fits(potion, r, false));
+    if (exact.length > 0) return exact;
+    const loose = near.filter((r) => fits(potion, r, true));
+    return loose.slice(-1);
+  };
+
+  /** A ballot for or against naming `icon`; a rise near two icons' changes counts for neither. */
+  const vote = (icon: string, item: number | null, rise: Rise) => {
     if (contested.has(rise)) return;
     const other = ballots.find((b) => b.rise === rise);
     if (other === undefined) ballots.push({ icon, item, rise });
@@ -172,18 +196,28 @@ export function slotSource(saved?: unknown): CountSource {
   };
 
   /**
-   * Names each waiting icon that has enough votes from rises no other change can claim any more
-   * (older than PAIR_MS), and counts its waiting uses.
+   * Names each waiting icon whose settled ballots (rises no other change can claim any more, older
+   * than PAIR_MS, and not counted for a named icon) give a potion two votes and more votes than
+   * rises short of its amount, then counts its uses that waited no longer than WAIT_MS before the
+   * name came.
    */
   const name = (atMs: number): PotUse[] => {
     const uses: PotUse[] = [];
     for (const icon of new Set(waiting.map((w) => w.icon))) {
-      const settled = ballots.filter((b) => b.icon === icon && !contested.has(b.rise) && atMs - b.rise.atMs > PAIR_MS);
-      const potion = POTIONS.find((p) => settled.filter((b) => b.item === p.id).length >= NAME_VOTES);
+      const settled = ballots.filter(
+        (b) => b.icon === icon && !contested.has(b.rise) && !spent.has(b.rise) && atMs - b.rise.atMs > PAIR_MS,
+      );
+      const potion = POTIONS.find((p) => {
+        const votes = settled.filter((b) => b.item === p.id).length;
+        const short = (r: Rise) => r.resource === p.resource && r.amount < p.amount && r.amount * 2 >= p.amount;
+        const against = settled.filter((b) => b.item === null && short(b.rise)).length;
+        return votes >= NAME_VOTES && votes > against;
+      });
       if (potion === undefined) continue;
+      const namedAt = Math.max(...settled.filter((b) => b.item === potion.id).map((b) => b.rise.atMs)) + PAIR_MS;
       keep(icon, potion);
-      for (const w of waiting.filter((w) => w.icon === icon)) {
-        for (const r of w.rises) if (!spent.has(r) && fits(potion, r, true)) uses.push(use(potion, r));
+      for (const w of waiting.filter((w) => w.icon === icon && namedAt - w.atMs <= WAIT_MS)) {
+        for (const r of counted(potion, w.rises.filter((r) => !spent.has(r)))) uses.push(use(potion, r));
       }
       waiting = waiting.filter((w) => w.icon !== icon);
       ballots = ballots.filter((b) => b.icon !== icon);
@@ -192,42 +226,45 @@ export function slotSource(saved?: unknown): CountSource {
   };
 
   /**
-   * Pairs each change with the rises before it, oldest first. A known icon's change counts every
-   * rise that fits; an unknown icon's waits with its rises, voting to name the icon.
+   * Pairs each change with the rises before it, oldest first. A named icon's change counts its
+   * rises at once; an unnamed icon's waits with them, its rises voting to name it.
    */
   const pair = (atMs: number): PotUse[] => {
     rises = rises.filter((r) => atMs - r.atMs <= PAIR_MS);
     changes = changes.filter((c) => atMs - c.atMs <= PAIR_MS);
-    waiting = waiting.filter((w) => atMs - w.atMs <= WAIT_MS).slice(-MAX_WAITING);
-    ballots = ballots.filter((b) => atMs - b.rise.atMs <= WAIT_MS);
-    const uses: PotUse[] = [];
+    // Before the waiting uses age out: a name that came while no event did still counts them.
+    const uses = name(atMs);
     for (const change of [...changes]) {
       const known = POTIONS.find((p) => p.id === icons.get(change.icon));
-      const near = rises.filter((r) => r.atMs < change.atMs && change.atMs - r.atMs <= PAIR_MS);
+      const before = rises.filter((r) => r.atMs < change.atMs && change.atMs - r.atMs <= PAIR_MS);
       if (known !== undefined) {
-        const fitting = near.filter((r) => fits(known, r, true));
-        if (fitting.length === 0) continue;
+        // A rise in the change's own frame only when none before it fits.
+        let taken = counted(known, before);
+        if (taken.length === 0) taken = counted(known, rises.filter((r) => r.atMs === change.atMs));
+        if (taken.length === 0) continue;
         changes = changes.filter((c) => c !== change);
-        for (const r of fitting) uses.push(use(known, r));
+        for (const r of taken) uses.push(use(known, r));
         keep(change.icon, known);
         continue;
       }
       changes = changes.filter((c) => c !== change);
-      if (near.length === 0) continue;
-      for (const r of near) {
+      if (before.length === 0) continue;
+      for (const r of before.filter((r) => !r.full)) {
         const [only, ...more] = POTIONS.filter((p) => fits(p, r, false));
-        if (only !== undefined && more.length === 0) vote(change.icon, only.id, r);
+        if (more.length === 0) vote(change.icon, only?.id ?? null, r);
       }
-      waiting.push({ icon: change.icon, rises: near, atMs: change.atMs });
+      waiting.push({ icon: change.icon, rises: before, atMs: change.atMs });
     }
-    return [...uses, ...name(atMs)];
+    waiting = waiting.filter((w) => atMs - w.atMs <= WAIT_MS).slice(-MAX_WAITING);
+    ballots = ballots.filter((b) => atMs - b.rise.atMs <= BALLOT_MS);
+    return uses;
   };
 
   const onSlot = (event: QuickSlotChanged, atMs: number) => {
     const before = slots.get(event.slot);
     slots.set(event.slot, { count: event.count_key, icon: event.icon_key });
     // The same item, its count now another: a use if a rise goes with it. A count that went
-    // unreadable (something drawn over it) or came back isn't a change.
+    // unreadable (covered whole) or came back isn't a change; one partly covered is, a known limit.
     const counted = before !== undefined && before.icon === event.icon_key;
     if (counted && before.count !== null && event.count_key !== null && before.count !== event.count_key) {
       changes.push({ icon: event.icon_key, atMs });
@@ -256,6 +293,9 @@ export function slotSource(saved?: unknown): CountSource {
       return potion === undefined ? [] : [potion.amount];
     },
     saved: () => ({ icons: [...icons] }),
+    forget: () => {
+      waiting = [];
+    },
     readsSlots: true,
   };
 }

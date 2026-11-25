@@ -50,8 +50,9 @@ function grinding({ readers = READING, saved = null } = {}) {
     if (s % 10 === 0) plugin.send(exp(230_000 + s * 6, state.at));
     for (const m of messages) plugin.send(m);
   };
+  // The engine sends the HP and MP numbers when they change, so once here, then on each rise.
   for (let s = 0; s < 120; s++) {
-    second([hpMp(state.hp, state.mp, state.at + 1000)]);
+    second(s === 0 ? [hpMp(state.hp, state.mp, state.at + 1000)] : []);
     if (s === 3) {
       plugin.send(slot(0, "c274", "lemon-icon", state.at));
       plugin.send(slot(6, "c377", "meat-icon", state.at));
@@ -63,11 +64,16 @@ function grinding({ readers = READING, saved = null } = {}) {
     state.mp += mp;
     second([hpMp(state.hp, state.mp, state.at + 1000)]);
     // A slot's change is sent a frame after the rise shows.
-    second([hpMp(state.hp, state.mp, state.at + 1000), ...slots.map(([i, count, icon]) => slot(i, count, icon, state.at + 1000))]);
+    second(slots.map(([i, count, icon]) => slot(i, count, icon, state.at + 1000)));
   };
-  /** Two seconds with nothing new, for an icon's name to settle (its last vote older than 1.5 s). */
+  /**
+   * Two quiet seconds, then a hit of 1 HP: a name settles once its last vote is 1.5 s old, at the
+   * next event the engine sends.
+   */
   const settle = () => {
-    for (let i = 0; i < 2; i++) second([hpMp(state.hp, state.mp, state.at + 1000)]);
+    second();
+    second();
+    second([hpMp((state.hp -= 1), state.mp, state.at + 1000)]);
   };
   return { ...plugin, state, second, use, settle };
 }
@@ -212,6 +218,98 @@ test("uses waiting for a name count each rise once", () => {
   game.use({ mp: 150, slots: [[0, "c271", "lemon-icon"], [3, "c271", "lemon-icon"]] });
   game.settle();
   assert.deepEqual(used(game.sent), { Lemon: "×3" });
+});
+
+// A Heal just before a potion is no second potion, whether the potion rose by its amount or only
+// topped HP up to full. Fails if a change counts a Heal's rise beside its own potion's.
+test("a Heal just before a potion counts one potion", () => {
+  const game = grinding({ saved: NAMED });
+  const { hp, mp, at } = game.state;
+  game.send(hpMp(hp + 300, mp, at + 250));
+  game.send(hpMp(hp + 460, mp, at + 500));
+  game.send(slot(6, "c376", "meat-icon", at + 750));
+  assert.deepEqual(used(game.sent), { Meat: "×1" });
+  game.send(hpMp(1800 - 100, mp, at + 5_000));
+  game.send(hpMp(1800 - 60, mp, at + 5_250));
+  game.send(hpMp(1800, mp, at + 5_500));
+  game.send(slot(6, "c375", "meat-icon", at + 5_750));
+  assert.deepEqual(used(game.sent), { Meat: "×2" }, "+40 then +60 to full: one potion");
+});
+
+// A rise a named icon's change counted never votes to name another icon that changed with it.
+// Fails if a pickup at the moment of a Meat use is named Meat.
+test("a rise a named icon counted names no other icon", () => {
+  const game = grinding({ saved: { ...NAMED, slots: { icons: [["meat-icon", MEAT]] } } });
+  game.send(slot(1, "c50", "red-icon", game.state.at));
+  for (const [red, meat] of [["c51", "c376"], ["c52", "c375"]]) {
+    game.second([hpMp((game.state.hp += 160), game.state.mp, game.state.at + 1000)]);
+    game.second([slot(1, red, "red-icon", game.state.at + 1000), slot(6, meat, "meat-icon", game.state.at + 1000)]);
+  }
+  game.settle();
+  assert.deepEqual(used(game.sent), { Meat: "×2" });
+  for (let i = 0; i < 6; i++) game.second();
+  assert.deepEqual(last(game.sent, "save").data.slots.icons, [["meat-icon", MEAT]]);
+});
+
+// If the count shows a frame before the HP number does, the rise comes in the change's own frame;
+// a named icon takes it when no earlier rise fits. Fails if that use is lost.
+test("a named icon's change takes a rise in its own frame when none came before", () => {
+  const game = grinding({ saved: NAMED });
+  const { hp, mp, at } = game.state;
+  game.send(hpMp(hp + 160, mp, at + 250));
+  game.send(slot(6, "c376", "meat-icon", at + 250));
+  assert.deepEqual(used(game.sent), { Meat: "×1" });
+});
+
+// A player drinking less than once every ten minutes still gets the icon named; only the uses
+// that waited too long are dropped. Fails if the name never comes.
+test("a potion drunk rarely still gets named", () => {
+  const game = grinding();
+  game.use({ hp: 160, slots: [[6, "c376", "meat-icon"]] });
+  for (let i = 0; i < 660; i++) game.second();
+  game.use({ hp: 160, slots: [[6, "c375", "meat-icon"]] });
+  game.settle();
+  assert.deepEqual(used(game.sent), { Meat: "×1" }, "the first waited eleven minutes");
+  game.use({ hp: 160, slots: [[6, "c374", "meat-icon"]] });
+  assert.deepEqual(used(game.sent), { Meat: "×2" });
+});
+
+// A name that comes while no event does (a quiet stretch after the second use) still counts the
+// uses that waited for it. Fails if they age out before the next event names the icon.
+test("a name that comes in a quiet stretch still counts the uses that waited", () => {
+  const game = grinding();
+  game.use({ mp: 150, slots: [[0, "c273", "lemon-icon"]] });
+  game.use({ mp: 150, slots: [[0, "c272", "lemon-icon"]] });
+  for (let i = 0; i < 660; i++) game.second();
+  game.second([hpMp(game.state.hp, (game.state.mp -= 1), game.state.at + 1000)]);
+  assert.deepEqual(used(game.sent), { Lemon: "×2" });
+});
+
+// A smaller potion whose rises now and then reach Meat's amount with recovery isn't named Meat:
+// rises short of an amount count against it. Fails if two lucky frames name it.
+test("rises short of a potion's amount keep an icon from being named it", () => {
+  const game = grinding();
+  const rises = [150, 160, 150, 150, 165, 150];
+  rises.forEach((hp, i) => {
+    game.use({ hp: -hp });
+    game.use({ hp, slots: [[1, `c${90 - i}`, "orange-icon"]] });
+  });
+  game.settle();
+  for (let i = 0; i < 6; i++) game.second();
+  assert.deepEqual(used(game.sent), {});
+  assert.equal(last(game.sent, "save").data.slots?.icons.some(([icon]) => icon === "orange-icon") ?? false, false);
+});
+
+// Uses held back for a name aren't counted after Pause: a potion drunk before Pause, or while
+// paused, isn't counted after Resume. Fails if it is.
+test("uses waiting for a name are dropped when the session pauses", () => {
+  const game = grinding();
+  game.use({ hp: 160, slots: [[6, "c376", "meat-icon"]] });
+  game.send({ type: "action", action: "pause", atMs: game.state.at });
+  game.send({ type: "action", action: "resume", atMs: game.state.at + 1 });
+  game.use({ hp: 160, slots: [[6, "c375", "meat-icon"]] });
+  game.settle();
+  assert.deepEqual(used(game.sent), { Meat: "×1" }, "named by both, counting only the use after Resume");
 });
 
 // A stack moved to another slot, or a slot whose count goes unreadable and back, is no use even

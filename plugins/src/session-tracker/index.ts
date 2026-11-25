@@ -861,6 +861,8 @@ definePlugin({
             // The lead is no potion time: a potion drunk before the first gain isn't the session's,
             // so its time isn't either.
             startLoot(session, map, lead, event.level);
+            // Potions held back for a name before the first gain aren't this session's.
+            source?.forget?.();
             // The session just ended stops counting its sales, and a total read in the five
             // minutes before this kill opens this one.
             if (history[0] !== undefined) stopCloseOut(history[0]);
@@ -942,6 +944,7 @@ definePlugin({
             waitForCloseOut(past, atMs, reads);
             pushHistory(past);
             session = newSession(atMs, session.last);
+            source?.forget?.();
             readSaid = false;
             pre = null;
             persist(atMs, 0);
@@ -952,6 +955,7 @@ definePlugin({
           if (session.expGained > 0 || session.held !== undefined) {
             remember("reset", atMs);
             session = newSession(atMs, session.last);
+            source?.forget?.();
             readSaid = false;
             pre = null;
             persist(atMs, 0);
@@ -964,8 +968,10 @@ definePlugin({
             persist(atMs, 0);
           }
         } else if (action === "resume") {
+          // Potions held back for a name before Pause or while paused aren't counted after it.
           if (session.paused) {
             delete session.paused;
+            source?.forget?.();
             persist(atMs, 0);
           }
         } else if (action.startsWith(DELETE_SESSION)) {
