@@ -11,6 +11,7 @@
 import { definePlugin, formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";
 import type { CaptureState, Cell, Readers, RowAction, SessionSummary, ViewNode } from "@mesovibe/sdk";
 import { wiredSource } from "./count-source.js";
+import type { PotUse } from "./count-source.js";
 import {
   addCount,
   addExp,
@@ -799,8 +800,14 @@ definePlugin({
     return {
       onEvent(event, atMs) {
         tick(atMs);
-        // The source sees every event, paused or not, so it always knows the last reading.
-        const uses = source?.onEvent(event, atMs) ?? [];
+        // The source sees every event, paused or not, so it always knows the last reading. A fault
+        // in it never stops EXP and loot counting.
+        let uses: PotUse[] = [];
+        try {
+          uses = source?.onEvent(event, atMs) ?? [];
+        } catch {
+          uses = [];
+        }
         if (event.type === "ExpChanged" && session.paused) {
           // Paused, the bar is still followed: the strip's level stays true, and Resume counts only
           // what's gained after it. A level-up still counts, so the session's levels add up.
@@ -850,7 +857,9 @@ definePlugin({
             session.activeMs = lead;
             session.startLevel = before?.level ?? event.level;
             session.expLost = 0;
-            startLoot(session, map, lead, event.level, potTime(atMs));
+            // The lead is no potion time: a potion drunk before the first gain isn't the session's,
+            // so its time isn't either.
+            startLoot(session, map, lead, event.level);
             // The session just ended stops counting its sales, and a total read in the five
             // minutes before this kill opens this one.
             if (history[0] !== undefined) stopCloseOut(history[0]);

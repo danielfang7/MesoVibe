@@ -228,7 +228,7 @@ export function addPotUse(
   started: boolean,
   level: number | null,
 ): void {
-  if (!started || map === undefined || !(use.count > 0)) return;
+  if (!started || map === undefined || !Number.isInteger(use.count) || use.count <= 0) return;
   addPot((entryFor(loot, map, level).u ??= []), use.item, use.count, use.maybe);
   notePotSource(loot, use.item, use.source);
 }
