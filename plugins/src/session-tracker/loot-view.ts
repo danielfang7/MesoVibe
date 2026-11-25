@@ -131,7 +131,7 @@ export function heldLines(ledger: Ledger): ViewNode[] {
     .flatMap(([amount, readAt]): ViewNode[] => {
       const rise = formatCompact(amount);
       return [
-        { kind: "partial", text: `+${rise} not counted: too big a jump for farming (storage, a trade or a misread)` },
+        { kind: "partial", text: `+${rise} not counted: too big a jump for farming (a trade or a misread)` },
         { kind: "button", label: "Count it", action: `${COUNT_HELD}${readAt}`, style: "secondary", spoken: `Count the ${rise} rise in Profit` },
       ];
     });

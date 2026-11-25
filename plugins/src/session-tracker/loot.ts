@@ -312,7 +312,11 @@ export function longest(maps: MapEntry[]): MapEntry | null {
 }
 
 /** Where a trusted meso total was read: the inventory window or an NPC shop's. */
-export type MesoSource = "inventory" | "shop";
+/**
+ * Where a trusted meso total was read: the inventory window, an NPC shop's, or the storage window's
+ * mesos on hand.
+ */
+export type MesoSource = "inventory" | "shop" | "storage";
 
 /**
  * A session's meso ledger: what the meso totals read in the inventory and shop windows say the
@@ -350,6 +354,11 @@ export interface Ledger {
   pt: number;
   /** Until when an ended session counts what's sold at a shop (wall clock): its close-out. */
   co?: number;
+  /**
+   * Where the last total was read, so a storage visit's later totals move the balance without
+   * counting: mesos put into or taken out of storage are neither loot nor spending.
+   */
+  ls?: MesoSource;
 }
 
 /** What the session did between the last trusted total and this one. */
@@ -372,6 +381,8 @@ export interface SinceReading {
 export type LedgerChange =
   | { kind: "opening"; total: number }
   | { kind: "picked" | "sold" | "spent" | "held"; amount: number }
+  /** Mesos moved to or from storage: the balance follows, nothing is counted. */
+  | { kind: "moved"; amount: number }
   | { kind: "same" };
 
 /** A rise outside a shop is held when it's more than this... */
@@ -394,12 +405,23 @@ function tooBig(ledger: Ledger, rise: number, atMs: number): boolean {
 }
 
 /** Moves the balance to `total`, read at `atMs` with `playMs` of the session played. */
-function rebase(ledger: Ledger, total: number, atMs: number, playMs: number): void {
+function rebase(ledger: Ledger, total: number, atMs: number, playMs: number, source?: MesoSource): void {
   ledger.b = total;
   ledger.ba = atMs;
   ledger.bp = playMs;
   ledger.n += 1;
   if (ledger.ob === null) ledger.ob = total;
+  if (source === undefined) delete ledger.ls;
+  else ledger.ls = source;
+}
+
+/**
+ * Whether a total moves mesos to or from storage: a storage total after another one, read while the
+ * window stayed open. The change up to a visit's first storage total counts by the usual rules,
+ * since nothing has moved yet when the window opens.
+ */
+function transfer(ledger: Ledger, source: MesoSource): boolean {
+  return source === "storage" && ledger.ls === "storage";
 }
 
 /**
@@ -412,11 +434,16 @@ export function addReading(loot: LootFields, total: number, source: MesoSource, 
   const ledger = (loot.lg ??= newLedger());
   const before = ledger.b;
   if (before === null) {
-    rebase(ledger, total, atMs, since.playMs);
+    rebase(ledger, total, atMs, since.playMs, source);
     return { kind: "opening", total };
   }
   const played = Math.max(0, since.playMs - ledger.bp);
   const delta = total - before;
+  if (transfer(ledger, source)) {
+    ledger.pt += played;
+    rebase(ledger, total, atMs, since.playMs, source);
+    return { kind: "moved", amount: delta };
+  }
   let change: LedgerChange;
   if (delta < 0) {
     ledger.sp += -delta;
@@ -443,7 +470,7 @@ export function addReading(loot: LootFields, total: number, source: MesoSource, 
     entry.ft = (entry.ft ?? 0) + played;
   }
   ledger.pt += played;
-  rebase(ledger, total, atMs, since.playMs);
+  rebase(ledger, total, atMs, since.playMs, source);
   return change;
 }
 
@@ -452,10 +479,10 @@ export function addReading(loot: LootFields, total: number, source: MesoSource, 
  * opening balance, so a player who just checked their inventory in town isn't asked again. False
  * when it's older than that.
  */
-export function openWith(loot: LootFields, total: number, readAtMs: number, startAtMs: number): boolean {
+export function openWith(loot: LootFields, total: number, readAtMs: number, startAtMs: number, source?: MesoSource): boolean {
   if (startAtMs - readAtMs > HOLD_MS) return false;
   const ledger = (loot.lg = newLedger());
-  rebase(ledger, total, readAtMs, 0);
+  rebase(ledger, total, readAtMs, 0, source);
   return true;
 }
 
@@ -504,10 +531,14 @@ export function closeOut(loot: LootFields, total: number, source: MesoSource, at
     return null;
   }
   if (ledger.b === null) {
-    rebase(ledger, total, atMs, ledger.bp);
+    rebase(ledger, total, atMs, ledger.bp, source);
     return { kind: "opening", total };
   }
   const delta = total - ledger.b;
+  if (transfer(ledger, source)) {
+    rebase(ledger, total, atMs, ledger.bp, source);
+    return { kind: "moved", amount: delta };
+  }
   let change: LedgerChange;
   if (delta < 0) {
     ledger.sp += -delta;
@@ -521,7 +552,7 @@ export function closeOut(loot: LootFields, total: number, source: MesoSource, at
     ledger.so += delta;
     change = { kind: "sold", amount: delta };
   }
-  rebase(ledger, total, atMs, ledger.bp);
+  rebase(ledger, total, atMs, ledger.bp, source);
   return change;
 }
 
@@ -696,6 +727,7 @@ export function validLedger(value: unknown): Ledger | undefined {
     pt: l.pt as number,
   };
   if (count(l.co)) ledger.co = l.co;
+  if (l.ls === "inventory" || l.ls === "shop" || l.ls === "storage") ledger.ls = l.ls;
   return ledger;
 }
 

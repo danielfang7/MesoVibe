@@ -425,19 +425,50 @@ test("shop sales count as loot sold, and spending shows apart", () => {
   assert.equal(fields.maps, undefined, "a stretch away from the grind is no map's rate");
 });
 
-// The storage window's total is sent too, but the ledger doesn't yet tell a transfer to or from
-// storage from loot. Fails if a withdrawal read in storage counts as mesos picked up or sold.
-test("a total read in the storage window isn't counted yet", () => {
+// Mesos taken out of storage while its window is open are a transfer, not loot. Fails if a
+// withdrawal read in storage counts as mesos picked up, sold or held.
+test("a withdrawal read in the storage window counts for nothing", () => {
   const plugin = play();
   const t = twoReadings(plugin);
   const before = lootFigures(plugin.sent);
-  plugin.send(total(1_250_000, t + 1000, "storage"));
-  plugin.send({ type: "tick", atMs: t + 2000 });
+  plugin.send(total(1_050_000, t + 1000, "storage"));
+  plugin.send(total(1_250_000, t + 2000, "storage"));
+  plugin.send({ type: "tick", atMs: t + 3000 });
   assert.deepEqual(lootFigures(plugin.sent), before);
-  // The next inventory total is measured from the last one counted, not from storage's.
-  const later = grind(plugin, t + 2000, 120);
-  plugin.send(total(1_060_000, later));
+  // The next inventory total is measured from the balance after the withdrawal.
+  const later = grind(plugin, t + 3000, 120);
+  plugin.send(total(1_260_000, later));
   assert.equal(lootFigures(plugin.sent)["Mesos picked up"], "60,000");
+});
+
+// A storage visit's first total counts by the usual rules (nothing has moved yet); the ones after
+// it while the window stays open move the balance. Fails if a transfer counts or a visit's first change is lost.
+test("only the totals after a storage visit's first move the balance without counting", () => {
+  const fields = {};
+  loot.addReading(fields, 1_000_000, "inventory", T0, grinding(0));
+  const town = (playMs) => ({ playMs, map: undefined, away: true });
+  assert.deepEqual(loot.addReading(fields, 1_000_500, "storage", T0 + 10 * MIN, town(10 * MIN)), { kind: "sold", amount: 500 });
+  assert.deepEqual(loot.addReading(fields, 1_250_500, "storage", T0 + 11 * MIN, town(11 * MIN)), { kind: "moved", amount: 250_000 });
+  assert.deepEqual(loot.addReading(fields, 1_200_500, "storage", T0 + 12 * MIN, town(12 * MIN)), { kind: "moved", amount: -50_000 });
+  assert.deepEqual(loot.addReading(fields, 1_230_500, "inventory", T0 + 30 * MIN, grinding(30 * MIN)), { kind: "picked", amount: 30_000 });
+  const ledger = ledgerOf(fields);
+  assert.deepEqual([ledger.pu, ledger.so, ledger.sp, ledger.ho.length], [30_000, 500, 0, 0]);
+  // A storage total after another window's starts a new visit.
+  assert.deepEqual(loot.addReading(fields, 1_230_600, "storage", T0 + 40 * MIN, town(40 * MIN)), { kind: "sold", amount: 100 });
+  assert.equal(loot.validLedger(JSON.parse(JSON.stringify(ledger))).ls, "storage", "where the last total came from is saved");
+});
+
+// After End, storage moves during the close-out count for nothing, and a sale after them counts.
+// Fails if a withdrawal in the close-out counts as sold.
+test("a storage withdrawal during the close-out counts for nothing", () => {
+  const fields = {};
+  loot.addReading(fields, 1_000_000, "inventory", T0, grinding(0));
+  loot.addReading(fields, 1_030_000, "inventory", T0 + 20 * MIN, grinding(20 * MIN));
+  loot.waitForCloseOut(fields, T0 + 21 * MIN, true);
+  assert.deepEqual(loot.closeOut(fields, 1_030_000, "storage", T0 + 22 * MIN), { kind: "same" });
+  assert.deepEqual(loot.closeOut(fields, 1_330_000, "storage", T0 + 23 * MIN), { kind: "moved", amount: 300_000 });
+  assert.deepEqual(loot.closeOut(fields, 1_340_000, "shop", T0 + 25 * MIN), { kind: "sold", amount: 10_000 });
+  assert.deepEqual([ledgerOf(fields).so, ledgerOf(fields).ho.length], [10_000, 0]);
 });
 
 // Without a shop reading, a rise after time in town or across a pause is what a shop paid, not
@@ -694,7 +725,7 @@ test("held rises list with Count it, newest first, at most three", () => {
   const held = node.children.filter((n) => n.kind === "partial");
   const buttons = node.children.filter((n) => n.kind === "button");
   assert.equal(held.length, 3);
-  assert.equal(held[0].text, "+5M not counted: too big a jump for farming (storage, a trade or a misread)");
+  assert.equal(held[0].text, "+5M not counted: too big a jump for farming (a trade or a misread)");
   assert.deepEqual(buttons[0], {
     kind: "button",
     label: "Count it",

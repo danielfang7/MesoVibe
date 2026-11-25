@@ -741,7 +741,7 @@ definePlugin({
         return true;
       }
       if (change?.kind === "held") {
-        context.notice(`+${formatCompact(change.amount)} not counted: too big a jump for farming (storage, a trade or a misread)`);
+        context.notice(`+${formatCompact(change.amount)} not counted: too big a jump for farming (a trade or a misread)`);
         return true;
       }
       return false;
@@ -820,7 +820,7 @@ definePlugin({
             // minutes before this kill opens this one.
             if (history[0] !== undefined) stopCloseOut(history[0]);
             closeLater = false;
-            if (pre !== null) openWith(session, pre.total, pre.atMs, atMs);
+            if (pre !== null) openWith(session, pre.total, pre.atMs, atMs, pre.source);
             pre = null;
             resetSince();
           }
@@ -832,10 +832,8 @@ definePlugin({
         } else if (event.type === "MapChanged") {
           map = event.map_key;
           show(atMs);
-        } else if (event.type === "MesoChanged" && event.source !== "storage") {
+        } else if (event.type === "MesoChanged") {
           // Counted while paused too: a change across a pause is what a shop paid or what was spent.
-          // The storage window's total isn't counted yet: the ledger doesn't yet tell a transfer
-          // to or from storage from loot, so it's left out as it was before storage was read.
           countMesos(event.total, event.source, atMs);
           show(atMs);
         }
@@ -988,7 +986,7 @@ definePlugin({
             context.notice(TOO_LATE[action]);
           }
         } else if (action === "undo-closeout") {
-          // A rise that wasn't a sale (a trade, storage): it comes back out of the session, and the
+          // A rise that wasn't a sale (a trade, say): it comes back out of the session, and the
           // balance stays as read, so the next sale is measured from it.
           if (undo?.kind === "closeout" && undo.sold !== undefined && atMs <= undo.until) {
             const startedAt = undo.past;
