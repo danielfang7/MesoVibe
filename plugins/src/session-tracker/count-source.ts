@@ -8,8 +8,9 @@
  * that its picture changed, so the rise is what makes it a use (a potion picked up or bought
  * changes the count with no rise) and says which potion the slot holds: +160 HP is Meat, +150 MP
  * Lemon. Each icon's potion is learned from its first use whose rise is that potion's amount, and
- * kept. After that a use of it may rise by less (HP topped up to full, or a hit in the same frame)
- * or a little more (natural recovery in the same frame).
+ * kept; uses of it before then wait, and count once it's named. After that a use of it may rise by
+ * less (HP topped up to full, or a hit in the same frame) or a little more (natural recovery in the
+ * same frame).
  */
 
 import type { Event } from "@mesovibe/sdk";
@@ -64,6 +65,9 @@ export const PAIR_MS = 1_500;
 const NAME_SLACK = 10;
 /** Icons whose potion is kept, the newest last. */
 const MAX_ICONS = 32;
+/** How long a use of an icon not named yet waits for its name, and how many wait. */
+const WAIT_MS = 10 * 60_000;
+const MAX_WAITING = 20;
 
 /** A rise of the HP or MP numbers between two readings in a row. */
 interface Rise {
@@ -77,6 +81,13 @@ interface Rise {
 /** A slot's count changing with the same item in it. */
 interface Change {
   icon: string;
+  atMs: number;
+}
+
+/** A count change of an icon not named yet, with the rises before it, waiting for the icon's name. */
+interface Waiting {
+  icon: string;
+  rises: Rise[];
   atMs: number;
 }
 
@@ -115,12 +126,25 @@ export function slotSource(saved?: unknown): CountSource {
   const slots = new Map<number, SlotSeen>();
   let rises: Rise[] = [];
   let changes: Change[] = [];
+  let waiting: Waiting[] = [];
+  /** Rises counted as a use: one rise is never two uses. */
+  const spent = new WeakSet<Rise>();
   let last: HpMpChanged | null = null;
 
-  /** Pairs each change with a rise near it, oldest first; a pair is one use. */
+  const use = (potion: Potion, rise: Rise): PotUse => {
+    spent.add(rise);
+    rises = rises.filter((r) => r !== rise);
+    return { item: potion.id, count: 1, maybe: false, source: "slots" };
+  };
+
+  /**
+   * Pairs each change with a rise before it, oldest first; a pair is one use. A change of an icon
+   * not named yet that no rise names waits with its rises, and counts if the icon is named soon.
+   */
   const pair = (atMs: number): PotUse[] => {
     rises = rises.filter((r) => atMs - r.atMs <= PAIR_MS);
     changes = changes.filter((c) => atMs - c.atMs <= PAIR_MS);
+    waiting = waiting.filter((w) => atMs - w.atMs <= WAIT_MS).slice(-MAX_WAITING);
     const uses: PotUse[] = [];
     for (const change of [...changes]) {
       const item = icons.get(change.icon);
@@ -140,13 +164,25 @@ export function slotSource(saved?: unknown): CountSource {
           }
         }
       }
-      if (potion === undefined || rise === undefined) continue;
+      if (potion === undefined || rise === undefined) {
+        if (known === undefined && near.length > 0) {
+          waiting.push({ icon: change.icon, rises: near, atMs: change.atMs });
+          changes = changes.filter((c) => c !== change);
+        }
+        continue;
+      }
+      changes = changes.filter((c) => c !== change);
+      uses.push(use(potion, rise));
+      if (known !== undefined) continue;
       icons.delete(change.icon);
       icons.set(change.icon, potion.id);
       while (icons.size > MAX_ICONS) icons.delete(icons.keys().next().value as string);
-      rises = rises.filter((r) => r !== rise);
-      changes = changes.filter((c) => c !== change);
-      uses.push({ item: potion.id, count: 1, maybe: false, source: "slots" });
+      // Its earlier uses that waited for its name.
+      for (const w of waiting.filter((w) => w.icon === change.icon)) {
+        const earlier = w.rises.find((r) => !spent.has(r) && fits(potion, r, true));
+        if (earlier !== undefined) uses.push(use(potion, earlier));
+      }
+      waiting = waiting.filter((w) => w.icon !== change.icon);
     }
     return uses;
   };

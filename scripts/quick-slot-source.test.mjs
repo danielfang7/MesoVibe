@@ -93,21 +93,23 @@ test("a count change without a rise, or a rise without a count change, counts no
   assert.deepEqual(used(game.sent), {});
 });
 
-// An icon is named only by a rise of its potion's amount, give or take natural recovery; once
-// named, a use counts though HP tops up to full or a hit lands in the same frame. Fails if a
-// stray rise names an icon, or a named icon's uses need the exact amount.
+// An icon is named only by a rise of its potion's amount, give or take natural recovery; its
+// uses before that wait and count once it's named, and after it a use counts though HP tops up to
+// full or a hit lands in the same frame. Fails if a stray rise names an icon, an earlier use is
+// lost or counted twice, or a named icon's uses need the exact amount.
 test("an icon's potion is learned from a rise of its amount, then counted loosely", () => {
   const game = grinding();
   game.use({ mp: 208, slots: [[0, "c273", "lemon-icon"]] });
-  assert.deepEqual(used(game.sent), {}, "+208 MP is no Lemon yet");
+  assert.deepEqual(used(game.sent), {}, "+208 MP names no Lemon");
   game.use({ mp: 150, slots: [[0, "c272", "lemon-icon"]] });
+  assert.deepEqual(used(game.sent), { Lemon: "×2" }, "+150 names it, and the +208 before counts");
   game.use({ mp: 208, slots: [[0, "c271", "lemon-icon"]] });
   game.use({ mp: 90, slots: [[0, "c270", "lemon-icon"]] });
   game.use({ mp: 40, slots: [[0, "c269", "lemon-icon"]] });
-  assert.deepEqual(used(game.sent), { Lemon: "×3" }, "named by +150, then +208 and +90 count, +40 doesn't");
+  assert.deepEqual(used(game.sent), { Lemon: "×4" }, "+208 and +90 count, +40 doesn't");
   // MP rising to its max counts whatever the rise.
   game.use({ mp: 1500 - game.state.mp, slots: [[0, "c268", "lemon-icon"]] });
-  assert.deepEqual(used(game.sent), { Lemon: "×4" });
+  assert.deepEqual(used(game.sent), { Lemon: "×5" });
 });
 
 // The potion each icon is is saved with the tracker's data and known from the first use next
@@ -135,6 +137,16 @@ test("a use is one rise and one change close together", () => {
   game.send(slot(3, "c376", "meat-icon", game.state.at));
   game.use({ hp: 160, slots: [[6, "c375", "meat-icon"], [3, "c375", "meat-icon"]] });
   assert.deepEqual(used(game.sent), { Meat: "×1" });
+});
+
+// The same item in two slots, used before it's named: both counts wait with the one rise, and
+// naming it counts that rise once. Fails if one rise becomes two uses.
+test("uses waiting for a name count each rise once", () => {
+  const game = grinding();
+  game.send(slot(3, "c274", "lemon-icon", game.state.at));
+  game.use({ mp: 180, slots: [[0, "c273", "lemon-icon"], [3, "c273", "lemon-icon"]] });
+  game.use({ mp: 150, slots: [[0, "c272", "lemon-icon"], [3, "c272", "lemon-icon"]] });
+  assert.deepEqual(used(game.sent), { Lemon: "×2" });
 });
 
 // A stack moved to another slot, or a slot whose count goes unreadable and back, is no use even
