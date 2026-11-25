@@ -717,13 +717,16 @@ definePlugin({
       since = { maps: new Set(map === undefined ? [] : [map]), paused: false };
     };
     /**
-     * What the session did since its last meso total. Time on a map where it gained no EXP (a
-     * town) or a pause makes a rise what a shop paid, not mesos picked up.
+     * What the session did since its last meso total. A pause makes a rise what a shop paid, not
+     * mesos picked up. Time in a town doesn't: a potion run passes through one, and what a shop pays
+     * is read in its window. The stretch is one map's only when that map is a grinding one (the
+     * session gained EXP there), so a town never gets a mesos/hr.
      */
     const sinceReading = (): SinceReading => {
       const played = [...since.maps];
-      const town = played.some((key) => (session.maps ?? []).find((m) => m.k === key)?.x === 0);
-      return { playMs: session.activeMs, map: played.length === 1 ? played[0] : undefined, away: since.paused || town };
+      const grinding = (key: string | null | undefined) => ((session.maps ?? []).find((m) => m.k === key)?.x ?? 0) > 0;
+      const one = played.length === 1 && grinding(played[0]) ? played[0] : undefined;
+      return { playMs: session.activeMs, map: one, away: since.paused };
     };
     /**
      * Counts a total read while the session just ended still counts its sales (its close-out).

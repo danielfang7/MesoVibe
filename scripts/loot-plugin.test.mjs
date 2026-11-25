@@ -480,24 +480,36 @@ test("a storage withdrawal during the close-out counts for nothing", () => {
   assert.deepEqual([ledgerOf(fields).so, ledgerOf(fields).ho.length], [10_000, 0]);
 });
 
-// Without a shop reading, a rise after time in town or across a pause is what a shop paid, not
-// mesos picked up, so it never raises a map's mesos/hr. Fails if it counts as picked up or goes
-// to a map.
-test("a rise after time away from the grind counts as sold", () => {
+// Without a shop reading, a rise across a pause is what a shop paid, not mesos picked up, so it
+// never raises a map's mesos/hr. Fails if it counts as picked up or goes to a map.
+test("a rise across a pause counts as sold", () => {
   const fields = {};
   loot.addReading(fields, 500_000, "inventory", T0, grinding(0));
   assert.deepEqual(loot.addReading(fields, 540_000, "inventory", T0 + 40 * MIN, { playMs: 25 * MIN, map: "aaaa", away: true }), { kind: "sold", amount: 40_000 });
   assert.equal(ledgerOf(fields).pu, 0);
   assert.equal(fields.maps, undefined);
   assert.equal(ledgerOf(fields).pt, 25 * MIN, "the rate's clock leaves the pause out");
-  // Through the plugin: a minute on a map where the session gained no EXP (a town) makes the next
-  // inventory rise loot sold.
+});
+
+// A potion run: potions bought in a town's shop, a walk back through a map with no kills, then
+// more grinding. Fails if time in a town turns the mesos picked up after it into loot sold.
+test("mesos picked up after a potion run through town still count as picked up", () => {
   const played = play({ seconds: 120 });
-  const t = twoReadings(played);
+  let t = twoReadings(played);
   played.send(map("cccc", t));
-  for (let s = 1; s <= 60; s++) played.send({ type: "tick", atMs: t + s * 1000 });
-  played.send(total(1_090_000, t + 60_000));
-  assert.deepEqual(lootFigures(played.sent), { "Mesos picked up": "50,000", "Loot sold": "40,000", Profit: "90,000" });
+  for (let s = 1; s <= 40; s++) {
+    played.send({ type: "tick", atMs: t + s * 1000 });
+    if (s === 20) played.send(total(1_050_000, t + s * 1000, "shop"));
+    if (s === 25) played.send(total(1_020_000, t + s * 1000, "shop"));
+  }
+  t += 40_000;
+  played.send(map("dddd", t));
+  for (let s = 1; s <= 25; s++) played.send({ type: "tick", atMs: t + s * 1000 });
+  t += 25_000;
+  played.send(map("aaaa", t));
+  t = grind(played, t, 600, 240_000);
+  played.send(total(1_070_000, t));
+  assert.deepEqual(lootFigures(played.sent), { "Mesos picked up": "100,000", "Loot sold": "—", Spent: "30,000" });
 });
 
 // A rise outside a shop above both 50,000 mesos and 3,000,000 an hour since the last reading is held

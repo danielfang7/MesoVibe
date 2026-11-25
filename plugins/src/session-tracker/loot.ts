@@ -339,9 +339,9 @@ export interface Ledger {
   ob: number | null;
   /** Trusted totals read this session. */
   n: number;
-  /** Mesos picked up: rises between readings on maps where the session gained EXP. */
+  /** Mesos picked up: rises between readings outside a shop, with no pause between them. */
   pu: number;
-  /** Mesos shops paid: rises read in a shop, or after time away from the grind. */
+  /** Mesos shops paid: rises read in a shop, or across a pause. */
   so: number;
   /** Mesos spent: every fall. */
   sp: number;
@@ -365,13 +365,13 @@ export interface SinceReading {
   /** The session's play time now, pauses left out. */
   playMs: number;
   /**
-   * The one map played since the last reading (null: a map whose name couldn't be read), or
-   * undefined when several were, so the change can't be given to one map.
+   * The one map played since the last reading, a grinding one (null: a map whose name couldn't be
+   * read), or undefined when several were or it was a town, so the change goes to no map.
    */
   map: string | null | undefined;
   /**
-   * Time went to something other than the grind since the last reading: a map where the session
-   * gained no EXP (a town), or a pause. A rise then is what a shop paid, never mesos picked up.
+   * The session was paused since the last reading. A rise then is what a shop paid, never mesos
+   * picked up. Time in a town isn't away: a potion run passes through one.
    */
   away: boolean;
 }
@@ -426,8 +426,8 @@ function transfer(ledger: Ledger, source: MesoSource): boolean {
 /**
  * Counts a trusted meso total read during the session. The first one of a segment only sets the
  * balance. After that a fall is spent; a rise read in a shop is what the shop paid; any other rise
- * is held when it's too big to be farming, else it's what a shop paid after time away from the
- * grind, or mesos picked up, which go to the one map played since the last reading.
+ * is held when it's too big to be farming, else it's what a shop paid when a pause came between,
+ * or mesos picked up, which go to the one grinding map played since the last reading.
  */
 export function addReading(loot: LootFields, total: number, source: MesoSource, atMs: number, since: SinceReading): LedgerChange {
   const ledger = (loot.lg ??= newLedger());
