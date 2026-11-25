@@ -71,7 +71,8 @@ const OFFSETS: [(i64, i64); 9] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Slot {
     /// A key for the count's picture, or `None` when the slot shows no count (an empty slot, a
-    /// skill, an item that doesn't stack, or a count something is drawn over).
+    /// skill, an item that doesn't stack, or a count something is drawn over whole). Something over
+    /// part of it drops the digits it covers, so the key changes.
     pub count: Option<String>,
     /// A key for the icon's picture, the same every time the same item sits in the slot on this
     /// computer; an empty slot has one too.

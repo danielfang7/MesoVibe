@@ -157,7 +157,8 @@ pub enum Event {
     /// `icon_key` identifies the icon's picture, the same every time the same item sits in a slot
     /// on this computer; an empty slot has one too. `count_key` identifies the count's picture, or
     /// is `null` when the slot shows no count: empty, a skill, an item that doesn't stack, or a
-    /// count something is drawn over. The count's digits aren't read: a potion use shows as the
+    /// count something is drawn over whole. Something over part of a count drops the digits it
+    /// covers, so the key changes. The count's digits aren't read: a potion use shows as the
     /// slot's count changing in the same moment the HP or MP numbers rise, a frame or so apart in
     /// the events, since a slot waits for two frames to agree.
     QuickSlotChanged {
