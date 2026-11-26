@@ -10,6 +10,7 @@ mod chat;
 mod dock;
 mod engine;
 mod game_text;
+mod label;
 mod presence;
 mod prices;
 mod store;
@@ -105,6 +106,7 @@ fn main() {
             price_recent,
             set_price_recent,
             set_price_world,
+            set_price_label,
             open_price_page,
         ])
         .build(tauri::generate_context!());
@@ -242,6 +244,13 @@ fn set_price_recent(ids: Vec<u32>, prices: State<'_, prices::PriceBook>) -> Resu
 #[tauri::command]
 fn set_price_world(world: prices::World, store: State<'_, Store>) -> Result<Settings, String> {
     store.update(|s| s.price_world = world)
+}
+
+/// "Prices next to item tooltips" (Settings > Display): off, no tooltip is read and no label
+/// shows (label.rs).
+#[tauri::command]
+fn set_price_label(on: bool, store: State<'_, Store>) -> Result<Settings, String> {
+    store.update(|s| s.price_label = on)
 }
 
 /// "Open on Cozy Markets ↗": the item's page on Cozy, or Cozy's front page with no item. Only
@@ -478,6 +487,7 @@ mod tests {
             include_str!("../capabilities/default.json"),
             include_str!("../capabilities/hud.json"),
             include_str!("../capabilities/chat.json"),
+            include_str!("../capabilities/label.json"),
         ]
         .concat();
         let commands = handlers(main);

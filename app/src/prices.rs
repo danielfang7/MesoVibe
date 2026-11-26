@@ -201,6 +201,20 @@ impl Prices {
             World::Zenith => &self.zenith,
         }
     }
+
+    /// The names of priced items the game's item list doesn't have (cash-shop items, mostly), in
+    /// either world: the tooltip reader tells items apart from them and never names them.
+    pub fn other_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = [&self.windia, &self.zenith]
+            .iter()
+            .flat_map(|world| world.items.values())
+            .filter(|item| game_item(item.game_id).is_none())
+            .map(|item| item.name.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
 }
 
 /// Reads a price file. An error, in plain words, for one that isn't a price file this build reads.
@@ -525,6 +539,111 @@ pub fn page(prices: Option<&Prices>, world: World, id: Option<u32>) -> Option<St
     };
     let url = prices?.world(world).items.get(&id)?.url.as_deref()?;
     cozy_page(url).then(|| url.to_string())
+}
+
+// MARK: the label over the game
+
+/// Prices this old turn the label's figures muted, with their date; older than `TOO_OLD_MS`
+/// there's no label at all.
+const STALE_MS: u64 = 12 * 60 * 60 * 1000;
+const TOO_OLD_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+/// What the price label says for the item the player points at.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelView {
+    /// The usual Free Market price, or none: then `npc` stands in, with "No Free Market price".
+    pub usual: Option<f64>,
+    pub change: Option<f64>,
+    pub npc: Option<u32>,
+    /// The world's name, for the credit row ("Windia · Cozy Markets").
+    pub world: &'static str,
+    /// When the prices were updated, in epoch milliseconds, once they're old: the figures turn
+    /// muted and the credit row says "from Nov 23".
+    pub old_since_ms: Option<u64>,
+}
+
+/// The label for the items a tooltip names (one, or a few the game names alike), from prices
+/// downloaded at least `now_ms - TOO_OLD_MS`: `None` when there's nothing honest to show (no
+/// price and no NPC price, prices too old or never downloaded, or several of the items priced,
+/// which would be a guess).
+pub fn label(prices: Option<&Prices>, world: World, ids: &[u32], now_ms: u64) -> Option<LabelView> {
+    let file = prices?;
+    let updated = utc_ms(&file.world(world).updated_at)?;
+    let age = now_ms.saturating_sub(updated);
+    if age > TOO_OLD_MS {
+        return None;
+    }
+    let rows: Vec<Row> = ids
+        .iter()
+        .filter_map(|&id| row(prices, world, id))
+        .collect();
+    let priced: Vec<&Row> = rows.iter().filter(|r| r.usual.is_some()).collect();
+    let (usual, change, npc) = match priced.as_slice() {
+        [one] => (one.usual, one.change, one.npc),
+        [] => {
+            // No Free Market price: what an NPC shop pays, when every item named so pays the same.
+            let npc = rows.first()?.npc?;
+            if rows.iter().any(|r| r.npc != Some(npc)) {
+                return None;
+            }
+            (None, None, Some(npc))
+        }
+        _ => return None,
+    };
+    Some(LabelView {
+        usual,
+        change,
+        npc,
+        world: match world {
+            World::Windia => "Windia",
+            World::Zenith => "Zenith",
+        },
+        old_since_ms: (age >= STALE_MS).then_some(updated),
+    })
+}
+
+/// Epoch milliseconds for a UTC time written `2026-11-25T18:08:59.000Z` (the price file's form).
+fn utc_ms(text: &str) -> Option<u64> {
+    let b = text.as_bytes();
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| text.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hh, mm, ss) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || hh > 23 || mm > 59 || ss > 60 {
+        return None;
+    }
+    let millis = match b[19] {
+        b'.' => {
+            let end = text[20..]
+                .find(|c: char| !c.is_ascii_digit())
+                .map_or(text.len(), |i| 20 + i);
+            let frac = &text[20..end];
+            let ms: i64 = format!("{:0<3}", &frac[..frac.len().min(3)]).parse().ok()?;
+            if &text[end..] != "Z" {
+                return None;
+            }
+            ms
+        }
+        b'Z' if b.len() == 20 => 0,
+        _ => return None,
+    };
+    // Days since 1970-01-01, by the civil-from-days algorithm run backwards.
+    let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(((days * 24 + hh) * 60 + mm) * 60_000 + ss * 1000 + millis).ok()
 }
 
 // MARK: downloading
@@ -1176,5 +1295,83 @@ pub(crate) mod tests {
         assert_eq!(gender_label(Some("F")), Some("Women's"));
         assert_eq!(gender_label(Some("both")), None);
         assert_eq!(gender_label(None), None);
+    }
+
+    // The label shows the usual price and the week's move with the world, and dates old prices;
+    // with no market price it shows what an NPC pays; too-old prices, no prices, or several
+    // priced items named alike show nothing. Fails if the label could show a guess or a price too
+    // old to trust.
+    #[test]
+    fn the_label_says_the_price_or_honestly_nothing() {
+        let file = sample();
+        let updated = utc_ms("2026-11-25T18:08:59.000Z").unwrap();
+        let fresh = label(Some(&file), World::Windia, &[2070006], updated + HOUR).unwrap();
+        assert_eq!(
+            (fresh.usual, fresh.change, fresh.world, fresh.old_since_ms),
+            (Some(21_000_000.0), Some(0.08), "Windia", None)
+        );
+        let zenith = label(Some(&file), World::Zenith, &[2070006], updated + HOUR).unwrap();
+        assert_eq!((zenith.usual, zenith.world), (Some(10_500_000.0), "Zenith"));
+        let old = label(Some(&file), World::Windia, &[2070006], updated + 13 * HOUR).unwrap();
+        assert_eq!(old.old_since_ms, Some(updated));
+        assert_eq!(
+            label(
+                Some(&file),
+                World::Windia,
+                &[2070006],
+                updated + 8 * 24 * HOUR
+            ),
+            None,
+            "a week old"
+        );
+        assert_eq!(
+            label(None, World::Windia, &[2070006], updated),
+            None,
+            "never downloaded"
+        );
+        // Red Potion: no Free Market price, an NPC price.
+        let npc = label(Some(&file), World::Windia, &[2000000], updated).unwrap();
+        assert_eq!(
+            (npc.usual, npc.npc),
+            (None, game_item(2000000).and_then(|i| i.sell))
+        );
+        assert!(npc.npc.is_some());
+        // Two items named alike, both priced: which one is a guess.
+        assert_eq!(
+            label(Some(&file), World::Windia, &[1060008, 1061009], updated),
+            None
+        );
+        // Of two named alike, one priced: that one.
+        let one = label(Some(&file), World::Windia, &[1082000, 2000000], updated).unwrap();
+        assert_eq!(one.usual, Some(1_500_000.0));
+    }
+
+    // The price file's times read as epoch milliseconds, and anything else doesn't. Fails if
+    // the label's age is worked out wrong.
+    #[test]
+    fn price_file_times_read_as_epoch_milliseconds() {
+        assert_eq!(utc_ms("2026-11-25T00:00:00.000Z"), Some(DAY_START));
+        assert_eq!(utc_ms("2026-11-25T00:00:00Z"), Some(DAY_START));
+        assert_eq!(
+            utc_ms("2026-11-25T18:08:59.5Z"),
+            Some(DAY_START + 18 * HOUR + 8 * MINUTE + 59_500)
+        );
+        assert_eq!(utc_ms("1970-01-01T00:00:00.000Z"), Some(0));
+        for bad in [
+            "",
+            "2026-11-25",
+            "2026-13-25T00:00:00Z",
+            "2026-11-25T00:00:00+01:00",
+            "yesterday",
+        ] {
+            assert_eq!(utc_ms(bad), None, "{bad}");
+        }
+    }
+
+    // The cash-shop items the price file prices but the game's item list doesn't have, for the
+    // tooltip reader to tell apart. Fails if a listed item or a duplicate gets in.
+    #[test]
+    fn other_names_are_the_priced_items_the_item_list_lacks() {
+        assert_eq!(sample().other_names(), vec!["Sparkly Cash Hat".to_string()]);
     }
 }

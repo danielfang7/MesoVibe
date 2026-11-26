@@ -32,6 +32,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::chat::ChatLog;
 use crate::dock::{self, Docker};
+use crate::label::LabelFollower;
 use crate::presence::{self, Presence};
 use crate::store::{Learned, Store};
 
@@ -196,6 +197,7 @@ fn run(app: &AppHandle, inbox: &Receiver<Command>, mut reading: bool) {
     // Why capture is blocked, kept while it stays blocked: the error comes on one tick only.
     let mut blocked: Option<String> = None;
     let mut kept = Kept::default();
+    let mut label = LabelFollower::default();
     loop {
         let started = Instant::now();
         for command in woke.take().into_iter().chain(inbox.try_iter()) {
@@ -221,6 +223,7 @@ fn run(app: &AppHandle, inbox: &Receiver<Command>, mut reading: bool) {
                 &mut presence,
                 &mut blocked,
                 &mut kept,
+                &mut label,
             );
             let due = last_snapshot.is_none_or(|t| t.elapsed() >= SNAPSHOT_EVERY);
             if watching && grabbed && due {
@@ -269,6 +272,7 @@ fn tick(
     presence: &mut Presence,
     blocked: &mut Option<String>,
     kept: &mut Kept,
+    label: &mut LabelFollower,
 ) -> (CaptureState, bool) {
     let runner = runner.get_or_insert_with(|| {
         let (runner, now) = kept_runner(app);
@@ -300,6 +304,7 @@ fn tick(
         _ => None,
     };
     docker.follow(app, tick.window.as_ref(), tick.source, chat_box);
+    label.follow(app, runner, &tick, docker);
     let game = match &tick.window {
         Some(window) => presence::Game::Present {
             placed: window.placement.is_some(),

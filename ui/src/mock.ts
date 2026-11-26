@@ -8,12 +8,28 @@
 // `loot` (play with pickups: a map read from the minimap, mesos every few kills, a second map
 // after a while).
 // The mini-HUD page (hud.html) takes `grind`, `learning` and `blocked`; the chat overlay page
-// (chat.html) takes `grind`. During play, whisper, party and friend lines arrive every few
+// (chat.html) takes `grind`; the price label page (label.html) takes `label`, `labelold`,
+// `labelnpc` and `labelwide`. During play, whisper, party and friend lines arrive every few
 // seconds, drawn here as pictures the way the host hands them over.
 // Release builds leave this file out (ipc.ts loads it only in development).
 import { SCHEMA_VERSION, type Event as GameEvent } from "@mesovibe/sdk";
 
-import type { ChatChannel, ChatHost, ChatLine, ChatPosition, GamePicture, HudHost, HudSummary, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
+import type {
+  ChatChannel,
+  ChatHost,
+  ChatLine,
+  ChatPosition,
+  GamePicture,
+  HudHost,
+  HudSummary,
+  Host,
+  LabelHost,
+  LabelShown,
+  Settings,
+  Startup,
+  Status,
+  UpdateStatus,
+} from "./ipc.js";
 import { mockPrices } from "./mock-prices.js";
 
 const NEEDED = 356_916;
@@ -130,6 +146,7 @@ export function mockHost(scenario: string): Host {
     chatOverlayColors: { whisper: "#66ff66", party: "#ff88cc", friend: "#ffaa44" },
     chatOverlayPosition: "left",
     priceWorld: "windia",
+    priceLabel: true,
   };
   const statusHandlers: ((status: Status) => void)[] = [];
   const eventHandlers: ((event: GameEvent, atMs: number) => void)[] = [];
@@ -291,6 +308,31 @@ export function mockHost(scenario: string): Host {
     },
     ...mockPrices(scenario),
     setPriceWorld: async (world) => (settings = { ...settings, priceWorld: world }),
+    setPriceLabel: async (on) => (settings = { ...settings, priceLabel: on }),
+    onPricePointed: async (handler) => {
+      // The panel tests point at items with `window.__mockPoint([id])`.
+      (window as unknown as { __mockPoint: (ids: number[]) => void }).__mockPoint = handler;
+    },
+  };
+}
+
+/**
+ * The price label's stand-in (label.html): `?mock=label` a fresh price, `labelold` two-day-old
+ * prices, `labelnpc` an item with no Free Market price, `labelwide` a card wider than the window
+ * would give.
+ */
+export function mockLabelHost(scenario: string): LabelHost {
+  const base: LabelShown = { usual: 21_000_000, change: 0.08, npc: 20_000, world: "Windia", oldSinceMs: null, cardWidth: 236, cardLeft: 8 };
+  const view: LabelShown =
+    scenario === "labelold"
+      ? { ...base, change: -0.03, oldSinceMs: Date.now() - 48 * 60 * 60 * 1000 }
+      : scenario === "labelnpc"
+        ? { ...base, usual: null, change: null, npc: 30 }
+        : scenario === "labelwide"
+          ? { ...base, cardWidth: 180 }
+          : base;
+  return {
+    onView: async (handler) => handler(view),
   };
 }
 
@@ -307,6 +349,7 @@ export function mockChatHost(scenario: string): ChatHost {
     // `?position=above-chat` or `right` shows the other places in a browser.
     chatOverlayPosition: (new URLSearchParams(location.search).get("position") as ChatPosition | null) ?? "left",
     priceWorld: "windia",
+    priceLabel: true,
   };
   return {
     settings: async () => settings,
