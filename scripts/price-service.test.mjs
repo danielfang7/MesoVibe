@@ -374,7 +374,8 @@ test("the count and zero-price limits allow exactly 20% and 5%", async () => {
 });
 
 // HEAD, other methods and the app's revalidation forms. Fails if HEAD sends the body, a POST is
-// served, or an If-None-Match list or "*" misses and sends the whole file again.
+// served, or an If-None-Match list, "*" or the weak tag Vercel's CDN hands out with a compressed
+// file misses and sends the whole file again.
 test("the endpoint answers HEAD without a body, refuses POST, and honors If-None-Match lists", async () => {
   const store = memoryStore({ [FILE_PATH]: '{"version":1}' });
   const url = "https://mesovibe.com/api/prices";
@@ -385,7 +386,7 @@ test("the endpoint answers HEAD without a body, refuses POST, and honors If-None
   const post = await serve({ request: new Request(url, { method: "POST" }), store, now: NOW });
   assert.equal(post.status, 405);
   assert.equal(post.headers.get("allow"), "GET, HEAD");
-  for (const tags of [`"old", ${etag}`, "*"]) {
+  for (const tags of [`"old", ${etag}`, "*", `W/${etag}`]) {
     const response = await serve({ request: get(url, { "If-None-Match": tags }), store, now: NOW });
     assert.equal(response.status, 304, tags);
   }
