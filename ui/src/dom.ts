@@ -48,7 +48,7 @@ export function replace(parent: Element, ...children: Child[]): void {
 }
 
 /** A small line icon, drawn with SVG elements (no markup strings). */
-export function icon(name: "session" | "loot" | "chat" | "sees" | "settings" | "reset" | "end" | "delete" | "pause" | "resume"): SVGSVGElement {
+export function icon(name: "session" | "loot" | "prices" | "chat" | "sees" | "settings" | "reset" | "end" | "delete" | "pause" | "resume"): SVGSVGElement {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
@@ -61,6 +61,11 @@ export function icon(name: "session" | "loot" | "chat" | "sees" | "settings" | "
     ],
     // A pouch tied at the neck: Loot.
     loot: [["path", { d: "M9 3h6l-2 4h-2zM10 7c-4 3-6 6.5-6 9.5A3.5 3.5 0 0 0 7.5 20h9a3.5 3.5 0 0 0 3.5-3.5c0-3-2-6.5-6-9.5" }]],
+    // A price tag with its hole: Prices.
+    prices: [
+      ["path", { d: "M3 4v7l10 10 8-8L11 3H4z" }],
+      ["circle", { cx: "7.5", cy: "7.5", r: "1.5" }],
+    ],
     // A speech bubble with a tail: the Chat Hub.
     chat: [["path", { d: "M4 5h16v11H10l-5 4v-4H4z" }]],
     sees: [

@@ -16,4 +16,5 @@ Of particular interest:
 
 - the updater: anything that would let an installed copy accept an update that wasn't signed with the project's update key;
 - the panel and plugins: anything that lets text read from the game, or a plugin, run script or reach the host beyond the plugin API;
-- anything that makes MesoVibe send data off the computer other than its daily update check.
+- the price service ([web/api](../web/api/)) and the app's price download: anything that would expose the Cozy Markets key, change the price file players download, or make the app open any page that isn't on Cozy Markets;
+- anything that makes MesoVibe send data off the computer other than its daily update check and its price downloads.

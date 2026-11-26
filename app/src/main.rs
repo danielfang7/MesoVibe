@@ -11,6 +11,7 @@ mod dock;
 mod engine;
 mod game_text;
 mod presence;
+mod prices;
 mod store;
 mod updater;
 
@@ -63,6 +64,10 @@ fn main() {
             app.manage(Engine::start(app.handle().clone(), reading));
             presence::start(app.handle(), background);
             app.manage(updater::Updates::start(app.handle()));
+            app.manage(prices::PriceBook::start(
+                app.handle(),
+                app.path().app_data_dir()?,
+            ));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -92,6 +97,15 @@ fn main() {
             update_status,
             check_for_updates,
             install_update,
+            price_status,
+            price_search,
+            price_item,
+            price_rows,
+            price_movers,
+            price_recent,
+            set_price_recent,
+            set_price_world,
+            open_price_page,
         ])
         .build(tauri::generate_context!());
     match app {
@@ -169,6 +183,78 @@ async fn install_update(
     updates: State<'_, updater::Updates>,
 ) -> Result<(), String> {
     updates.install(&app)
+}
+
+/// Where the Free Market prices stand: downloading, how old, or offline (prices.rs).
+#[tauri::command]
+fn price_status(prices: State<'_, prices::PriceBook>) -> prices::PriceStatus {
+    prices.status()
+}
+
+/// "Find an item": the game's items whose names fit, with their prices in `world`.
+#[tauri::command]
+fn price_search(
+    query: String,
+    world: prices::World,
+    prices: State<'_, prices::PriceBook>,
+) -> prices::Search {
+    prices::search(prices.prices().as_deref(), world, &query)
+}
+
+/// One item's detail in `world`; none when the game has no such item.
+#[tauri::command]
+fn price_item(
+    id: u32,
+    world: prices::World,
+    prices: State<'_, prices::PriceBook>,
+) -> Option<prices::Detail> {
+    prices::detail(prices.prices().as_deref(), world, id)
+}
+
+/// Rows for Recently checked, in its order.
+#[tauri::command]
+fn price_rows(
+    ids: Vec<u32>,
+    world: prices::World,
+    prices: State<'_, prices::PriceBook>,
+) -> Vec<prices::Row> {
+    prices::rows(prices.prices().as_deref(), world, &ids)
+}
+
+/// Biggest moves this week in `world`.
+#[tauri::command]
+fn price_movers(world: prices::World, prices: State<'_, prices::PriceBook>) -> prices::Movers {
+    prices::movers(prices.prices().as_deref(), world)
+}
+
+/// Recently checked, newest first, kept on this computer.
+#[tauri::command]
+fn price_recent(prices: State<'_, prices::PriceBook>) -> Vec<u32> {
+    prices.recent()
+}
+
+#[tauri::command]
+fn set_price_recent(ids: Vec<u32>, prices: State<'_, prices::PriceBook>) -> Result<(), String> {
+    prices.set_recent(ids)
+}
+
+/// The world whose prices the Prices tab shows. Nothing downloads again: the file has both.
+#[tauri::command]
+fn set_price_world(world: prices::World, store: State<'_, Store>) -> Result<Settings, String> {
+    store.update(|s| s.price_world = world)
+}
+
+/// "Open on Cozy Markets ↗": the item's page on Cozy, or Cozy's front page with no item. Only
+/// Cozy's own addresses from the price file open, never one the panel names.
+#[tauri::command]
+fn open_price_page(
+    id: Option<u32>,
+    world: prices::World,
+    prices: State<'_, prices::PriceBook>,
+) -> Result<(), String> {
+    let url = prices::page(prices.prices().as_deref(), world, id)
+        .ok_or("Cozy Markets has no page for this item.")?;
+    prices::open_in_browser(&url)
 }
 
 #[tauri::command]

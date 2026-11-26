@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::dock::{ChatPosition, Corner};
+use crate::prices::World;
 
 /// The largest blob a plugin may keep: enough for months of session history.
 const MAX_PLUGIN_BYTES: usize = 4 * 1024 * 1024;
@@ -76,6 +77,8 @@ pub struct Settings {
     /// Where the panel was when it last closed, so it comes back there and keeps the width the
     /// player gave it (presence.rs rebuilds the panel for each play session).
     pub panel: Option<PanelFrame>,
+    /// The world whose Free Market prices the Prices tab shows (prices.rs).
+    pub price_world: World,
 }
 
 /// The panel's visible frame, in desktop units (points on a Mac, pixels on Windows; dock.rs).
@@ -172,6 +175,7 @@ impl Default for Settings {
             chat_overlay_channels: ChatChannels::default(),
             chat_overlay_colors: ChatColors::default(),
             panel: None,
+            price_world: World::Windia,
         }
     }
 }

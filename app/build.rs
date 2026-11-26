@@ -22,6 +22,15 @@ fn main() {
             "update_status",
             "check_for_updates",
             "install_update",
+            "price_status",
+            "price_search",
+            "price_item",
+            "price_rows",
+            "price_movers",
+            "price_recent",
+            "set_price_recent",
+            "set_price_world",
+            "open_price_page",
         ]),
     ))
     .expect("tauri build script");

@@ -73,7 +73,9 @@ export async function serve({ request, store, now, log = console }) {
     "Cache-Control": `public, max-age=0, s-maxage=${secondsUntilNextBuild(now)}, stale-if-error=${STALE_IF_ERROR_SECONDS}`,
     ETag: etag,
   };
-  const known = (request.headers.get("if-none-match") ?? "").split(",").map((tag) => tag.trim());
+  // Weak comparison, as If-None-Match asks: Vercel's CDN marks the tag weak (W/) when it compresses
+  // the file, and the app sends back what it was given.
+  const known = (request.headers.get("if-none-match") ?? "").split(",").map((tag) => tag.trim().replace(/^W\//, ""));
   if (known.includes(etag) || known.includes("*")) return new Response(null, { status: 304, headers });
   return new Response(request.method === "HEAD" ? null : file, { status: 200, headers });
 }

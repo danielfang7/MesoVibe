@@ -21,6 +21,8 @@ MesoVibe only looks at the game window, through the operating system's screen ca
 
 MesoVibe reads your HP and MP numbers and your quick slots to count the potions you drink, and never drinks one for you.
 
+A few times a day MesoVibe downloads Free Market prices from mesovibe.com, one file built from [Cozy Markets](https://cozy.markets) prices. The request carries nothing about you or the game; the server sees your IP address, as any website does. Cozy Markets isn't part of MesoVibe and doesn't endorse it.
+
 MesoVibe is not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon.
 
 ## Project layout

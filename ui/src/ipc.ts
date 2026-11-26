@@ -52,6 +52,62 @@ export interface ChatLine {
   words: [number, number][];
 }
 
+/** A world's Free Market: each has its own prices (app/src/prices.rs). */
+export type World = "windia" | "zenith";
+
+/** Where the Free Market prices stand (app/src/prices.rs). */
+export interface PriceStatus {
+  /** A download is under way. */
+  downloading: boolean;
+  /** The last download failed: offline, or the price service down. */
+  failed: boolean;
+  /** When Cozy last updated each world's prices in the copy kept, as ISO times; null before the first download. */
+  updated: { windia: string; zenith: string } | null;
+  /** When the price service last answered, in ms since the epoch. */
+  checkedAtMs: number | null;
+}
+
+/** One item in a list of prices. */
+export interface PriceRow {
+  id: number;
+  /** The game's own name for it. */
+  name: string;
+  /** "Men's" or "Women's", for an item the game names the same for both. */
+  gender: string | null;
+  /** The usual Free Market price; null when Cozy has none. */
+  usual: number | null;
+  /** The change over the week, as a fraction. */
+  change: number | null;
+  /** What an NPC shop pays for one. */
+  npc: number | null;
+}
+
+export interface PriceSearch {
+  rows: PriceRow[];
+  /** How many items matched in all. */
+  total: number;
+}
+
+export interface PriceMovers {
+  up: PriceRow[];
+  down: PriceRow[];
+}
+
+/** Everything the item detail shows. */
+export interface PriceDetail extends PriceRow {
+  low7d: number | null;
+  high7d: number | null;
+  sales: number | null;
+  listings: number | null;
+  /** It can't be traded, so it never has a Free Market price. */
+  untradeable: boolean;
+  /** The usual price on each of `historyDays` (YYYY-MM-DD, UTC), oldest first. */
+  history: (number | null)[];
+  historyDays: string[];
+  /** Cozy has a page for it. */
+  page: boolean;
+}
+
 export interface Settings {
   safeMode: boolean;
   /** Keep MesoVibe with the game: docked beside it, or the mini-HUD. */
@@ -64,6 +120,8 @@ export interface Settings {
   chatOverlayChannels: ChatChannels;
   chatOverlayColors: ChatColors;
   chatOverlayPosition: ChatPosition;
+  /** The world whose Free Market prices the Prices tab shows. */
+  priceWorld: World;
 }
 
 /** "Open with MapleStory Classic": the OS login item (app/src/presence.rs). */
@@ -195,6 +253,21 @@ export interface Host {
   checkForUpdates(): Promise<void>;
   /** "Restart to update": installs the ready update and restarts; rejects with the reason when it can't. */
   installUpdate(): Promise<void>;
+  priceStatus(): Promise<PriceStatus>;
+  onPriceStatus(handler: (status: PriceStatus) => void): Promise<unknown>;
+  /** "Find an item": the game's items whose names fit, best first, with their prices in `world`. */
+  priceSearch(query: string, world: World): Promise<PriceSearch>;
+  /** One item's detail; null when the game has no such item. */
+  priceItem(id: number, world: World): Promise<PriceDetail | null>;
+  /** Rows for these items, in this order. */
+  priceRows(ids: number[], world: World): Promise<PriceRow[]>;
+  priceMovers(world: World): Promise<PriceMovers>;
+  /** Recently checked, newest first, kept on this computer. */
+  priceRecent(): Promise<number[]>;
+  setPriceRecent(ids: number[]): Promise<void>;
+  setPriceWorld(world: World): Promise<Settings>;
+  /** Opens the item's page on Cozy Markets, or with no item Cozy's front page, in the browser. */
+  openPricePage(id: number | null, world: World): Promise<void>;
 }
 
 /**
@@ -230,6 +303,16 @@ const tauri: Host = {
   onUpdateStatus: (handler) => hear<UpdateStatus>("updates://status", handler),
   checkForUpdates: () => invoke<void>("check_for_updates"),
   installUpdate: () => invoke<void>("install_update"),
+  priceStatus: () => invoke<PriceStatus>("price_status"),
+  onPriceStatus: (handler) => hear<PriceStatus>("prices://status", handler),
+  priceSearch: (query, world) => invoke<PriceSearch>("price_search", { query, world }),
+  priceItem: (id, world) => invoke<PriceDetail | null>("price_item", { id, world }),
+  priceRows: (ids, world) => invoke<PriceRow[]>("price_rows", { ids, world }),
+  priceMovers: (world) => invoke<PriceMovers>("price_movers", { world }),
+  priceRecent: () => invoke<number[]>("price_recent"),
+  setPriceRecent: (ids) => invoke<void>("set_price_recent", { ids }),
+  setPriceWorld: (world) => invoke<Settings>("set_price_world", { world }),
+  openPricePage: (id, world) => invoke<void>("open_price_page", { id, world }),
 };
 
 /** Only what the mini-HUD shows, in the shape the host checks. */
