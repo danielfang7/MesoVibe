@@ -21,6 +21,8 @@ MesoVibe only looks at the game window, through the operating system's screen ca
 
 MesoVibe reads your HP and MP numbers and your quick slots to count the potions you drink, and never drinks one for you.
 
+With "Prices next to item tooltips" on, MesoVibe reads the name in the game's item tooltip when you point at an item in your inventory, equipment window, an NPC shop or storage, and shows its Free Market price just under the tooltip in a window of its own that clicks go through. It learns the tooltip's letters from the bundled item list on your computer; nothing is sent anywhere.
+
 A few times a day MesoVibe downloads Free Market prices from mesovibe.com, one file built from [Cozy Markets](https://cozy.markets) prices. The request carries nothing about you or the game; the server sees your IP address, as any website does. Cozy Markets isn't part of MesoVibe and doesn't endorse it.
 
 MesoVibe is not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon.
