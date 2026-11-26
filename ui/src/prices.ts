@@ -188,6 +188,12 @@ export class PricesTab {
   private movers: PriceMovers = { up: [], down: [] };
   /** Recently checked just cleared: the list Undo brings back, until when. */
   private cleared: { ids: number[]; until: number } | null = null;
+  /** The price label is on, so the tab can follow what the player points at. */
+  private pointing = false;
+  /** The items last pointed at in game, shown when the tab opens. */
+  private lastPointed: number[] | null = null;
+  /** Several items the game names alike, to pick from ("Which item was it?"). */
+  private which: PriceRow[] | null = null;
 
   private readonly input: HTMLInputElement;
   private readonly live: HTMLElement;
@@ -263,10 +269,45 @@ export class PricesTab {
     });
   }
 
-  /** The tab opened: everything is fetched again for the world chosen. */
+  /** The tab opened: everything is fetched again for the world chosen, and the item last pointed
+   * at in game is shown. */
   opened(): void {
     this.open = true;
-    void this.refresh();
+    void this.refresh().then(() => {
+      if (this.lastPointed !== null) this.follow(this.lastPointed);
+    });
+  }
+
+  /** Whether the price label is on (and reading), which changes the how-to line. */
+  setPointing(on: boolean): void {
+    if (on === this.pointing) return;
+    this.pointing = on;
+    if (this.open) this.paintMain();
+  }
+
+  /**
+   * The item the player points at in game. With the tab open and nothing typed in the search, the
+   * detail follows it; opened later, the tab shows the last one. The tab never switches by
+   * itself and never clears what the player typed.
+   */
+  pointed(ids: number[]): void {
+    this.lastPointed = ids;
+    if (this.open) this.follow(ids);
+  }
+
+  private follow(ids: number[]): void {
+    const typing = this.query.trim() !== "" || document.activeElement === this.input;
+    if (typing || ids.length === 0) return;
+    if (ids.length === 1) {
+      const [id] = ids as [number];
+      if (this.shown?.id !== id || this.which !== null) void this.choose(id);
+      return;
+    }
+    void this.host.priceRows(ids, this.world).then((rows) => {
+      if (this.query.trim() !== "") return;
+      this.which = rows;
+      this.paintMain();
+    });
   }
 
   closed(): void {
@@ -353,6 +394,7 @@ export class PricesTab {
     this.asked += 1;
     this.live.textContent = "";
     this.cleared = null;
+    this.which = null;
     this.recentIds = [id, ...this.recentIds.filter((other) => other !== id)].slice(0, RECENT_MAX);
     void this.host.setPriceRecent(this.recentIds).catch(() => {});
     this.recentRows = await this.host.priceRows(this.recentIds, this.world);
@@ -448,10 +490,17 @@ export class PricesTab {
     else this.input.removeAttribute("aria-activedescendant");
     if (searching) {
       replace(this.main, this.resultsList());
+    } else if (this.which !== null) {
+      replace(
+        this.main,
+        h("h2", { class: "price-title", attrs: { "data-key": "price-which" } }, "Which item was it?"),
+        this.rowButtons(this.which, "price-which-list"),
+      );
     } else if (this.shown !== null) {
       replace(this.main, ...this.detail(this.shown));
     } else if (this.recentIds.length === 0) {
-      replace(this.main, h("p", { class: "text muted", attrs: { "data-key": "price-how" } }, "Search for an item to see its Free Market price."));
+      const how = this.pointing ? "Point at an item in game, or search for one." : "Search for an item to see its Free Market price.";
+      replace(this.main, h("p", { class: "text muted", attrs: { "data-key": "price-how" } }, how));
     } else {
       replace(this.main);
     }

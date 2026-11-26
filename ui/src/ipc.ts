@@ -120,8 +120,25 @@ export interface Settings {
   chatOverlayChannels: ChatChannels;
   chatOverlayColors: ChatColors;
   chatOverlayPosition: ChatPosition;
-  /** The world whose Free Market prices the Prices tab shows. */
+  /** The world whose Free Market prices the Prices tab and the price label show. */
   priceWorld: World;
+  /** "Prices next to item tooltips": the price label over the game. */
+  priceLabel: boolean;
+}
+
+/** What the price label over the game says (app/src/label.rs). */
+export interface LabelShown {
+  /** The usual Free Market price, or none: then `npc` stands in, with "No Free Market price". */
+  usual: number | null;
+  change: number | null;
+  npc: number | null;
+  /** The world's name, for the credit row. */
+  world: string;
+  /** When old prices were last updated: the figures turn muted and the credit row dates them. */
+  oldSinceMs: number | null;
+  /** The card's width and the room left of it in the window, in pixels. */
+  cardWidth: number;
+  cardLeft: number;
 }
 
 /** "Open with MapleStory Classic": the OS login item (app/src/presence.rs). */
@@ -266,6 +283,10 @@ export interface Host {
   priceRecent(): Promise<number[]>;
   setPriceRecent(ids: number[]): Promise<void>;
   setPriceWorld(world: World): Promise<Settings>;
+  /** "Prices next to item tooltips" on or off. */
+  setPriceLabel(on: boolean): Promise<Settings>;
+  /** The item the player points at in game (a few when the game names them alike). */
+  onPricePointed(handler: (ids: number[]) => void): Promise<unknown>;
   /** Opens the item's page on Cozy Markets, or with no item Cozy's front page, in the browser. */
   openPricePage(id: number | null, world: World): Promise<void>;
 }
@@ -312,6 +333,8 @@ const tauri: Host = {
   priceRecent: () => invoke<number[]>("price_recent"),
   setPriceRecent: (ids) => invoke<void>("set_price_recent", { ids }),
   setPriceWorld: (world) => invoke<Settings>("set_price_world", { world }),
+  setPriceLabel: (on) => invoke<Settings>("set_price_label", { on }),
+  onPricePointed: (handler) => hear<{ ids: number[] }>("prices://pointed", (pointed) => handler(pointed.ids)),
   openPricePage: (id, world) => invoke<void>("open_price_page", { id, world }),
 };
 
@@ -358,6 +381,15 @@ const tauriChat: ChatHost = {
   onChoice: (handler) => hear<ChatOverlayChoice>("chat://overlay", handler),
 };
 
+/** The price label's host: it only listens for what to say. */
+export interface LabelHost {
+  onView(handler: (view: LabelShown) => void): Promise<unknown>;
+}
+
+const tauriLabel: LabelHost = {
+  onView: (handler) => hear<LabelShown>("label://view", handler),
+};
+
 /** The development stand-in's scenario, when the URL asks for one outside the app. */
 function mockScenario(): string | null {
   if ("__TAURI_INTERNALS__" in window) return null;
@@ -382,6 +414,15 @@ export async function connectHud(): Promise<HudHost> {
     if (scenario !== null) return (await import("./mock.js")).mockHudHost(scenario);
   }
   return tauriHud;
+}
+
+/** The price label's host, real or (in development) the stand-in. */
+export async function connectLabel(): Promise<LabelHost> {
+  if (import.meta.env.DEV) {
+    const scenario = mockScenario();
+    if (scenario !== null) return (await import("./mock.js")).mockLabelHost(scenario);
+  }
+  return tauriLabel;
 }
 
 /** The chat overlay's host, real or (in development) the stand-in. */
