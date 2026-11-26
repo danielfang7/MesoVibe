@@ -1,0 +1,20 @@
+name: Removal request
+description: You own something shown on the MesoVibe website and want it taken down.
+title: "Removal request: "
+labels: [documentation]
+body:
+  - type: markdown
+    attributes:
+      value: Tell us what to remove and we'll take it down. This issue is public, so please don't post anything private here. We'll reply on this issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What should we remove?
+      description: The picture or text, and the page it's on.
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Who owns it?
+      description: You, or the company you act for.

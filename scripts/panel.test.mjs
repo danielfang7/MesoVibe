@@ -1,9 +1,9 @@
 // A smoke test of the panel (ui/src) in headless Chrome, against the development stand-in for the
 // host (ui/src/mock.ts): a new install reading straight away, the live session strip, End and
 // Reset with Undo, Safe mode's way back, the blocked state, the display and startup settings and
-// the mini-HUD. It drives Chrome over the DevTools protocol with
-// Node's own WebSocket, so it needs no browser package. It's skipped when no Chrome is installed;
-// set MESOVIBE_CHROME to point at one.
+// the mini-HUD, and the website's links to its questions. It drives Chrome over the DevTools
+// protocol with Node's own WebSocket, so it needs no browser package. It's skipped when no Chrome
+// is installed; set MESOVIBE_CHROME to point at one.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 const CHROME = [
@@ -849,5 +849,43 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await page.until(`document.querySelectorAll(".split-message").length === 2`, "back above the chat box");
     assert.deepEqual(page.errors, []);
     page.close();
+  });
+
+  // The website (web/main.js): a link to a question, clicked, arrived at or reached with Back,
+  // opens its answer, and the FAQ link opens none. Fails if a link lands on a closed answer, the
+  // question's id changes, or a broken address throws.
+  await t.test("the website opens the question a link points to", async () => {
+    const site = pathToFileURL(join(REPO, "web", "index.html")).href;
+    const loaded = `document.readyState === "complete" && document.getElementById("what-it-sees") !== null`;
+    const isOpen = `document.getElementById("what-it-sees").open`;
+    const openCount = `document.querySelectorAll("details[open]").length`;
+
+    const arrived = await openPage(devtools, `${site}#what-it-sees`);
+    await arrived.until(loaded, "the website");
+    assert.equal(await arrived.evaluate(isOpen), true, "open on arrival");
+    assert.deepEqual(arrived.errors, []);
+    arrived.close();
+
+    const page = await openPage(devtools, site);
+    await page.until(loaded, "the website");
+    assert.equal(await page.evaluate(isOpen), false, "closed until a link asks for it");
+    await page.evaluate(`document.querySelector('a[href="#faq"]').click()`);
+    assert.equal(await page.evaluate(`document.getElementById("faq").open`), undefined, "the FAQ link sets nothing on its section");
+    assert.equal(await page.evaluate(openCount), 0, "and opens no answer");
+    await page.evaluate(`document.querySelector('a[href="#what-it-sees"]').click()`);
+    assert.equal(await page.evaluate(isOpen), true, "opened by the link");
+    assert.equal(await page.evaluate(openCount), 1, "and no other");
+    await page.evaluate(`document.getElementById("what-it-sees").open = false; history.back()`);
+    await page.until(`location.hash === "#faq"`, "Back to the FAQ link");
+    await page.evaluate(`history.forward()`);
+    await page.until(isOpen, "the answer reopened by Forward");
+    assert.deepEqual(page.errors, []);
+    page.close();
+
+    const broken = await openPage(devtools, `${site}#%E0`);
+    await broken.until(loaded, "the website at a broken address");
+    assert.equal(await broken.evaluate(openCount), 0, "a broken address opens nothing");
+    assert.deepEqual(broken.errors, [], "and throws nothing");
+    broken.close();
   });
 });
