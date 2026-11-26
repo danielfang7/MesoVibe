@@ -6,8 +6,10 @@
 //! and emits nothing. Now and then a tick reads the whole game area instead: for the map's name at
 //! the top of the minimap ([`MapFollower`]), at the first capture, after a map change and every
 //! 30 s; and for the meso total in the inventory, shop or storage window ([`MesoReader`]), about
-//! once a second, and every tick while one of those windows' meso box is in view. One whole frame
-//! serves both when both ask on the same tick. The map's name is read only on whole frames it
+//! once a second, and every tick while one of those windows' meso box is in view; and, with the
+//! price label switched on, every tick while an item's tooltip is in view ([`TooltipReader`]),
+//! so a tooltip first seen on a once-a-second look (in the equipment window, say) is followed
+//! from then on. One whole frame serves them all when several ask on the same tick. The map's name is read only on whole frames it
 //! asked for, so the meso total's frames never change when it's read; the EXP bar, HP and MP and
 //! chat read every tick's frame, whole or not. Whole frames are never offered for the "What MesoVibe
 //! sees" picture ([`Runner::last_strip`]).
@@ -47,6 +49,7 @@ use crate::recognizers::hp_mp::{HpMp, HpMpUnreadable};
 use crate::recognizers::map_name::{MapFollower, MapName};
 use crate::recognizers::meso_total::{MesoReader, MesoState, MesoView};
 use crate::recognizers::quick_slots::{self, QuickSlotReader, QuickSlotState};
+use crate::recognizers::tooltip::{TooltipReader, TooltipReading};
 use crate::unstretch::{self, NATIVE_HEIGHT};
 
 /// The name the EXP bar reader goes by in [`Event::Unreadable`].
@@ -66,13 +69,15 @@ pub fn rows_needed(height: u32, source: u32) -> u32 {
         .max(unstretch::rows_for(height, source, quick_slots::ROWS))
 }
 
-/// Who asked for a tick's whole frame. Both may, and then one frame serves both.
+/// Who asked for a tick's whole frame. Several may, and then one frame serves them all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WholeFrameFor {
     /// The map's name ([`MapFollower`]).
     pub map: bool,
     /// The meso total ([`MesoReader`]).
     pub mesos: bool,
+    /// An item's tooltip was in view on the last whole frame ([`TooltipReader`]).
+    pub tooltip: bool,
 }
 
 /// What one tick saw and did.
@@ -96,6 +101,9 @@ pub struct Tick {
     pub mesos: Option<MesoView>,
     /// Who asked for this tick's whole frame, when it grabbed one.
     pub whole: Option<WholeFrameFor>,
+    /// The item tooltip this tick's whole frame showed, with the price label switched on: `None`
+    /// on a tick that read only the bottom rows, or with it off.
+    pub tooltip: Option<TooltipReading>,
     /// Typed events. Only ever produced while capturing.
     pub events: Vec<Event>,
     /// Why capture failed, on the tick it did.
@@ -122,6 +130,10 @@ pub struct Runner<B> {
     map: MapFollower,
     meso: MesoReader,
     slots: QuickSlotReader,
+    /// Item tooltips, for the price label: `None` while it's switched off.
+    tooltips: Option<TooltipReader>,
+    /// The last whole frame showed an item tooltip.
+    tooltip_in_view: bool,
     /// The last confirmed reading, which events are measured from.
     confirmed: Option<ExpReading>,
     /// Whether the EXP bar read last tick, so a covered bar is reported once, not every tick.
@@ -176,6 +188,8 @@ impl<B: Backend> Runner<B> {
             map: MapFollower::new(),
             meso,
             slots: QuickSlotReader::new(),
+            tooltips: None,
+            tooltip_in_view: false,
             confirmed: None,
             readable: false,
             hp_mp: None,
@@ -216,6 +230,19 @@ impl<B: Backend> Runner<B> {
 
     pub fn meso_reader(&self) -> &MesoReader {
         &self.meso
+    }
+
+    /// Switches item tooltips on, with what a reader learned before, or off (`None`): off, no
+    /// tooltip is read and no whole frame is grabbed for one.
+    pub fn set_tooltip_reader(&mut self, reader: Option<TooltipReader>) {
+        self.tooltips = reader;
+        self.tooltip_in_view = false;
+    }
+
+    /// The tooltip reader while tooltips are on, for keeping what it learned and telling it the
+    /// names that aren't items.
+    pub fn tooltip_reader_mut(&mut self) -> Option<&mut TooltipReader> {
+        self.tooltips.as_mut()
     }
 
     /// How the meso total is read, as of the last tick: for plugins (the SDK's `Readers.mesos`).
@@ -313,6 +340,7 @@ impl<B: Backend> Runner<B> {
             map: None,
             mesos: None,
             whole: None,
+            tooltip: None,
             events: Vec::new(),
             error: None,
             stale: false,
@@ -333,8 +361,9 @@ impl<B: Backend> Runner<B> {
             let wants = WholeFrameFor {
                 map: self.map.wants_whole_frame(),
                 mesos: self.meso.wants_whole_frame((window.width, area)),
+                tooltip: self.tooltips.is_some() && self.tooltip_in_view,
             };
-            let whole = wants.map || wants.mesos;
+            let whole = wants.map || wants.mesos || wants.tooltip;
             let rows = match whole {
                 true => window.height,
                 false => (self.bar + strip).min(window.height),
@@ -420,6 +449,12 @@ impl<B: Backend> Runner<B> {
                                         tick.events.push(Event::MesoChanged { total, source });
                                     }
                                     tick.mesos = Some(meso.view);
+                                }
+                                // The same whole frame shows any item tooltip, for the label.
+                                if whole && let Some(reader) = self.tooltips.as_mut() {
+                                    let reading = reader.observe(&frame, self.exp.block_offset());
+                                    self.tooltip_in_view = reading.tooltip.is_some();
+                                    tick.tooltip = Some(reading);
                                 }
                                 tick.exp = Some(reading);
                                 tick.hp_mp = Some(hud.hp_mp);
@@ -1332,6 +1367,61 @@ mod tests {
         canvas
     }
 
+    // With the price label on, a tooltip seen on a whole frame keeps whole frames coming every
+    // tick until it's gone, so one first seen on a once-a-second look is followed; with it off,
+    // no tooltip is read and no whole frame is grabbed for one. Fails if tooltips cost whole
+    // frames while switched off, or go unread while on.
+    #[test]
+    fn a_tooltip_in_view_keeps_whole_frames_coming_while_the_label_is_on() {
+        let hud = Hud::new();
+        let plain = scene(&hud, GRIND[0], 700, &[]);
+        let mut with_tooltip = scene(&hud, GRIND[0], 700, &[]);
+        let width = with_tooltip.width;
+        crate::recognizers::tooltip::test_support::draw(
+            &mut with_tooltip.bgra,
+            width,
+            400,
+            150,
+            288,
+            113,
+            "Mithril Ingot",
+            false,
+        );
+        for on in [false, true] {
+            let mut runner = Runner::new(Fake {
+                window: Some(GAME),
+                canvas: Some(with_tooltip.clone()),
+                ..Fake::default()
+            });
+            runner.set_tooltip_reader(on.then(TooltipReader::new));
+            let ticks: Vec<Tick> = (0..12).map(|_| runner.tick()).collect();
+            let for_tooltip = ticks
+                .iter()
+                .filter(|t| t.whole.is_some_and(|w| w.tooltip))
+                .count();
+            let read = ticks
+                .iter()
+                .filter(|t| t.tooltip.as_ref().is_some_and(|r| r.tooltip.is_some()))
+                .count();
+            if on {
+                assert!(read >= 8, "read on most ticks: {read}");
+                assert!(for_tooltip >= 7, "{for_tooltip}");
+                // Gone: whole frames go back to the meso total's once a second.
+                runner.backend_mut().canvas = Some(plain.clone());
+                let after: Vec<Tick> = (0..8).map(|_| runner.tick()).collect();
+                assert!(
+                    after
+                        .iter()
+                        .skip(1)
+                        .all(|t| !t.whole.is_some_and(|w| w.tooltip))
+                );
+            } else {
+                assert_eq!((read, for_tooltip), (0, 0));
+                assert!(ticks.iter().all(|t| t.tooltip.is_none()));
+            }
+        }
+    }
+
     // Map reads keep their own times among the meso reader's whole frames, counted by who asked.
     // Fails if meso frames are taken for map reads, or a map read comes early, late or never.
     #[test]
@@ -1414,7 +1504,8 @@ mod tests {
             tick.whole,
             Some(WholeFrameFor {
                 map: true,
-                mesos: true
+                mesos: true,
+                tooltip: false
             })
         );
         assert_eq!(runner.backend_mut().grabs.len(), grabs + 1, "one grab");
