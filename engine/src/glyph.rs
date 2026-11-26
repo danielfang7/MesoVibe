@@ -58,6 +58,11 @@ impl Glyph {
         u32::from(self.width)
     }
 
+    /// Row `y`'s bit mask, left pixel in bit 0; 0 past the last row.
+    pub fn row(&self, y: u32) -> u32 {
+        self.rows.get(y as usize).copied().unwrap_or(0)
+    }
+
     pub fn height(&self) -> u32 {
         self.rows.len() as u32
     }
