@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MesoVibe: read-only companion for MapleStory Classic World</title>
+  <title>MesoVibe: your MapleStory Classic World companion</title>
   <meta name="description" content="Free, open-source companion for MapleStory Classic World. Whispers, party and friend chat in their own tabs, EXP and loot tracking, and more. It reads your screen and never touches the game.">
   <link rel="canonical" href="https://mesovibe.com/">
   <meta property="og:type" content="website">
@@ -13,6 +13,7 @@
   <meta name="color-scheme" content="light dark">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preload" href="fonts/atkinson-hyperlegible-next.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/nunito.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="style.css">
   <script type="application/ld+json">
   {
@@ -31,7 +32,7 @@
 <body>
   <header class="site-header wrap">
     <a class="brand" href="/" aria-label="MesoVibe home">
-      <img class="mark" src="favicon.svg" alt="" width="32" height="32">
+      <img class="mark" src="favicon.svg" alt="" width="36" height="36">
       <span class="wordmark">MesoVibe</span>
     </a>
     <nav class="header-links" aria-label="Site">
@@ -41,33 +42,109 @@
   </header>
 
   <main>
-    <section class="hero wrap" aria-labelledby="hero-title">
-      <h1 id="hero-title">A read-only companion for MapleStory Classic&nbsp;World.</h1>
-      <p class="lede">It reads your screen the way a stream viewer would. It never touches the game.</p>
+  <!-- The sky behind the hero and the picture of MesoVibe beside the game (the header above it
+       sits on the sky's color). The clouds and hills are drawn here, not taken from the game. -->
+  <div class="sky">
+    <svg class="cloud-defs" aria-hidden="true" focusable="false"><defs><path id="cloud" d="M30 60a30 30 0 0 1 27-30 40 40 0 0 1 74-12 32 32 0 0 1 51 20 22 22 0 0 1 6 44H30a22 22 0 0 1 0-22z"/></defs></svg>
+    <svg class="cloud c1" viewBox="0 0 196 104" aria-hidden="true" focusable="false"><use href="#cloud"/></svg>
+    <svg class="cloud c2" viewBox="0 0 196 104" aria-hidden="true" focusable="false"><use href="#cloud"/></svg>
+    <svg class="cloud c3" viewBox="0 0 196 104" aria-hidden="true" focusable="false"><use href="#cloud"/></svg>
+    <svg class="cloud c4" viewBox="0 0 196 104" aria-hidden="true" focusable="false"><use href="#cloud"/></svg>
+    <svg class="hills" viewBox="0 0 1440 200" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <path class="hill-back" d="M0 90C180 30 360 30 540 70s380 60 560 10 260-50 340-30V200H0z"/>
+      <path class="hill-front" d="M0 140c220-50 420-40 640-10s420 30 600-10 160-20 200-10V200H0z"/>
+    </svg>
 
-      <div class="actions">
-        <div class="downloads" id="downloads">
-          <!-- Stable "latest" links: each release must upload these exact file names. -->
-          <a class="button primary" data-os="windows" href="https://github.com/danielfang7/MesoVibe/releases/latest/download/MesoVibe-Setup.exe">
-            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1h2v8.6l2.8-2.8 1.4 1.4L8 13.4 2.8 8.2l1.4-1.4L7 9.6V1zM2 14h12v2H2z"/></svg>
-            Download for Windows
-          </a>
-          <a class="button secondary" data-os="mac" href="https://github.com/danielfang7/MesoVibe/releases/latest/download/MesoVibe.dmg">
-            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1h2v8.6l2.8-2.8 1.4 1.4L8 13.4 2.8 8.2l1.4-1.4L7 9.6V1zM2 14h12v2H2z"/></svg>
-            Download for macOS
+
+      <section class="hero wrap" aria-labelledby="hero-title">
+        <h1 id="hero-title">Your MapleStory Classic World companion</h1>
+        <p class="lede">It reads your screen the way a stream viewer would. It never touches the game.</p>
+
+        <div class="actions">
+          <div class="downloads" id="downloads">
+            <!-- Stable "latest" links: each release must upload these exact file names. -->
+            <a class="button primary" data-os="windows" href="https://github.com/danielfang7/MesoVibe/releases/latest/download/MesoVibe-Setup.exe">
+              <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1h2v8.6l2.8-2.8 1.4 1.4L8 13.4 2.8 8.2l1.4-1.4L7 9.6V1zM2 14h12v2H2z"/></svg>
+              Download for Windows
+            </a>
+            <a class="button secondary" data-os="mac" href="https://github.com/danielfang7/MesoVibe/releases/latest/download/MesoVibe.dmg">
+              <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1h2v8.6l2.8-2.8 1.4 1.4L8 13.4 2.8 8.2l1.4-1.4L7 9.6V1zM2 14h12v2H2z"/></svg>
+              Download for macOS
+            </a>
+          </div>
+          <script src="main.js"></script>
+          <a class="source-link" href="https://github.com/danielfang7/MesoVibe">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+            Read the source on GitHub
           </a>
         </div>
-        <script src="main.js"></script>
-        <a class="source-link" href="https://github.com/danielfang7/MesoVibe">
-          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-          Read the source on GitHub
-        </a>
-      </div>
-      <p class="meta">Free and open source · Windows 10 or 11 · macOS 12.3 or later</p>
-    </section>
+        <p class="meta">Free and open source · Windows 10 or 11 · macOS 12.3 or later</p>
+      </section>
 
-    <section class="feature feature-lead wrap" aria-labelledby="exp-title">
+      <figure class="beside-figure wrap" aria-labelledby="beside-caption">
+        <!-- The game and the panel at their real sizes side by side (1366 and 360 px wide), scaled
+             together. The spot positions are percentages of the 1366×768 game picture. -->
+        <div class="beside">
+          <div class="beside-game">
+            <img src="img/game-1366.webp" srcset="img/game-800.webp 800w, img/game-1366.webp 1366w" sizes="(max-width: 720px) calc(100vw - 32px), (max-width: 1296px) calc((100vw - 56px) * 0.79), 937px" width="1366" height="768" decoding="async" alt="MapleStory Classic World on East Rocky Mountain V: a character on a cliff ledge with monsters nearby. Outlines mark three spots MesoVibe reads: the map's name on the minimap, the chat box and the EXP bar.">
+            <span class="spot spot-map" aria-hidden="true"><span class="spot-label">Map name</span></span>
+            <span class="spot spot-chat" aria-hidden="true"><span class="spot-label">Chat</span></span>
+            <span class="spot spot-exp" aria-hidden="true"><span class="spot-label">EXP</span></span>
+          </div>
+          <div class="beside-panel" role="img" aria-label="The MesoVibe panel beside the game: 112K EXP per hour, level 41 to 42 in 1 hour 45 minutes, 39.39% of the way there. This session on East Rocky Mountain V: 118K EXP per hour over the last 5 minutes, 47 minutes played, 87,733 EXP gained, 196,510 to go. Loot: 41.2K mesos per hour, mesos read 4 minutes ago, 32,270 picked up, none sold yet. Potions cost 6.4K mesos per hour.">
+            <div class="app" aria-hidden="true">
+              <div class="app-main">
+                <div class="app-strip">
+                  <p class="app-status"><span class="app-dot"></span>Reading game</p>
+                  <div class="app-hero-row">
+                    <p class="app-hero"><span class="app-hero-number">112K</span> <span class="app-unit">EXP/hr</span></p>
+                    <div class="app-actions">
+                      <span class="app-button"><svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg>Pause</span>
+                      <span class="app-button"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4"/></svg>Reset</span>
+                      <span class="app-button"><svg viewBox="0 0 24 24"><path d="M6 21V4M6 4h11l-2.5 4L17 12H6"/></svg>End</span>
+                    </div>
+                  </div>
+                  <p class="app-to-level">Lv 41 → 42 in 1h 45m</p>
+                  <p class="app-progress"><span class="app-bar"><span></span></span><span class="app-pct">39.39%</span></p>
+                </div>
+                <div class="app-view">
+                  <p class="app-section">This session</p>
+                  <p class="app-row"><span>Map</span><span class="app-map">East Rocky Mountain V</span></p>
+                  <p class="app-row"><span>Last 5 min EXP/hr</span><span class="app-num">118K</span></p>
+                  <p class="app-row"><span>Time played</span><span class="app-num">47m</span></p>
+                  <p class="app-row"><span>EXP gained</span><span class="app-num">87,733</span></p>
+                  <p class="app-row"><span>EXP to go</span><span class="app-num">196,510</span></p>
+                  <p class="app-section app-ruled">Loot</p>
+                  <p class="app-stat"><span class="app-stat-number">41.2K</span> <span class="app-unit">Mesos/hr</span></p>
+                  <p class="app-note">Mesos read 4 min ago</p>
+                  <p class="app-row"><span>Mesos picked up</span><span class="app-num">32,270</span></p>
+                  <p class="app-row"><span>Loot sold</span><span class="app-num">–</span></p>
+                  <p class="app-section app-ruled">Potions</p>
+                  <p class="app-stat"><span class="app-stat-number">6.4K</span> <span class="app-unit">Pot cost/hr</span></p>
+                </div>
+              </div>
+              <div class="app-rail">
+                <span class="app-rail-item app-rail-on"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 3h6"/></svg></span>
+                <span class="app-rail-item"><svg viewBox="0 0 24 24"><path d="M9 3h6l-2 4h-2zM10 7c-4 3-6 6.5-6 9.5A3.5 3.5 0 0 0 7.5 20h9a3.5 3.5 0 0 0 3.5-3.5c0-3-2-6.5-6-9.5"/></svg></span>
+                <span class="app-rail-item"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/></svg></span>
+                <span class="app-rail-spacer"></span>
+                <span class="app-rail-item"><svg viewBox="0 0 24 24"><path d="M10.36 4.58L10.52 2.11L13.48 2.11L13.64 4.58A7.6 7.6 0 0 1 16.08 5.59L17.95 3.96L20.04 6.05L18.41 7.92A7.6 7.6 0 0 1 19.42 10.36L21.89 10.52L21.89 13.48L19.42 13.64A7.6 7.6 0 0 1 18.41 16.08L20.04 17.95L17.95 20.04L16.08 18.41A7.6 7.6 0 0 1 13.64 19.42L13.48 21.89L10.52 21.89L10.36 19.42A7.6 7.6 0 0 1 7.92 18.41L6.05 20.04L3.96 17.95L5.59 16.08A7.6 7.6 0 0 1 4.58 13.64L2.11 13.48L2.11 10.52L4.58 10.36A7.6 7.6 0 0 1 5.59 7.92L3.96 6.05L6.05 3.96L7.92 5.59A7.6 7.6 0 0 1 10.36 4.58Z"/><circle cx="12" cy="12" r="3"/></svg></span>
+                <span class="app-rail-item"><svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption id="beside-caption">
+          <span class="caption-lead">MesoVibe sits beside the game and reads a few spots of its window, like the three outlined. <a href="#what-it-sees">See everything it reads</a></span>
+          <span class="caption-credit">A real game picture from MapleStory Classic World by Nexon, with names and chat blurred. The panel's numbers are an example.</span>
+        </figcaption>
+      </figure>
+  </div>
+
+  <div class="content">
+    <section class="feature feature-lead card wrap-card" aria-labelledby="exp-title">
       <div class="feature-text">
+        <p class="tag tag-sky">EXP</p>
         <h2 id="exp-title">Track your EXP</h2>
         <p>See your EXP per hour, the time to your next level, and how every session went.</p>
       </div>
@@ -79,9 +156,62 @@
       </div>
     </section>
 
-    <div class="feature-pair wrap">
-      <section class="feature" aria-labelledby="chat-title">
-        <div class="panel mock-chat" role="group" aria-label="Example of the Chat view">
+    <div class="feature-pair wrap-card">
+      <section class="feature card" aria-labelledby="price-title">
+        <div class="panel mock-price" role="img" aria-label="An example of a price label: Work Gloves, usually 1.2M mesos on Windia, up 4% this week. Prices from Cozy Markets. The price is made up for this example.">
+          <p class="panel-label">Example</p>
+          <div class="price-item">
+            <img class="item-icon" src="img/work-gloves.png" width="108" height="112" alt="">
+            <div class="price-text">
+              <p class="item-name">Work Gloves</p>
+              <p class="price-row"><span><span class="price-number">1.2M</span> <span class="price-unit">usual</span></span> <span class="price-move">▲ 4% week</span></p>
+              <p class="price-credit">Windia · Cozy Markets</p>
+            </div>
+          </div>
+        </div>
+        <div class="feature-text">
+          <p class="tag tag-orange">Prices <span class="tag-soon">· Coming soon</span></p>
+          <h2 id="price-title">Check Free Market prices</h2>
+          <p>Point at an item in your inventory, an NPC shop or storage, and MesoVibe shows its usual Free Market price right under the game's tooltip, with how much it moved this week.</p>
+          <ul class="points">
+            <li>Prices from <a href="https://cozy.markets">Cozy Markets</a>, for your world: Windia or Zenith. Cozy Markets isn't part of MesoVibe.</li>
+            <li>The usual price is an estimate from what players list and sell. A scrolled item can be worth much more or less.</li>
+            <li>Once it ships, MesoVibe will download the price list from mesovibe.com a few times a day. The request carries no account, game or session data. Like any download, our host sees your IP address.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="feature card" aria-labelledby="loot-title">
+        <div class="panel mock-loot" role="img" aria-label="An example of the Items section: 46.9K loot per hour. Horny Mushroom Cap ×142, worth 3.12K mesos at an NPC shop. Orange Potion, a Use item, ×18, worth 270. Mithril Ore ×6, worth 240. Mithril Viking Helm, an Equip item, ×1, worth 1.3K.">
+          <p class="panel-label">Items</p>
+          <p class="rate"><span class="rate-number">46.9K</span> <span class="rate-unit">Loot/hr</span></p>
+          <table class="past">
+            <thead>
+              <tr><th>Item</th><th>Count</th><th>Value</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Horny Mushroom Cap</td><td>×142</td><td>3.12K</td></tr>
+              <tr><td>Orange Potion<span class="item-tab">Use</span></td><td>×18</td><td>270</td></tr>
+              <tr><td>Mithril Ore</td><td>×6</td><td>240</td></tr>
+              <tr><td>Mithril Viking Helm<span class="item-tab">Equip</span></td><td>×1</td><td>1.3K</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="feature-text">
+          <p class="tag tag-green">Loot</p>
+          <h2 id="loot-title">Track your loot</h2>
+          <p>MesoVibe reads the pickup notices at the bottom right of the game. It adds up the mesos and items you pick up, and what an NPC shop would pay for each item. Loot per hour puts them together, so you can see which map pays best.</p>
+          <ul class="points">
+            <li>The Loot tab keeps every session's loot per hour with the map you played, and your totals across all of them.</li>
+            <li>Item values are NPC shop prices. Equips and scrolls often sell for more on the Free Market.</li>
+            <li>In a party, the game's party list covers the notices, so pickups aren't counted there yet.</li>
+          </ul>
+        </div>
+      </section>
+    </div>
+
+    <section class="feature feature-lead flip card wrap-card" aria-labelledby="chat-title">
+      <div class="panel mock-chat" role="group" aria-label="Example of the Chat view">
           <p class="panel-label" aria-hidden="true">Chat</p>
           <div class="tabs" role="tablist" aria-label="Chat types">
             <button type="button" class="tab" role="tab" id="tab-whispers" aria-controls="chat-whispers" aria-selected="true">Whispers</button>
@@ -109,46 +239,19 @@
             </ol>
           </div>
         </div>
-        <div class="feature-text">
-          <h2 id="chat-title">Never miss a whisper</h2>
+      <div class="feature-text">
+        <p class="tag tag-pink">Chat</p>
+        <h2 id="chat-title">Never miss a whisper</h2>
           <p>Megaphones and crowded towns bury the messages meant for you. MesoVibe pulls whispers, party chat and friend chat out of the game's chat box and gives each one its own tab.</p>
           <ul class="points">
             <li>Each tab counts what came in while you were away.</li>
             <li>An optional overlay at the edge of the game shows the newest messages. Clicks pass straight through it.</li>
             <li>Chat stays in memory on your computer and is gone when you quit.</li>
           </ul>
-        </div>
-      </section>
+      </div>
+    </section>
 
-      <section class="feature" aria-labelledby="loot-title">
-        <div class="panel mock-loot" role="img" aria-label="An example of the Items section: 46.9K loot per hour. Horny Mushroom Cap ×142, worth 3.12K mesos at an NPC shop. Orange Potion, a Use item, ×18, worth 270. Mithril Ore ×6, worth 240. Mithril Viking Helm, an Equip item, ×1, worth 1.3K.">
-          <p class="panel-label">Items</p>
-          <p class="rate"><span class="rate-number">46.9K</span> <span class="rate-unit">Loot/hr</span></p>
-          <table class="past">
-            <thead>
-              <tr><th>Item</th><th>Count</th><th>Value</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>Horny Mushroom Cap</td><td>×142</td><td>3.12K</td></tr>
-              <tr><td>Orange Potion<span class="item-tab">Use</span></td><td>×18</td><td>270</td></tr>
-              <tr><td>Mithril Ore</td><td>×6</td><td>240</td></tr>
-              <tr><td>Mithril Viking Helm<span class="item-tab">Equip</span></td><td>×1</td><td>1.3K</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="feature-text">
-          <h2 id="loot-title">Track your loot</h2>
-          <p>MesoVibe reads the pickup notices at the bottom right of the game. It adds up the mesos and items you pick up, and what an NPC shop would pay for each item. Loot per hour puts them together, so you can see which map pays best.</p>
-          <ul class="points">
-            <li>The Loot tab keeps every session's loot per hour with the map you played, and your totals across all of them.</li>
-            <li>Item values are NPC shop prices. Equips and scrolls often sell for more on the Free Market.</li>
-            <li>In a party, the game's party list covers the notices, so pickups aren't counted there yet.</li>
-          </ul>
-        </div>
-      </section>
-    </div>
-
-    <section class="faq wrap" id="faq" aria-labelledby="faq-title">
+    <section class="faq card wrap-card" id="faq" aria-labelledby="faq-title">
       <h2 id="faq-title">Common questions</h2>
 
       <!-- Every answer here must stay true of the shipped app. Change the copy when the app changes. -->
@@ -169,7 +272,7 @@
             <p>Chat is never saved. MesoVibe holds it only while it's open, and it's gone when you quit. The only time MesoVibe goes online is to check for updates and download them.</p>
           </div>
         </details>
-        <details>
+        <details id="what-it-sees">
           <summary><span>What can MesoVibe see?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
           <div class="answer">
             <p>Only the MapleStory window. It can't see your other apps, your browser or your desktop.</p>
@@ -267,11 +370,13 @@
         </details>
       </div>
     </section>
+  </div>
   </main>
 
   <footer class="site-footer wrap">
-    <p>Free and open source under the <a href="https://github.com/danielfang7/MesoVibe/blob/main/LICENSE">BSD-2-Clause license</a>. <a href="https://github.com/danielfang7/MesoVibe">GitHub</a></p>
-    <p class="disclaimer">Not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon.</p>
+    <p>Free, with no ads, and open source under the <a href="https://github.com/danielfang7/MesoVibe/blob/main/LICENSE">BSD-2-Clause license</a>. <a href="https://github.com/danielfang7/MesoVibe">GitHub</a></p>
+    <p class="disclaimer">Not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon. The game picture and the item picture on this page are from MapleStory Classic World and belong to Nexon. They're here only to show what MesoVibe reads and shows.</p>
+    <p>Own something on this page and want it removed? <a href="https://github.com/danielfang7/MesoVibe/issues/new?template=removal-request.yml">Open an issue on GitHub</a> and we'll take it down.</p>
   </footer>
 </body>
 </html>

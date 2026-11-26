@@ -15,6 +15,31 @@
   box.prepend(mac);
 })();
 
+// A link to a question ("See everything it reads") opens its answer, so it never lands on a
+// closed one: on a click, for a visitor arriving with the link, and on Back or Forward to it.
+(function () {
+  function open(hash) {
+    let id;
+    try {
+      id = decodeURIComponent(hash.slice(1));
+    } catch {
+      return; // A broken address such as #%E0 names no question.
+    }
+    const target = id && document.getElementById(id);
+    if (target && target.tagName === "DETAILS") target.open = true;
+  }
+  document.addEventListener("click", function (event) {
+    const link = event.target.closest && event.target.closest('a[href^="#"]');
+    if (link) open(link.getAttribute("href"));
+  });
+  window.addEventListener("hashchange", function () {
+    open(location.hash);
+  });
+  document.addEventListener("DOMContentLoaded", function () {
+    open(location.hash);
+  });
+})();
+
 // The example Chat view's tabs. Opening a tab clears its unread count, as in the app.
 // Arrow keys, Home and End move between tabs (the WAI-ARIA tabs pattern).
 document.addEventListener("DOMContentLoaded", function () {

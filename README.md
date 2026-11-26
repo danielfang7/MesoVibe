@@ -50,6 +50,8 @@ pnpm tauri dev
 
 MesoVibe is licensed under the BSD 2-clause license. See [LICENSE](LICENSE).
 
+The game picture and the item picture in [web/img](web/img/) are from MapleStory Classic World and belong to Nexon; that license doesn't cover them. They're on the website only to show what MesoVibe reads and shows, with names and chat blurred.
+
 ### Game data
 
 Item and map names, inventory tabs and NPC sell prices come from [OSMS Data Explorer](https://osmsdataexplorer.com), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). MesoVibe ships a trimmed copy in [engine/data](engine/data/), so it never downloads game data while you play. The HP Meat restores and the MP Lemon restores come from the same data; their shop prices were checked in the game. MapleStory names and other game content are © Nexon.
