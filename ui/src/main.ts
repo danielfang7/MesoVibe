@@ -8,11 +8,12 @@ import { CHANNEL_NAME, clockTime, messageText, messages } from "./chatlines.js";
 import { darkWatch, fullScreenWatch } from "./dark.js";
 import { append, h, icon, replace } from "./dom.js";
 import { connect } from "./ipc.js";
-import type { AppInfo, ChatChannel, ChatChannels, ChatColors, ChatLine, ChatPosition, Corner, Display, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
+import type { AppInfo, ChatChannel, ChatChannels, ChatColors, ChatLine, ChatPosition, Corner, Display, Host, Settings, Startup, Status, UpdateStatus, World } from "./ipc.js";
 import { PluginHost, confirmDialog, fill, namePicture, renderView } from "./plugins.js";
+import { PricesTab, WORLDS } from "./prices.js";
 import { readersOf } from "./readers.js";
 
-type ViewName = "session" | "loot" | "chat" | "sees" | "settings";
+type ViewName = "session" | "loot" | "prices" | "chat" | "sees" | "settings";
 
 const CHANNELS: ChatChannel[] = ["whisper", "party", "friend"];
 const TAB_NAME: Record<ChatChannel, string> = { whisper: "Whispers", party: "Party", friend: "Friends" };
@@ -106,6 +107,10 @@ function startupNote(os: string | undefined): string {
 /** What the update check sends, in Settings > About. */
 const UPDATE_CHECK_NOTE =
   "Once a day MesoVibe asks GitHub whether a newer version is out. The request carries nothing about you or the game; GitHub sees your IP address, as any website does. An update installs only when you choose Restart to update.";
+
+/** What the price download sends, in Settings > About (app/src/prices.rs). */
+const PRICE_DOWNLOAD_NOTE =
+  "A few times a day MesoVibe downloads Free Market prices from mesovibe.com. The request carries nothing about you or the game; the server sees your IP address, as any website does. Prices come from Cozy Markets, which isn't part of MesoVibe.";
 
 // MARK: the panel
 
@@ -317,7 +322,7 @@ function shell(initial: Settings): void {
   );
   const view = h("main", { class: "view", attrs: { tabindex: "-1" } });
   const railButtons = new Map<ViewName, HTMLButtonElement>();
-  const railItem = (name: ViewName, label: string, glyph: "session" | "loot" | "chat" | "sees" | "settings", ...extra: Node[]) => {
+  const railItem = (name: ViewName, label: string, glyph: "session" | "loot" | "prices" | "chat" | "sees" | "settings", ...extra: Node[]) => {
     const item = h(
       "button",
       {
@@ -337,6 +342,7 @@ function shell(initial: Settings): void {
     { class: "rail", attrs: { "aria-label": "Views" } },
     railItem("session", "Session", "session"),
     railItem("loot", "Loot", "loot"),
+    railItem("prices", "Prices", "prices"),
     railItem("chat", "Chat", "chat", chatBadge),
     h("span", { class: "rail-spacer" }),
     railItem("settings", "Settings", "settings"),
@@ -445,6 +451,14 @@ function shell(initial: Settings): void {
     if (panel.view === "settings") paintView();
   };
 
+  /** The world whose prices the Prices tab shows, from the tab or from Settings. */
+  const setPriceWorld = async (world: World) => {
+    panel.settings = await host.setPriceWorld(world);
+    pricesTab.setWorld(panel.settings.priceWorld);
+    if (panel.view === "settings") paintView();
+  };
+  const pricesTab = new PricesTab(host, panel.settings.priceWorld, (world) => void setPriceWorld(world));
+
   const setDisplay = async (change: Partial<Display>) => {
     const s = panel.settings;
     panel.settings = await host.setDisplay({ dock: s.dock, miniHud: s.miniHud, corner: s.miniHudCorner, ...change });
@@ -454,11 +468,13 @@ function shell(initial: Settings): void {
   function show(name: ViewName): void {
     if (panel.view === "sees" && name !== "sees") void host.watch(false);
     if (name === "sees" && panel.view !== "sees") void host.watch(true);
+    if (panel.view === "prices" && name !== "prices") pricesTab.closed();
     panel.view = name;
     if (name === "chat") panel.unread[panel.chatTab] = 0;
     for (const [n, item] of railButtons) item.setAttribute("aria-current", n === name ? "page" : "false");
     paintRail();
     paintView();
+    if (name === "prices") pricesTab.opened();
     if (name === "chat") view.scrollTop = view.scrollHeight;
     view.focus({ preventScroll: true });
   }
@@ -731,6 +747,10 @@ function shell(initial: Settings): void {
         break;
       case "loot":
         replace(view, ...trackerView(tracker.pages.loot ?? []));
+        break;
+      case "prices":
+        // The tab is kept whole, so a repaint never takes what the player is typing.
+        if (!view.contains(pricesTab.root)) replace(view, pricesTab.root);
         break;
       case "chat":
         replace(view, ...chatView());
@@ -1217,6 +1237,35 @@ function shell(initial: Settings): void {
       h(
         "section",
         { class: "block" },
+        h("h2", { class: "label" }, "Prices"),
+        hinted(
+          h(
+            "div",
+            { class: "segmented", attrs: { role: "radiogroup", "aria-label": "Prices for world" } },
+            ...WORLDS.map(([world, label]) =>
+              h(
+                "button",
+                {
+                  class: "segment",
+                  attrs: {
+                    type: "button",
+                    role: "radio",
+                    "aria-checked": panel.settings.priceWorld === world ? "true" : "false",
+                    "data-key": `settings-price-world-${world}`,
+                  },
+                  on: { click: () => void setPriceWorld(world) },
+                },
+                label,
+              ),
+            ),
+          ),
+          "Each world has its own Free Market. The Prices tab shows the prices of the world you choose here or in the tab.",
+          "settings-price-world-hint",
+        ),
+      ),
+      h(
+        "section",
+        { class: "block" },
         h("h2", { class: "label" }, "Privacy"),
         h("p", {}, "Everything MesoVibe keeps stays on this computer."),
         h(
@@ -1253,6 +1302,7 @@ function shell(initial: Settings): void {
           h("dd", { class: "number" }, info ? String(info.eventSchema) : "?"),
         ),
         updateSettings(),
+        h("p", { class: "text muted", attrs: { "data-key": "settings-price-note" } }, PRICE_DOWNLOAD_NOTE),
         h("p", { class: "text muted" }, "Open source (BSD-2-Clause): github.com/danielfang7/MesoVibe"),
         h(
           "p",
@@ -1263,6 +1313,11 @@ function shell(initial: Settings): void {
           "p",
           { class: "text muted" },
           "Item and map data: OSMS Data Explorer (osmsdataexplorer.com) under CC BY 4.0 (creativecommons.org/licenses/by/4.0), trimmed to item names, tabs, NPC prices and flags, map names and regions, and what Meat and Lemon restore.",
+        ),
+        h(
+          "p",
+          { class: "text muted", attrs: { "data-key": "settings-price-credit" } },
+          "Free Market prices: Cozy Markets (cozy.markets), which isn't part of MesoVibe and doesn't endorse it. Prices are estimates.",
         ),
         h("p", { class: "text muted" }, "Not affiliated with or endorsed by Nexon. MapleStory is a trademark of Nexon."),
       ),
@@ -1350,6 +1405,12 @@ function shell(initial: Settings): void {
   };
   void host.onUpdateStatus(setUpdate);
   void host.updateStatus().then(setUpdate);
+  void host.onPriceStatus((status) => pricesTab.setStatus(status));
+  void host.priceStatus().then((status) => pricesTab.setStatus(status));
+  // Keys reach MesoVibe only while its own panel has focus, never from the game.
+  document.addEventListener("keydown", (event) => {
+    if (panel.view === "prices") pricesTab.key(event);
+  });
 
   show("session");
   paintStrip();

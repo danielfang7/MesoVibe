@@ -905,6 +905,243 @@ dl {
   background: var(--match-tint);
 }
 
+/* MARK: the Prices tab (prices.ts) */
+
+.prices-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.prices-tab > .block + .block {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-lg);
+}
+
+.prices-tab [hidden] {
+  display: none;
+}
+
+/* "Find an item" with the world toggle beside it. */
+.search-head,
+.block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.world-toggle .segment {
+  min-height: 28px;
+  padding: 2px var(--space-sm);
+  font-size: 13px;
+}
+
+.field {
+  font: inherit;
+  font-size: 16px;
+  width: 100%;
+  min-height: 36px;
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+}
+
+.field:focus-visible {
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+/* Item | Usual | Week. Only the name wraps, so the figures stay on one line at 300px. */
+.price-list {
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+}
+
+.price-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 72px;
+  gap: var(--space-sm);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-xs) 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+
+.price-row .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.price-head {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+button.price-row,
+.price-row[role="option"] {
+  cursor: pointer;
+}
+
+button.price-row:hover,
+.price-row[role="option"]:hover,
+.price-row[aria-selected="true"] {
+  background: var(--match-tint);
+}
+
+/* A rise and a fall, always with their arrow, so color is never the only sign. */
+.move.up {
+  color: var(--accent);
+}
+
+.move.down {
+  color: var(--warn);
+}
+
+/* Old prices: every figure muted, moves too, never re-colored. */
+.prices-tab.stale .price-figure,
+.prices-tab.stale .move {
+  color: var(--text-muted);
+}
+
+.price-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-top: var(--space-xs);
+}
+
+.price-main:empty {
+  display: none;
+}
+
+.price-title {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.price-hero {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+}
+
+.change-line .move {
+  font-family: var(--font-mono);
+}
+
+.link,
+.text-button {
+  font: inherit;
+  font-size: 14px;
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.text-button {
+  color: var(--text-muted);
+}
+
+.text-button:hover {
+  color: var(--text);
+}
+
+.price-credit .link {
+  font-size: inherit;
+}
+
+/* The 30-day chart: one plain line, no fill or up/down color. */
+.chart {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.chart-frame {
+  position: relative;
+  height: 96px;
+}
+
+.chart-lines {
+  display: block;
+  width: 100%;
+  height: 96px;
+  overflow: visible;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-base {
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-dot {
+  stroke: var(--text);
+  stroke-width: 6;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-high,
+.chart-low,
+.chart-ends,
+.chart-pointed {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.chart-high,
+.chart-low {
+  position: absolute;
+  left: 0;
+  padding: 0 2px;
+  background: var(--surface);
+}
+
+.chart-high {
+  top: 0;
+}
+
+.chart-low {
+  bottom: 2px;
+}
+
+.chart-ends {
+  display: flex;
+  justify-content: space-between;
+}
+
+.chart-pointed {
+  min-height: 1.45em;
+}
+
 /* MARK: the mini-HUD (hud.html) */
 
 /* The window is see-through: only the card shows over the game. */

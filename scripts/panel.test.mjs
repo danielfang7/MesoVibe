@@ -556,7 +556,7 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await page.until(`${checked("corner-bottom-left")} === "true"`, "the chosen corner");
     await page.evaluate(`document.querySelector('[data-key="settings-hud"]').click()`);
     await page.until(`${checked("settings-hud")} === "false"`, "the mini-HUD off");
-    assert.equal(await page.evaluate(`document.querySelector('[role="radiogroup"]')`), null, "no corner without a mini-HUD");
+    assert.equal(await page.evaluate(`document.querySelector('[aria-label="Mini-HUD corner"]')`), null, "no corner without a mini-HUD");
     assert.deepEqual(page.errors, []);
     page.close();
   });
@@ -753,13 +753,127 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
+  // The Prices tab: search by name, keys, the item's detail and chart, Recently checked with Undo,
+  // and the world switch. Fails if a search result can't be reached from the keyboard, the detail
+  // loses its figures or chart sentence, the Cozy link opens nothing, or a world change leaves the
+  // old world's price on screen.
+  await t.test("the Prices tab finds an item, shows its price and chart, and keeps it in Recently checked", async () => {
+    const page = await openPage(devtools, at("prices"));
+    await page.until(`document.querySelector(".strip")`, "the panel");
+    await page.evaluate(`document.querySelector('[aria-label="Prices"]').click()`);
+    const movers = `[...document.querySelectorAll('[data-key="price-movers-rows"] button.price-row')]`;
+    await page.until(`${movers}.length === 4`, "Biggest moves");
+    assert.equal(await page.evaluate(`${movers}[0].innerText.replace(/\\s+/g, " ")`), "Work Gloves 1.5M ▲ 25% up 25% this week", "the arrow seen, the words heard");
+    assert.equal(await page.evaluate(`${movers}[0].querySelector('[aria-hidden="true"]').textContent`), "▲ 25%");
+    assert.equal(await page.evaluate(textOf("price-how")), "Search for an item to see its Free Market price.");
+
+    const field = `document.querySelector('[data-key="price-search"]')`;
+    const type = (text) => page.evaluate(`(() => { const f = ${field}; f.focus(); f.value = ${JSON.stringify(text)}; f.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    const press = (key, target = field) => page.evaluate(`${target}.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true }))`);
+    await type("ilbi");
+    const options = `document.querySelectorAll('#price-results [role="option"]')`;
+    await page.until(`${options}.length === 1`, "one result");
+    assert.equal(await page.evaluate(textOf("price-count")), "1 item", "the count is announced");
+    await press("ArrowDown");
+    assert.equal(await page.evaluate(`${field}.getAttribute("aria-activedescendant")`), "price-result-0");
+    await press("Enter");
+    await page.until(`${textOf("price-title")} === "Ilbi Throwing Stars"`, "the item's detail");
+    assert.equal(await page.evaluate(textOf("price-usual")), "21M usual price");
+    assert.equal(await page.evaluate(`${textOf("price-change")}.replace("up 8% this week", "")`), "▲ 8% from a week ago");
+    assert.match(
+      await page.evaluate(`document.querySelector('[data-key="price-chart"]').getAttribute("aria-label")`),
+      /^Usual price over 30 days: from [\d.]+[KM] to 21M, high [\d.]+[KM] (today|on [A-Z][a-z]{2} \d{1,2}), low [\d.]+[KM] on [A-Z][a-z]{2} \d{1,2}\.$/,
+    );
+    assert.equal(await page.evaluate(`document.querySelector('[data-key="price-chart"]').getAttribute("role")`), "img");
+    assert.equal(await page.evaluate(`${field}.value`), "", "the field is cleared for the next search");
+    await page.evaluate(`document.querySelector('[data-key="price-open"]').click()`);
+    assert.deepEqual(await page.evaluate("window.__mockPricePages"), [{ id: 2070006, world: "windia" }]);
+    const recent = `[...document.querySelectorAll('[data-key="price-recent-rows"] button.price-row')].map((b) => b.querySelector(".price-name").textContent)`;
+    assert.deepEqual(await page.until(`${recent}.length && ${recent}`, "Recently checked"), ["Ilbi Throwing Stars"]);
+    assert.equal(await page.evaluate(`${textOf("price-how")} ?? null`), null, "the how-to line gives way to Recently checked");
+
+    // Another world's prices at once, with no download.
+    await page.evaluate(`document.querySelector('[data-key="price-world-zenith"]').click()`);
+    await page.until(`${textOf("price-usual")} === "10.5M usual price"`, "Zenith's price");
+    assert.match(await page.evaluate(textOf("price-source")), /^Zenith · Cozy Markets, updated /);
+
+    // No match says so; Esc goes back to the item shown.
+    await type("ilbbi");
+    await page.until(`${textOf("price-none")} === 'No item called "ilbbi". Check the spelling.'`, "no match");
+    await press("Escape");
+    await page.until(`${textOf("price-title")} === "Ilbi Throwing Stars"`, "back to the item");
+
+    // "/" finds an item from anywhere in the tab.
+    await page.evaluate(`document.activeElement.blur()`);
+    await press("/", "document.body");
+    assert.equal(await page.evaluate(`document.activeElement === ${field}`), true);
+
+    // Clear, then Undo.
+    await page.evaluate(`document.querySelector('[data-key="price-recent-clear"]').click()`);
+    await page.until(`document.querySelector('[data-key="price-recent"]').innerText.startsWith("Recently checked cleared.")`, "the cleared notice");
+    await page.evaluate(`document.querySelector('[data-key="price-recent-undo"]').click()`);
+    assert.deepEqual(await page.until(`${recent}.length && ${recent}`, "Recently checked back"), ["Ilbi Throwing Stars"]);
+
+    // An item Cozy doesn't price shows its NPC price, never a made-up market one.
+    await type("red potion");
+    await page.until(`document.querySelector('#price-results [role="option"]')`, "Red Potion");
+    await page.evaluate(`document.querySelector('#price-results [role="option"]').click()`);
+    assert.equal(
+      await page.until(textOf("price-no-market"), "no market price"),
+      "No Free Market price yet. Cozy Markets lists an item once enough shops sell it.",
+    );
+    assert.match(await page.evaluate(`document.querySelector(".view .key-value").innerText.replace(/\\s+/g, " ")`), /^NPC shop pays 5$/);
+
+    // Settings has the same world choice and says what the download sends.
+    await page.evaluate(`document.querySelector('[aria-label="Settings"]').click()`);
+    assert.equal(await page.until(checked("settings-price-world-zenith"), "Settings' world"), "true");
+    assert.match(await page.evaluate(textOf("settings-price-note")), /^A few times a day MesoVibe downloads Free Market prices from mesovibe\.com\. The request carries nothing about you or the game/);
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // Old prices are muted and dated; with none downloaded, search still lists the game's items and
+  // their NPC prices. Fails if old prices look current, the offline line is missing, or an item
+  // without a market price shows a made-up one.
+  await t.test("old prices are muted and dated, and with none yet search still gives NPC prices", async () => {
+    const old = await openPage(devtools, at("pricesold"));
+    await old.until(`document.querySelector(".strip")`, "the panel");
+    await old.evaluate(`document.querySelector('[aria-label="Prices"]').click()`);
+    assert.match(await old.until(textOf("price-note"), "the age line"), /^Prices from [A-Z][a-z]{2} \d{1,2}, .+\. MesoVibe can't reach its price service\.$/);
+    assert.equal(await old.evaluate(`document.querySelector(".prices-tab").classList.contains("stale")`), true);
+    const move = `document.querySelector('[data-key="price-movers-rows"] .move.up')`;
+    await old.until(move, "a mover");
+    assert.equal(await old.evaluate(`getComputedStyle(${move}).color`), "rgb(169, 165, 150)", "muted, not celadon");
+    assert.deepEqual(old.errors, []);
+    old.close();
+
+    const offline = await openPage(devtools, at("pricesoffline"));
+    await offline.until(`document.querySelector(".strip")`, "the panel");
+    await offline.evaluate(`document.querySelector('[aria-label="Prices"]').click()`);
+    assert.equal(await offline.until(textOf("price-note"), "the offline line"), "Prices download when MesoVibe is online.");
+    assert.equal(await offline.evaluate(`document.querySelector('[data-key="price-movers"]').hidden`), true);
+    const field = `document.querySelector('[data-key="price-search"]')`;
+    await offline.evaluate(`(() => { const f = ${field}; f.focus(); f.value = "red potion"; f.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await offline.until(`document.querySelector('#price-results [role="option"]')`, "a result");
+    await offline.evaluate(`document.querySelector('#price-results [role="option"]').click()`);
+    assert.equal(await offline.until(textOf("price-no-market"), "no market price"), "No Free Market prices have downloaded yet.", "not that Cozy has none");
+    assert.match(await offline.evaluate(`document.querySelector(".view .key-value").innerText.replace(/\\s+/g, " ")`), /^NPC shop pays 5$/);
+    await offline.evaluate(`(() => { const f = ${field}; f.focus(); f.value = "roger"; f.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await offline.until(`document.querySelector('#price-results [role="option"]')`, "a result");
+    await offline.evaluate(`document.querySelector('#price-results [role="option"]').click()`);
+    await offline.until(`${textOf("price-no-market")} === "This item can't be traded, so it has no Free Market price."`, "untradeable");
+    assert.deepEqual(offline.errors, []);
+    offline.close();
+  });
+
   // Fails if Settings and What MesoVibe sees swap back, or a view goes missing from the rail.
-  await t.test("the rail lists Session, Loot and Chat, then Settings, then What MesoVibe sees", async () => {
+  await t.test("the rail lists Session, Loot, Prices and Chat, then Settings, then What MesoVibe sees", async () => {
     const page = await openPage(devtools, at("grind"));
     await page.until(`document.querySelector(".rail")`, "the rail");
     assert.deepEqual(await page.evaluate(`[...document.querySelectorAll(".rail-item")].map((b) => b.getAttribute("title"))`), [
       "Session",
       "Loot",
+      "Prices",
       "Chat",
       "Settings",
       "What MesoVibe sees",

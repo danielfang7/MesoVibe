@@ -14,6 +14,7 @@
 import { SCHEMA_VERSION, type Event as GameEvent } from "@mesovibe/sdk";
 
 import type { ChatChannel, ChatHost, ChatLine, ChatPosition, GamePicture, HudHost, HudSummary, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
+import { mockPrices } from "./mock-prices.js";
 
 const NEEDED = 356_916;
 
@@ -128,6 +129,7 @@ export function mockHost(scenario: string): Host {
     chatOverlayChannels: { whisper: true, party: true, friend: true },
     chatOverlayColors: { whisper: "#66ff66", party: "#ff88cc", friend: "#ffaa44" },
     chatOverlayPosition: "left",
+    priceWorld: "windia",
   };
   const statusHandlers: ((status: Status) => void)[] = [];
   const eventHandlers: ((event: GameEvent, atMs: number) => void)[] = [];
@@ -287,6 +289,8 @@ export function mockHost(scenario: string): Host {
       // The real host restarts here; the stand-in says so and stays.
       setUpdate({ ...update, state: "installing" });
     },
+    ...mockPrices(scenario),
+    setPriceWorld: async (world) => (settings = { ...settings, priceWorld: world }),
   };
 }
 
@@ -302,6 +306,7 @@ export function mockChatHost(scenario: string): ChatHost {
     chatOverlayColors: { whisper: "#66ff66", party: "#ff88cc", friend: "#ffaa44" },
     // `?position=above-chat` or `right` shows the other places in a browser.
     chatOverlayPosition: (new URLSearchParams(location.search).get("position") as ChatPosition | null) ?? "left",
+    priceWorld: "windia",
   };
   return {
     settings: async () => settings,

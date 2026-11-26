@@ -22,6 +22,10 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1"
 # The "What MesoVibe sees" thumbnail.
 png = "0.18"
+# Downloading Free Market prices from mesovibe.com (prices.rs). The same client and TLS (rustls with
+# ring) the update check already uses, plus gzip, which cuts the price file to a fraction.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "gzip"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 # Raising the mini-HUD and chat overlay above the game's window (dock.rs). Tauri already uses
 # this version.
@@ -36,5 +40,6 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
+  "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }

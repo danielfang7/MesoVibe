@@ -23,6 +23,15 @@
     "allow-set-startup",
     "allow-update-status",
     "allow-check-for-updates",
-    "allow-install-update"
+    "allow-install-update",
+    "allow-price-status",
+    "allow-price-search",
+    "allow-price-item",
+    "allow-price-rows",
+    "allow-price-movers",
+    "allow-price-recent",
+    "allow-set-price-recent",
+    "allow-set-price-world",
+    "allow-open-price-page"
   ]
 }
