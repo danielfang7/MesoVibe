@@ -3,9 +3,10 @@
 //! hides; and which item the player points at, for the Prices tab.
 //!
 //! The label shows only while the latest tick confirmed the tooltip (two whole frames in a row
-//! agreeing on its box and name), and hides on the first tick that doesn't, after 600 ms with no
-//! confirming tick, whenever capture isn't running, and while the game isn't in front. Nothing
-//! shows while a name is being read, and a name read unsure shows nothing.
+//! agreeing on its box's size and its name), and moves with it as the cursor drifts. It hides on
+//! the first tick that doesn't confirm it, after 600 ms with no confirming tick, whenever capture
+//! isn't running, and while the game isn't in front. Nothing shows while a name is being read, and
+//! a name read unsure shows nothing.
 //!
 //! The tooltip reader is on only while the player has "Prices next to item tooltips" on; off, no
 //! tooltip is read and no whole frame is grabbed for one. What it learned of the name font is
