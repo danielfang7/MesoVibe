@@ -48,9 +48,11 @@
 //! item ("Black Kitty" and the listed "Black Nitty") isn't read as it; and then a name whose other
 //! letters are all known, which only one name in the game fits, teaches its last letter too.
 //!
-//! **Trust.** An item counts once two whole frames in a row show the same box in the same place
-//! with the same name ([`Tooltip::confirmed`]); it's gone on the first frame where the box isn't.
-//! A tooltip moves with the cursor, so a cursor moving inside a slot shows no item until it rests.
+//! **Trust.** An item counts once two whole frames in a row show a box of the same size with the
+//! same name ([`Tooltip::confirmed`]); it's gone on the first frame where the box isn't. The box may
+//! have moved between the two: a tooltip follows the cursor, and a hand resting on an item drifts
+//! a few pixels between most frames. A sweep across the grid shows a new item in each frame, so it
+//! still shows nothing.
 //!
 //! **Sizes.** Only game areas of 1280x720 and 1366x768 drawn at the game's own pixel size are
 //! read, the sizes the meso total reads whole frames at. A Retina Mac's frame is read one pixel
@@ -162,8 +164,8 @@ pub struct Tooltip {
     pub items: Option<Vec<u32>>,
     /// The name as the item list writes it, when read.
     pub name: Option<String>,
-    /// The last whole frame showed the same box in the same place with the same items: only then
-    /// should anything be shown for it.
+    /// The last whole frame showed a box of the same size with the same items, wherever the cursor
+    /// moved it: only then should anything be shown for it.
     pub confirmed: bool,
     /// Why the name wasn't read, when it wasn't.
     pub unsure: Option<Unsure>,
@@ -373,10 +375,9 @@ impl TooltipReader {
             }
         };
         let confirmed = items.is_some()
-            && self
-                .last
-                .as_ref()
-                .is_some_and(|(r, i)| *r == rect && *i == items);
+            && self.last.as_ref().is_some_and(|(r, i)| {
+                (r.width, r.height) == (rect.width, rect.height) && *i == items
+            });
         Some(Tooltip {
             rect,
             items,
@@ -1633,16 +1634,26 @@ mod tests {
         assert_eq!(read.tooltip.unwrap().items, None);
     }
 
-    // A box that moves between frames (the cursor moving in a slot) isn't confirmed. Fails if the
-    // label could show for a box that never rested.
+    // A resting hand drifts, and the tooltip follows the cursor: the item stays counted while its box
+    // moves, but a box of another size isn't counted on its first frame. Fails if the label would
+    // drop out whenever the cursor moves a pixel, or would show for a box only one frame saw.
     #[test]
-    fn a_moving_box_is_never_confirmed() {
+    fn a_box_following_the_cursor_stays_confirmed() {
         let mut reader = taught();
-        for x in [500, 503, 506] {
+        for (i, (x, y, height)) in [
+            (500, 300, 113),
+            (503, 301, 113),
+            (497, 306, 113),
+            (497, 306, 133),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let mut canvas = Canvas::new(1366, 768);
-            canvas.tooltip(x, 300, 288, 113, "Mithril Ingot", false);
+            canvas.tooltip(x, y, 288, height, "Mithril Ingot", false);
             let t = reader.observe(&canvas.frame(), None).tooltip.unwrap();
-            assert!(!t.confirmed, "at {x}");
+            assert_eq!(t.items, Some(ids_of("Mithril Ingot")), "frame {i}");
+            assert_eq!(t.confirmed, i == 1 || i == 2, "frame {i}");
         }
     }
 
