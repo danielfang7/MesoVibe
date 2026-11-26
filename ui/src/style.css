@@ -1509,3 +1509,73 @@ html.hud-page body {
 .game-text-missing {
   color: var(--text-muted);
 }
+
+/* MARK: the price label (label.html) */
+
+/* The window is see-through: only the card shows, flush under the game's tooltip. */
+html.label-page,
+html.label-page body {
+  background: transparent;
+  overflow: hidden;
+}
+
+.label-frame {
+  position: fixed;
+  top: 0;
+  /* The one offset shadow, outside the card's clipped corners. */
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
+}
+
+.label-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  height: 52px;
+  justify-content: center;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
+  cursor: default;
+  user-select: none;
+}
+
+.label-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.label-price {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.label-unit {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.label-move {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.label-credit {
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Old prices: every figure muted, never re-colored. */
+.label-frame.stale .label-price,
+.label-frame.stale .label-move {
+  color: var(--text-muted);
+}
