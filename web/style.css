@@ -581,9 +581,6 @@ h1 {
   background: var(--tag-pink-bg);
   color: var(--tag-pink-ink);
 }
-.tag-soon {
-  font-weight: 700;
-}
 
 .points {
   max-width: 36em;

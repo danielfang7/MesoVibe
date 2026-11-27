@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MesoVibe: your MapleStory Classic World companion</title>
-  <meta name="description" content="Free, open-source companion for MapleStory Classic World. Whispers, party and friend chat in their own tabs, EXP and loot tracking, and more. It reads your screen and never touches the game.">
+  <meta name="description" content="Free, open-source companion for MapleStory Classic World. Free Market prices under item tooltips, EXP and loot tracking, whispers, party and friend chat in their own tabs, and more. It reads your screen and never touches the game.">
   <link rel="canonical" href="https://mesovibe.com/">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://mesovibe.com/">
@@ -119,14 +119,14 @@
           <figcaption>A real game tooltip with MesoVibe's label under it. The week's move is an example.</figcaption>
         </figure>
         <div class="feature-text">
-          <p class="tag tag-orange">Prices <span class="tag-soon">· Coming soon</span></p>
+          <p class="tag tag-orange">Prices</p>
           <h2 id="price-title">Check Free Market prices</h2>
           <p>Point at an item in your inventory, equipment window, an NPC shop or storage, cash items included, and MesoVibe shows its usual Free Market price right under the game's tooltip, with how much it moved this week.</p>
           <ul class="points">
             <li>Prices from <a href="https://cozy.markets">Cozy Markets</a>, for your world: Windia or Zenith. Cozy Markets isn't part of MesoVibe.</li>
             <li>The usual price is an estimate from what players list and sell. A scrolled item can be worth much more or less.</li>
             <li>The first few items you point at teach MesoVibe the game's letters, only once. If a name stays unread, pick it in the Prices tab.</li>
-            <li>Once it ships, MesoVibe will download the price list from mesovibe.com a few times a day. The request carries no account, game or session data. Like any download, our host sees your IP address.</li>
+            <li>MesoVibe downloads the price list from mesovibe.com a few times a day. The request carries no account, game or session data. Like any download, our host sees your IP address.</li>
           </ul>
         </div>
       </section>
@@ -214,7 +214,7 @@
           <summary><span>What can MesoVibe see?</span><svg class="faq-marker" viewBox="0 0 16 16" aria-hidden="true"><rect class="h" x="2" y="7" width="12" height="2"/><rect class="v" x="7" y="2" width="2" height="12"/></svg></summary>
           <div class="answer">
             <p>Only the MapleStory window. It can't see your other apps, your browser or your desktop.</p>
-            <p>Inside the game, it reads a few spots: the EXP bar, the HP and MP numbers, the quick slots, the chat box, the map's name on the minimap, and your meso total while your inventory, an NPC shop or storage is open. It doesn't record video of your game.</p>
+            <p>Inside the game, it reads a few spots: the EXP bar, the HP and MP numbers, the quick slots, the chat box, the map's name on the minimap, and your meso total while your inventory, an NPC shop or storage is open. With "Prices next to item tooltips" on, it also reads the name in the tooltip of the item you point at. It doesn't record video of your game.</p>
             <p>You can check this yourself: open "What MesoVibe sees" in the app to see exactly what it's reading right now.</p>
           </div>
         </details>
@@ -249,7 +249,7 @@
             <ul class="points">
               <li>It's a small, separate app. It doesn't run inside the game.</li>
               <li>It glances at the game 4 times a second, not every time the game draws a new frame.</li>
-              <li>Most of the time it copies only a strip along the bottom of the game, where the EXP bar, the HP and MP numbers, the quick slots and the chat box are. About once a second it copies the game's picture to look for your meso total, and more often while your inventory, a shop or storage is open. After each map change and every 30 seconds, it copies it to read the map's name. It never copies your whole screen.</li>
+              <li>Most of the time it copies only a strip along the bottom of the game, where the EXP bar, the HP and MP numbers, the quick slots and the chat box are. About once a second it copies the game's picture to look for your meso total, and more often while your inventory, a shop or storage is open, or while an item's tooltip is in view. After each map change and every 30 seconds, it copies it to read the map's name. It never copies your whole screen.</li>
               <li>When the game is minimized or closed, it stops looking and waits.</li>
             </ul>
             <p>If you ever do notice a slowdown, turn on Safe mode in Settings and <a href="https://github.com/danielfang7/MesoVibe/issues">tell us on GitHub</a>.</p>
