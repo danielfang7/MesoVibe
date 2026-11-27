@@ -900,6 +900,36 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
+  // A name MesoVibe is still learning offers the items it could be: a pick goes back with the name's
+  // token and shows the item; "None of these" goes back with none. While the label is learning the
+  // game's letters, the how-to line and What MesoVibe sees say so. Fails if a stuck name can't be
+  // taught from the tab, or the first minutes go unexplained.
+  await t.test("a name being learned is taught from the Prices tab, and learning is explained", async () => {
+    const page = await openPage(devtools, `${at("prices")}&tooltips=learning`);
+    await page.until(`document.querySelector(".strip")`, "the panel");
+    await page.evaluate(`document.querySelector('[aria-label="Prices"]').click()`);
+    await page.until(`${textOf("price-how")}?.startsWith("Point at a few different items")`, "the learning how-to line");
+    await page.until(`typeof window.__mockPoint === "function"`, "pointing hooked up");
+    const stuck = (token) =>
+      `window.__mockPoint({ ids: [], stuck: { token: ${token}, candidates: [{ name: "Work Gloves", ids: [1082000] }, { name: "Mystery Hat", ids: [9999] }] } })`;
+    const names = `[...document.querySelectorAll('[data-key="price-teach-list"] button.price-row')].map((b) => b.querySelector(".price-name").textContent)`;
+    await page.evaluate(stuck(7));
+    await page.until(`${textOf("price-teach")} === "Which item is this?"`, "the items it could be");
+    assert.deepEqual(await page.evaluate(names), ["Work Gloves", "Mystery Hat"]);
+    await page.evaluate(`document.querySelector('[data-key="price-teach-list"] button.price-row').click()`);
+    await page.until(`${textOf("price-title")} === "Work Gloves"`, "the item picked");
+    assert.deepEqual(await page.evaluate(`window.__mockTaught`), [[7, "Work Gloves"]]);
+    await page.evaluate(stuck(8));
+    await page.until(`${textOf("price-teach")} === "Which item is this?"`, "the next name being learned");
+    await page.evaluate(`document.querySelector('[data-key="price-teach-none"]').click()`);
+    await page.until(`document.querySelector('[data-key="price-teach"]') === null`, "the list closed");
+    assert.deepEqual(await page.evaluate(`window.__mockTaught`), [[7, "Work Gloves"], [8, null]]);
+    await page.evaluate(`document.querySelector('[aria-label="What MesoVibe sees"]').click()`);
+    assert.match(await page.until(textOf("sees-item-names"), "the item names line"), /Learning the game's letters from the items you point at\. Only the first time\.$/);
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
   // "Prices next to item tooltips" is on at first, and What MesoVibe sees lists the tooltips it reads
   // only while it's on. Fails if the switch or the disclosure drifts from what's read.
   await t.test("Settings switches the price label, and What MesoVibe sees lists tooltips only while it's on", async () => {
@@ -946,6 +976,29 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await fresh.evaluate(`document.querySelector('[data-key="label-move"]')`), null);
     assert.equal(await fresh.evaluate(`document.body.innerText.includes("—")`), false);
     fresh.close();
+
+    // An untradable copy: what tradable copies sell for, muted, and the word in the move's place.
+    const untradable = await openPage(devtools, at("labeluntradable", "label.html"));
+    await untradable.until(textOf("label-price"), "the untradable label");
+    assert.equal(await untradable.evaluate(textOf("label-price")), "1.33M");
+    assert.equal(await untradable.evaluate(textOf("label-untradable")), "Untradable");
+    assert.equal(await untradable.evaluate(`document.querySelector('[data-key="label-move"]')`), null);
+    assert.equal(await untradable.evaluate(`document.querySelector(".label-frame").classList.contains("stale")`), true);
+    untradable.close();
+
+    // While a name's letters are being learned: the same card says so, and where to teach it.
+    for (const [scenario, top, second] of [
+      ["labellearn", "Learning item names", "Point at a few more items"],
+      ["labelpick", "Learning this name", "Pick it in the Prices tab"],
+    ]) {
+      const learning = await openPage(devtools, at(scenario, "label.html"));
+      await learning.until(textOf("label-learning"), scenario);
+      assert.equal(await learning.evaluate(textOf("label-learning")), top);
+      assert.equal(await learning.evaluate(textOf("label-credit")), second);
+      assert.equal(await learning.evaluate(`document.querySelector('[data-key="label-price"]')`), null);
+      assert.equal(await learning.evaluate(`document.querySelector(".label-card").getBoundingClientRect().height`), 52);
+      learning.close();
+    }
 
     const old = await openPage(devtools, at("labelold", "label.html"));
     await old.until(textOf("label-price"), "the old label");

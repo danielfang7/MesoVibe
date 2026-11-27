@@ -5,7 +5,7 @@ import { formatCompact, formatDigits } from "@mesovibe/sdk";
 
 import { clockTime } from "./chatlines.js";
 import { h, replace } from "./dom.js";
-import type { Host, PriceDetail, PriceMovers, PriceRow, PriceStatus, World } from "./ipc.js";
+import type { Candidate, Host, Pointed, PriceDetail, PriceMovers, PriceRow, PriceStatus, World } from "./ipc.js";
 
 export const WORLDS: [World, string][] = [
   ["windia", "Windia"],
@@ -195,10 +195,15 @@ export class PricesTab {
   private cleared: { ids: number[]; until: number } | null = null;
   /** The price label is on, so the tab can follow what the player points at. */
   private pointing = false;
-  /** The items last pointed at in game, shown when the tab opens. */
-  private lastPointed: number[] | null = null;
+  /** What was last pointed at in game, shown when the tab opens. */
+  private lastPointed: Pointed | null = null;
   /** Several items the game names alike, to pick from ("Which item was it?"). */
   private which: PriceRow[] | null = null;
+  /** A name MesoVibe is still learning, and the items it could be ("Which item is this?"): the
+   * player's pick teaches it, and its token goes back with the answer. */
+  private teach: { token: number; candidates: Candidate[]; rows: PriceRow[] } | null = null;
+  /** The price label is still learning the game's letters, which changes the how-to line. */
+  private learning = false;
 
   private readonly input: HTMLInputElement;
   private readonly live: HTMLElement;
@@ -290,19 +295,45 @@ export class PricesTab {
     if (this.open) this.paintMain();
   }
 
-  /**
-   * The item the player points at in game. With the tab open and nothing typed in the search, the
-   * detail follows it; opened later, the tab shows the last one. The tab never switches by
-   * itself and never clears what the player typed.
-   */
-  pointed(ids: number[]): void {
-    this.lastPointed = ids;
-    if (this.open) this.follow(ids);
+  /** Whether the price label is still learning the game's letters (only the first time). */
+  setLearning(on: boolean): void {
+    if (on === this.learning) return;
+    this.learning = on;
+    if (this.open) this.paintMain();
   }
 
-  private follow(ids: number[]): void {
+  /**
+   * What the player points at in game. With the tab open and nothing typed in the search, the
+   * detail follows it; opened later, the tab shows the last one. The tab never switches by
+   * itself and never clears what the player typed. A name MesoVibe is still learning shows the
+   * items it could be, to pick from.
+   */
+  pointed(pointed: Pointed): void {
+    this.lastPointed = pointed;
+    if (this.open) this.follow(pointed);
+  }
+
+  private follow(pointed: Pointed): void {
     const typing = this.query.trim() !== "" || document.activeElement === this.input;
-    if (typing || ids.length === 0) return;
+    if (typing) return;
+    const { ids, stuck } = pointed;
+    if (stuck !== null) {
+      if (this.teach?.token === stuck.token) return;
+      const first = stuck.candidates.map((c) => c.ids[0]).filter((id): id is number => id !== undefined);
+      void this.host.priceRows(first, this.world).then((found) => {
+        if (this.query.trim() !== "") return;
+        // Every candidate gets a row, priced or not.
+        const rows = stuck.candidates.map(
+          (c) => found.find((r) => r.id === c.ids[0]) ?? { id: c.ids[0] ?? 0, name: c.name, gender: null, usual: null, change: null, npc: null },
+        );
+        this.teach = { token: stuck.token, candidates: stuck.candidates, rows };
+        this.which = null;
+        this.paintMain();
+      });
+      return;
+    }
+    if (ids.length === 0) return;
+    this.teach = null;
     if (ids.length === 1) {
       const [id] = ids as [number];
       if (this.shown?.id !== id || this.which !== null) void this.choose(id);
@@ -392,6 +423,7 @@ export class PricesTab {
     const detail = await this.host.priceItem(id, this.world);
     if (detail === null) return;
     this.shown = detail;
+    this.teach = null;
     this.input.value = "";
     this.query = "";
     this.results = [];
@@ -495,6 +527,19 @@ export class PricesTab {
     else this.input.removeAttribute("aria-activedescendant");
     if (searching) {
       replace(this.main, this.resultsList());
+    } else if (this.teach !== null) {
+      const { token, candidates, rows } = this.teach;
+      replace(
+        this.main,
+        h("h2", { class: "price-title", attrs: { "data-key": "price-teach" } }, "Which item is this?"),
+        h("p", { class: "text muted" }, "MesoVibe is still learning this name. Pick it once and it's read from then on."),
+        this.rowButtons(rows, "price-teach-list", (_row, i) => this.answer(token, candidates[i] ?? null)),
+        h(
+          "button",
+          { class: "button secondary", attrs: { type: "button", "data-key": "price-teach-none" }, on: { click: () => this.answer(token, null) } },
+          "None of these",
+        ),
+      );
     } else if (this.which !== null) {
       replace(
         this.main,
@@ -504,7 +549,11 @@ export class PricesTab {
     } else if (this.shown !== null) {
       replace(this.main, ...this.detail(this.shown));
     } else if (this.recentIds.length === 0) {
-      const how = this.pointing ? "Point at an item in game, or search for one." : "Search for an item to see its Free Market price.";
+      const how = !this.pointing
+        ? "Search for an item to see its Free Market price."
+        : this.learning
+          ? "Point at a few different items in game so MesoVibe can learn their names, or search for one."
+          : "Point at an item in game, or search for one.";
       replace(this.main, h("p", { class: "text muted", attrs: { "data-key": "price-how" } }, how));
     } else {
       replace(this.main);
@@ -555,14 +604,29 @@ export class PricesTab {
     ];
   }
 
-  /** A list of items as buttons, each named for its item: Recently checked and Biggest moves. */
-  private rowButtons(rows: PriceRow[], key: string): HTMLElement {
+  /** A list of items as buttons, each named for its item: Recently checked, Biggest moves and the
+   * pick lists. A button shows its item, unless `pick` says otherwise. */
+  private rowButtons(rows: PriceRow[], key: string, pick?: (row: PriceRow, i: number) => void): HTMLElement {
     return h(
       "div",
       { class: "price-list", attrs: { "data-key": key } },
       this.header(),
-      ...rows.map((row) => h("button", { class: "price-row", attrs: { type: "button" }, on: { click: () => void this.choose(row.id) } }, ...this.cells(row))),
+      ...rows.map((row, i) =>
+        h(
+          "button",
+          { class: "price-row", attrs: { type: "button" }, on: { click: () => (pick ? pick(row, i) : void this.choose(row.id)) } },
+          ...this.cells(row),
+        ),
+      ),
     );
+  }
+
+  /** The player's answer to "Which item is this?": the item, which the tab then shows, or none. */
+  private answer(token: number, candidate: Candidate | null): void {
+    void this.host.teachTooltipName(token, candidate?.name ?? null).catch(() => {});
+    this.teach = null;
+    if (candidate !== null) this.follow({ ids: candidate.ids, stuck: null });
+    else this.paintMain();
   }
 
   private detail(item: PriceDetail): Node[] {

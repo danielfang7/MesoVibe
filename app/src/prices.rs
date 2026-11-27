@@ -202,18 +202,29 @@ impl Prices {
         }
     }
 
-    /// The names of priced items the game's item list doesn't have (cash-shop items, mostly), in
-    /// either world: the tooltip reader tells items apart from them and never names them.
-    pub fn other_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = [&self.windia, &self.zenith]
+    /// The priced items the game's item list doesn't have (cash-shop items, mostly), in either
+    /// world, by name with their game ids: the tooltip reader tells them apart from listed items
+    /// and names them like any item, so they get a price label too.
+    pub fn other_names(&self) -> Vec<(String, Vec<u32>)> {
+        let mut by_name: std::collections::BTreeMap<String, Vec<u32>> = Default::default();
+        for item in [&self.windia, &self.zenith]
             .iter()
             .flat_map(|world| world.items.values())
             .filter(|item| game_item(item.game_id).is_none())
-            .map(|item| item.name.clone())
-            .collect();
-        names.sort();
-        names.dedup();
-        names
+        {
+            by_name
+                .entry(item.name.clone())
+                .or_default()
+                .push(item.game_id);
+        }
+        by_name
+            .into_iter()
+            .map(|(name, mut ids)| {
+                ids.sort_unstable();
+                ids.dedup();
+                (name, ids)
+            })
+            .collect()
     }
 }
 
@@ -561,6 +572,9 @@ pub struct LabelView {
     /// When the prices were updated, in epoch milliseconds, once they're old: the figures turn
     /// muted and the credit row says "from Nov 23".
     pub old_since_ms: Option<u64>,
+    /// This copy can't be traded (the game's "Untradable" notice): the price is what tradable
+    /// copies sell for, so it's muted and says so.
+    pub untradable: bool,
 }
 
 /// The label for the items a tooltip names (one, or a few the game names alike), from prices
@@ -600,6 +614,7 @@ pub fn label(prices: Option<&Prices>, world: World, ids: &[u32], now_ms: u64) ->
             World::Zenith => "Zenith",
         },
         old_since_ms: (age >= STALE_MS).then_some(updated),
+        untradable: false,
     })
 }
 
@@ -1368,10 +1383,13 @@ pub(crate) mod tests {
         }
     }
 
-    // The cash-shop items the price file prices but the game's item list doesn't have, for the
-    // tooltip reader to tell apart. Fails if a listed item or a duplicate gets in.
+    // The cash-shop items the price file prices but the game's item list doesn't have, with their
+    // ids, for the tooltip reader to name. Fails if a listed item, a duplicate or a missing id gets in.
     #[test]
     fn other_names_are_the_priced_items_the_item_list_lacks() {
-        assert_eq!(sample().other_names(), vec!["Sparkly Cash Hat".to_string()]);
+        assert_eq!(
+            sample().other_names(),
+            vec![("Sparkly Cash Hat".to_string(), vec![9_999_999])]
+        );
     }
 }

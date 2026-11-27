@@ -1,7 +1,8 @@
 //! What MesoVibe keeps on this computer: settings, each plugin's own data (JSON files), and the
 //! shapes the readers named (the EXP bar's digits in `exp-bar.txt`, the meso total's in
 //! `meso-total.txt`, the item tooltips' letters in `tooltip-font.txt`, so later sessions read from
-//! the first frame), all in the app's data folder.
+//! the first frame, and the names the player said aren't items in `tooltip-dismissed.txt`), all in
+//! the app's data folder.
 //! Nothing leaves the device.
 //!
 //! Writes go to a temporary file that is then renamed over the old one, so a crash never leaves a
@@ -36,6 +37,10 @@ pub enum Learned {
     /// The item tooltips' name letters
     /// ([`mesovibe_engine::recognizers::tooltip::TooltipReader::knowledge`]).
     TooltipFont,
+    /// Names the player said in the Prices tab are none of the listed items
+    /// ([`mesovibe_engine::recognizers::tooltip::TooltipReader::dismissed_knowledge`]). Its own
+    /// file, so a MesoVibe that doesn't know it still reads `tooltip-font.txt`.
+    TooltipDismissed,
 }
 
 impl Learned {
@@ -44,6 +49,7 @@ impl Learned {
             Learned::ExpBar => "exp-bar.txt",
             Learned::MesoTotal => "meso-total.txt",
             Learned::TooltipFont => "tooltip-font.txt",
+            Learned::TooltipDismissed => "tooltip-dismissed.txt",
         }
     }
 }

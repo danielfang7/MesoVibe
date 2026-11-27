@@ -61,6 +61,9 @@ pub enum Command {
     Retry,
     /// The "What MesoVibe sees" view opened or closed.
     Watch(bool),
+    /// The player's answer in the Prices tab for the name being learned with this token: the item
+    /// it is, or none of the listed ones (`None`).
+    TeachTooltip { token: u64, choice: Option<String> },
 }
 
 /// The handle the app keeps to its engine thread.
@@ -132,6 +135,9 @@ pub struct Status {
     /// How the quick slots are read: `reading`, `not_found` or `unsupported` (at this game size),
     /// or `None` while reading is off. Plugins hear it as `Readers.slots`.
     pub slots: Option<QuickSlotState>,
+    /// How item tooltips are read for the price label: `learning` (the game's letters, from the
+    /// items the player points at) or `reading`; `None` while the label or reading is off.
+    pub tooltips: Option<&'static str>,
     pub at_ms: u64,
 }
 
@@ -212,6 +218,11 @@ fn run(app: &AppHandle, inbox: &Receiver<Command>, mut reading: bool) {
                 Command::Watch(on) => {
                     watching = on;
                     last_snapshot = None;
+                }
+                Command::TeachTooltip { token, choice } => {
+                    if let Some(runner) = runner.as_mut() {
+                        label.teach(app, runner, token, choice.as_deref());
+                    }
                 }
             }
         }
@@ -297,7 +308,7 @@ fn tick(
         .is_some_and(|p| dock::fills_display(p, &dock::displays(app)));
     let _ = app.emit(
         "engine://status",
-        status(&tick, runner, blocked.clone(), full_screen),
+        status(&tick, runner, blocked.clone(), full_screen, label.state()),
     );
     let chat_box = match &tick.chat {
         Some(Ok(reading)) => reading.place,
@@ -433,6 +444,7 @@ fn off_status() -> Status {
         map: None,
         mesos: None,
         slots: None,
+        tooltips: None,
         at_ms: now_ms(),
     }
 }
@@ -442,6 +454,7 @@ fn status<B: Backend>(
     runner: &Runner<B>,
     blocked: Option<String>,
     full_screen: bool,
+    tooltips: Option<&'static str>,
 ) -> Status {
     let (exp, unreadable) = match &tick.exp {
         Some(Ok(r)) => (
@@ -503,6 +516,10 @@ fn status<B: Backend>(
         }),
         mesos: Some(runner.meso_state()),
         slots: Some(runner.quick_slot_state()),
+        tooltips: match tick.state {
+            CaptureState::Capturing => tooltips,
+            _ => None,
+        },
         at_ms: now_ms(),
     }
 }

@@ -31,6 +31,7 @@ fn main() {
             "set_price_recent",
             "set_price_world",
             "set_price_label",
+            "teach_tooltip_name",
             "open_price_page",
         ]),
     ))

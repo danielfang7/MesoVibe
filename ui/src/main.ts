@@ -1047,6 +1047,20 @@ function shell(initial: Settings): void {
         reading && status?.slots
           ? h("div", { class: "reading-box", attrs: { "data-key": "sees-slots" } }, h("span", { class: "label" }, "Quick slots"), h("span", {}, slotsLine(status.slots)))
           : null,
+        reading && status?.tooltips
+          ? h(
+              "div",
+              { class: "reading-box", attrs: { "data-key": "sees-item-names" } },
+              h("span", { class: "label" }, "Item names"),
+              h(
+                "span",
+                {},
+                status.tooltips === "learning"
+                  ? "Learning the game's letters from the items you point at. Only the first time."
+                  : "Read when you point at an item while your inventory, equipment window, an NPC shop or storage is open.",
+              ),
+            )
+          : null,
         h(
           "dl",
           { class: "key-value" },
@@ -1351,6 +1365,7 @@ function shell(initial: Settings): void {
   const fullScreen = fullScreenWatch();
   void host.onStatus((status) => {
     panel.status = status;
+    pricesTab.setLearning(status.tooltips === "learning");
     panel.longDark = dark(status);
     panel.fullScreenUnread = fullScreen(status);
     if (status.exp?.confirmed) panel.lastReadAt = status.atMs;
@@ -1427,7 +1442,7 @@ function shell(initial: Settings): void {
   void host.onUpdateStatus(setUpdate);
   void host.updateStatus().then(setUpdate);
   void host.onPriceStatus((status) => pricesTab.setStatus(status));
-  void host.onPricePointed((ids) => pricesTab.pointed(ids));
+  void host.onPricePointed((pointed) => pricesTab.pointed(pointed));
   void host.priceStatus().then((status) => pricesTab.setStatus(status));
   // Keys reach MesoVibe only while its own panel has focus, never from the game.
   document.addEventListener("keydown", (event) => {

@@ -25,6 +25,7 @@ import type {
   Host,
   LabelHost,
   LabelShown,
+  Pointed,
   Settings,
   Startup,
   Status,
@@ -176,6 +177,13 @@ export function mockHost(scenario: string): Host {
       map: null,
       mesos: settings.safeMode ? null : ("reading" as const),
       slots: settings.safeMode ? null : ("reading" as const),
+      // `&tooltips=learning` shows the price label still learning the game's letters.
+      tooltips:
+        settings.safeMode || !settings.priceLabel
+          ? null
+          : new URLSearchParams(location.search).get("tooltips") === "learning"
+            ? ("learning" as const)
+            : ("reading" as const),
       fullScreen: false,
     };
     if (!base.reading) return { ...base, state: "off", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
@@ -310,8 +318,15 @@ export function mockHost(scenario: string): Host {
     setPriceWorld: async (world) => (settings = { ...settings, priceWorld: world }),
     setPriceLabel: async (on) => (settings = { ...settings, priceLabel: on }),
     onPricePointed: async (handler) => {
-      // The panel tests point at items with `window.__mockPoint([id])`.
-      (window as unknown as { __mockPoint: (ids: number[]) => void }).__mockPoint = handler;
+      // The panel tests point at items with `window.__mockPoint([id])`, or at a name being learned
+      // with `window.__mockPoint({ ids: [], stuck: { token, candidates } })`.
+      (window as unknown as { __mockPoint: (pointed: number[] | Pointed) => void }).__mockPoint = (pointed) =>
+        handler(Array.isArray(pointed) ? { ids: pointed, stuck: null } : pointed);
+    },
+    teachTooltipName: async (token, name) => {
+      // The panel tests read the answers sent from `window.__mockTaught`.
+      const w = window as unknown as { __mockTaught?: [number, string | null][] };
+      (w.__mockTaught ??= []).push([token, name]);
     },
   };
 }
@@ -319,10 +334,12 @@ export function mockHost(scenario: string): Host {
 /**
  * The price label's stand-in (label.html): `?mock=label` a fresh price, `labelold` two-day-old
  * prices, `labelnpc` an item with no Free Market price, `labelwide` a card wider than the window
- * would give.
+ * would give, `labelnew` a price with no week yet, `labeluntradable` an untradable copy,
+ * `labellearn` a name being learned, `labelpick` one the Prices tab can teach.
  */
 export function mockLabelHost(scenario: string): LabelHost {
-  const base: LabelShown = { usual: 21_000_000, change: 0.08, npc: 20_000, world: "Windia", oldSinceMs: null, cardWidth: 236, cardLeft: 8 };
+  const base: LabelShown = { usual: 21_000_000, change: 0.08, npc: 20_000, world: "Windia", oldSinceMs: null, untradable: false, learning: null, cardWidth: 236, cardLeft: 8 };
+  const learning = (pick: boolean): LabelShown => ({ learning: { pick }, cardWidth: 236, cardLeft: 8 });
   const view: LabelShown =
     scenario === "labelold"
       ? { ...base, change: -0.03, oldSinceMs: Date.now() - 48 * 60 * 60 * 1000 }
@@ -332,7 +349,13 @@ export function mockLabelHost(scenario: string): LabelHost {
           ? { ...base, cardWidth: 180 }
           : scenario === "labelnew"
             ? { ...base, usual: 1_050, change: null, cardWidth: 288 }
-            : base;
+            : scenario === "labeluntradable"
+              ? { ...base, usual: 1_333_333, untradable: true }
+              : scenario === "labellearn"
+                ? learning(false)
+                : scenario === "labelpick"
+                  ? learning(true)
+                  : base;
   return {
     onView: async (handler) => handler(view),
   };

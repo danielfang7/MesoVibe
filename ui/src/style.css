@@ -1574,6 +1574,12 @@ html.label-page body {
   white-space: nowrap;
 }
 
+/* While a name's letters are being learned: the first row in words, not figures. */
+.label-learning {
+  color: var(--text);
+  font-size: 14px;
+}
+
 .label-credit {
   color: var(--text-muted);
   font-size: 13px;

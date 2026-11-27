@@ -128,17 +128,35 @@ export interface Settings {
 
 /** What the price label over the game says (app/src/label.rs). */
 export interface LabelShown {
-  /** The usual Free Market price, or none: then `npc` stands in, with "No Free Market price". */
-  usual: number | null;
-  change: number | null;
-  npc: number | null;
+  /** The usual Free Market price, or none: then `npc` stands in, with "No Free Market price".
+   * Absent, with the rest of the price, while the card says the name is being learned. */
+  usual?: number | null;
+  change?: number | null;
+  npc?: number | null;
   /** The world's name, for the credit row. */
-  world: string;
+  world?: string;
   /** When old prices were last updated: the figures turn muted and the credit row dates them. */
-  oldSinceMs: number | null;
+  oldSinceMs?: number | null;
+  /** This copy can't be traded: the price is muted and says "Untradable". */
+  untradable?: boolean;
+  /** The name's letters are still being learned; `pick`: the Prices tab can teach it. */
+  learning: { pick: boolean } | null;
   /** The card's width and the room left of it in the window, in pixels. */
   cardWidth: number;
   cardLeft: number;
+}
+
+/** One item a name being learned could be. */
+export interface Candidate {
+  name: string;
+  ids: number[];
+}
+
+/** What the player points at in game: the items named, or a name being learned that the Prices tab
+ * can teach (its token goes back with the answer). */
+export interface Pointed {
+  ids: number[];
+  stuck: { token: number; candidates: Candidate[] } | null;
 }
 
 /** "Open with MapleStory Classic": the OS login item (app/src/presence.rs). */
@@ -237,6 +255,9 @@ export interface Status {
   mesos: MesoState | null;
   /** How the quick slots are read; null while reading is off. */
   slots: QuickSlotState | null;
+  /** How item tooltips are read for the price label: learning the game's letters, or reading;
+   * null (or absent) while the label or reading is off. */
+  tooltips?: "learning" | "reading" | null;
   atMs: number;
 }
 
@@ -286,7 +307,9 @@ export interface Host {
   /** "Prices next to item tooltips" on or off. */
   setPriceLabel(on: boolean): Promise<Settings>;
   /** The item the player points at in game (a few when the game names them alike). */
-  onPricePointed(handler: (ids: number[]) => void): Promise<unknown>;
+  onPricePointed(handler: (pointed: Pointed) => void): Promise<unknown>;
+  /** The answer to "Which item is this?": the item's name, or `null` for "None of these". */
+  teachTooltipName(token: number, name: string | null): Promise<void>;
   /** Opens the item's page on Cozy Markets, or with no item Cozy's front page, in the browser. */
   openPricePage(id: number | null, world: World): Promise<void>;
 }
@@ -334,7 +357,8 @@ const tauri: Host = {
   setPriceRecent: (ids) => invoke<void>("set_price_recent", { ids }),
   setPriceWorld: (world) => invoke<Settings>("set_price_world", { world }),
   setPriceLabel: (on) => invoke<Settings>("set_price_label", { on }),
-  onPricePointed: (handler) => hear<{ ids: number[] }>("prices://pointed", (pointed) => handler(pointed.ids)),
+  onPricePointed: (handler) => hear<Pointed>("prices://pointed", handler),
+  teachTooltipName: (token, name) => invoke<void>("teach_tooltip_name", { token, name }),
   openPricePage: (id, world) => invoke<void>("open_price_page", { id, world }),
 };
 
