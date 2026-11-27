@@ -6,8 +6,10 @@
 // Restart to update), `updatefail` (GitHub couldn't be reached; Check now then finds nothing)
 // `unreadable` (the Session Tracker's saved data can't be opened the first time it's read), and
 // `loot` (play with pickups: a map read from the minimap, mesos every few kills, a second map
-// after a while), and `site` (a steady session for the website's pictures: level 41 at 39%, mesos
-// every few kills, no deaths, no map).
+// after a while), and `site` (a steady session for the website's pictures, on the game picture's
+// map: level 41, mesos every few kills, a Meat or a Lemon from the quick slots when HP or MP runs
+// low, loot sold at a shop once, no deaths; it reaches 39%, the game picture's EXP, about 47
+// minutes in).
 // The mini-HUD page (hud.html) takes `grind`, `learning` and `blocked`; the chat overlay page
 // (chat.html) takes `grind`; the price label page (label.html) takes `label`, `labelold`,
 // `labelnpc`, `labelwide`, `labelnew`, `labeluntradable`, `labellearn` and `labelpick`. During play, whisper, party and friend lines arrive every few
@@ -157,12 +159,21 @@ export function mockHost(scenario: string): Host {
   const storage = { reads: 0, saves: 0 };
   (window as unknown as { __mockStorage: typeof storage }).__mockStorage = storage;
   const started = Date.now();
-  let exp = scenario === "levelup" ? NEEDED - 400 : scenario === "site" ? 140_520 : 230_000;
+  let exp = scenario === "levelup" ? NEEDED - 400 : scenario === "site" ? 24_600 : 230_000;
   let level = scenario === "site" ? 41 : 42;
   let lastGain = 0;
   /** The `loot` scenario's meso total, as the inventory shows it, and the last one sent. */
   let mesos = 1_204_330;
   let sentMesos = 0;
+  /**
+   * The `site` scenario's HP and MP, its Meat and Lemon counts in quick slots 0 and 1, and the
+   * slots whose new count is sent on the next tick: the engine sends a slot's change a frame after
+   * the HP or MP rise that goes with it.
+   */
+  const pots = { hp: 1_180, mp: 980, counts: [214, 188] as [number, number], slotsSent: false, due: [] as number[] };
+  /** The `site` scenario sells its loot at a shop this long in, once. */
+  const SALE_MS = 30 * 60_000;
+  let sold = false;
 
   const status = (): Status => {
     const now = Date.now();
@@ -213,9 +224,12 @@ export function mockHost(scenario: string): Host {
       state: "capturing",
       chat: "reading",
       // A potion every few seconds, spent again in between.
-      hpMp: { hp: 1386 - (Math.floor(t / 250) % 12) * 40, maxHp: 1386, mp: 1140 - (Math.floor(t / 250) % 9) * 16, maxMp: 1140 },
+      hpMp:
+        scenario === "site"
+          ? { hp: pots.hp, maxHp: 1386, mp: pots.mp, maxMp: 1140 }
+          : { hp: 1386 - (Math.floor(t / 250) % 12) * 40, maxHp: 1386, mp: 1140 - (Math.floor(t / 250) % 9) * 16, maxMp: 1140 },
       hpMpState: "reading",
-      map: scenario === "loot" ? { key: lootMap(t) } : null,
+      map: scenario === "loot" ? { key: lootMap(t) } : scenario === "site" ? { key: SITE_MAP } : null,
       game,
       exp: { level, exp, expShown: true, pctHundredths, needed: NEEDED, confirmed: true },
       unreadable: null,
@@ -229,6 +243,19 @@ export function mockHost(scenario: string): Host {
     for (const handler of statusHandlers) handler(s);
     // `idle`: the bar is read, but nothing is killed yet.
     if (s.exp === null || scenario === "idle") return;
+    if (scenario === "site") {
+      const slot = (index: number) => {
+        const icon = index === 0 ? "meat" : "lemon";
+        const changed: GameEvent = { type: "QuickSlotChanged", slot: index, count_key: `${icon}-${pots.counts[index]}`, icon_key: icon };
+        for (const handler of eventHandlers) handler(changed, s.atMs);
+      };
+      if (!pots.slotsSent) {
+        pots.slotsSent = true;
+        slot(0);
+        slot(1);
+      }
+      for (const index of pots.due.splice(0)) slot(index);
+    }
     // A kill every two seconds; a death once in a while.
     if (s.atMs - lastGain >= 2000) {
       lastGain = s.atMs;
@@ -250,10 +277,28 @@ export function mockHost(scenario: string): Host {
       for (const handler of eventHandlers) handler(event, s.atMs);
       if (level > before) for (const handler of eventHandlers) handler({ type: "LevelUp", level }, s.atMs);
       if (scenario === "loot" || scenario === "site") {
-        const map = scenario === "loot" ? lootMap(s.atMs - started) : null;
-        if (map !== null && map !== lastMap) {
+        const map = scenario === "loot" ? lootMap(s.atMs - started) : SITE_MAP;
+        if (map !== lastMap) {
           lastMap = map;
           for (const handler of eventHandlers) handler({ type: "MapChanged", map_key: map }, s.atMs);
+        }
+        if (scenario === "site") {
+          const reading = (): GameEvent => ({ type: "HpMpChanged", hp: pots.hp, max_hp: 1386, mp: pots.mp, max_mp: 1140, continuous: true });
+          // A hit now and then, and a skill's MP every kill; a potion when one runs low.
+          if (Math.random() < 0.25) pots.hp -= 30 + Math.round(Math.random() * 30);
+          pots.mp -= 4;
+          for (const handler of eventHandlers) handler(reading(), s.atMs);
+          for (const [index, low, amount] of [
+            [0, 1_000, 160],
+            [1, 820, 150],
+          ] as const) {
+            if ((index === 0 ? pots.hp : pots.mp) >= low) continue;
+            if (index === 0) pots.hp += amount;
+            else pots.mp += amount;
+            pots.counts[index] -= 1;
+            pots.due.push(index);
+            for (const handler of eventHandlers) handler(reading(), s.atMs);
+          }
         }
         // Mesos picked up about every other kill, with the inventory open: its total is sent, like
         // the engine's, whenever it changed.
@@ -262,6 +307,16 @@ export function mockHost(scenario: string): Host {
           sentMesos = mesos;
           const total: GameEvent = { type: "MesoChanged", total: mesos, source: "inventory" };
           for (const handler of eventHandlers) handler(total, s.atMs);
+        }
+        // The shop's total as its window opens, then after the loot is sold.
+        if (scenario === "site" && !sold && s.atMs - started >= SALE_MS) {
+          sold = true;
+          for (const amount of [mesos, mesos + 8_460]) {
+            const total: GameEvent = { type: "MesoChanged", total: amount, source: "shop" };
+            for (const handler of eventHandlers) handler(total, s.atMs);
+          }
+          mesos += 8_460;
+          sentMesos = mesos;
         }
       }
     }
@@ -430,8 +485,14 @@ function fullScreenStatus(started: number): Status {
   };
 }
 
-/** The `loot` scenario's maps: the first for two minutes, then the second. */
-const MAP_NAMES: Record<string, string> = { "0a1b2c3d4e5f6071": "Ant Tunnel I", "8192a3b4c5d6e7f8": "Ant Tunnel II" };
+/** The `site` scenario's map, the one in the website's game picture. */
+const SITE_MAP = "e45f0c2a9b7d3e61";
+/** The `loot` scenario's maps (the first for two minutes, then the second), and the `site` one. */
+const MAP_NAMES: Record<string, string> = {
+  "0a1b2c3d4e5f6071": "Ant Tunnel I",
+  "8192a3b4c5d6e7f8": "Ant Tunnel II",
+  [SITE_MAP]: "East Rocky Mountain V",
+};
 function lootMap(elapsedMs: number): string {
   return elapsedMs < 120_000 ? "0a1b2c3d4e5f6071" : "8192a3b4c5d6e7f8";
 }

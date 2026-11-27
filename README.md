@@ -54,7 +54,7 @@ pnpm tauri dev
 
 MesoVibe is licensed under the BSD 2-clause license. See [LICENSE](LICENSE).
 
-The game picture and the item picture in [web/img](web/img/) are from MapleStory Classic World and belong to Nexon; that license doesn't cover them. They're on the website only to show what MesoVibe reads and shows, with names and chat blurred.
+The game pictures in [web/img](web/img/), the game window, an item tooltip and the map name in the panel's screenshots, are from MapleStory Classic World and belong to Nexon; that license doesn't cover them. They're on the website only to show what MesoVibe reads and shows, with names and chat blurred.
 
 ### Game data
 
