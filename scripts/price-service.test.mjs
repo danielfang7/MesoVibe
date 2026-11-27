@@ -356,7 +356,10 @@ test("the cached copy lasts until just after the next scheduled run", () => {
 // vercel.json and the code both name the schedule. Fails if they drift apart.
 test("vercel.json runs the job on the schedule the code expects", async () => {
   const config = JSON.parse(await readFile(new URL("../web/vercel.json", import.meta.url), "utf8"));
-  assert.deepEqual(config.crons, [{ path: "/api/refresh", schedule: REFRESH_SCHEDULE }]);
+  assert.deepEqual(
+    config.crons.filter((cron) => cron.path === "/api/refresh"),
+    [{ path: "/api/refresh", schedule: REFRESH_SCHEDULE }],
+  );
 });
 
 // The two limits are "more than": a list that moves by exactly 20%, or exactly 5% priced 0, still
