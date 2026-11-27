@@ -262,6 +262,35 @@ id	region	name
 10005103	Dungeon	Sanctuary Entrance III
 10005104	Dungeon	Sanctuary Entrance IV
 10005105	Dungeon	The Cursed Sanctuary
+10006000	Shallow Passage	Forgotten Hollow
+10006001	Shallow Passage	Cave Fairy Sanctuary
+10006002	Shallow Passage	Cave Fairy Store
+10006003	Shallow Passage	The Faded Threshold
+10006010	Shallow Passage	Primeval Forest I
+10006020	Shallow Passage	Primeval Forest II
+10006022	Hidden Street	Hanging Gardens of Rot
+10006030	Shallow Passage	Primeval Forest III
+10006031	Hidden Street	The Valley of Death
+10006040	Shallow Passage	Forgotten Entrance I
+10006050	Shallow Passage	Forgotten Entrance II
+10006060	Shallow Passage	Forgotten Entrance III
+10006070	Shallow Passage	The End of Fleeting Light
+10006071	Shallow Passage	Forgotten Dungeon Tunnel
+10006072	Shallow Passage	The Faded Canopy
+10006080	Shallow Passage	Forbidden Entrance
+10006090	Deep Passage	Perilous Descent I
+10006100	Deep Passage	Perilous Descent II
+10006110	Deep Passage	Perilous Descent III
+10006120	Deep Passage	Decayed Tunnel I
+10006121	Hidden Street	Someone Else's Grave
+10006122	Hidden Street	Rotten House
+10006130	Deep Passage	Decayed Tunnel II
+10006140	Deep Passage	Decayed Tunnel III
+10006150	Deep Passage	Lingering Regret
+10006152	Deep Passage	Bygone Days
+10006160	Deep Passage	Precipice of Darkness
+10006161	Deep Passage	Dilapidated Tomb
+10006162	Deep Passage	Another Sanctuary
 10007000	Florina Road	Florina Beach
 10007010	Florina Road	A Look-Out Shed Around the Beach
 10007020	Florina Road	Lorang Lorang
@@ -332,5 +361,5 @@ id	region	name
 90040203	Hidden Street	G* Coconut Season
 90050000	Hidden Street	Leaving the Event
 90050001	Hidden Street	Receiving the Reward For the Event
+99999999	White Room	White Room
 900000000	Hidden Street	The Manager's Room
-900000003	Hidden Street	White Room

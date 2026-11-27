@@ -212,7 +212,11 @@ id	tab	sell	flags	name
 1002210	Equip	11400		Purple Nightfox
 1002211	Equip	11400		White Nightfox
 1002212	Equip	11400		Blood Nightfox
-1002993	Equip	1		Maplestory Patrol Hat
+1002213	Equip	6120		Blossom Antennae
+1002214	Equip	6120		Moonlight Antennae
+1002215	Equip	6120		Sprout Antennae
+1002216	Equip	6120		Moss Antennae
+1002993	Equip	1		MapleStory Patrol Hat
 1002994	Equip	1500		Mark of the Beta
 1002995	Equip	1		MapleStory Invincible Hat
 1002996	Equip	1		Dr. Lim Hat
@@ -220,6 +224,7 @@ id	tab	sell	flags	name
 1002998	Equip	1		Inkwell Hat
 1002999	Equip	1		Wizet Invincible Hat
 1003000	Equip	1400		Cap of Memories
+1003001	Equip	1		Moon Bunny Hat
 1032000	Equip	2250		Single Earring
 1032001	Equip	2250		Amethyst Earrings
 1032002	Equip	3000		Weighted Earrings
@@ -244,6 +249,7 @@ id	tab	sell	flags	name
 1032021	Equip	20700		Henesys Earrings
 1032022	Equip	20700		Kerning City Earrings
 1032023	Equip	4200		Faded Maple Leaf Earrings
+1032024	Equip	13500		Firefly Earrings
 1040000	Equip	1		Blue Striped Undershirt
 1040001	Equip			White Undershirt
 1040002	Equip			Grey T-Shirt
@@ -1020,6 +1026,13 @@ id	tab	sell	flags	name
 1302017	Equip	17500		Neocora
 1302018	Equip	21500		Red Katana
 1302019	Equip	1		Pumpkin Basket
+1302020	Equip	11500		Bamboo Sword
+1302021	Equip	5500		Newspaper Sword
+1302022	Equip	11500		Beige Umbrella
+1302023	Equip	15500		Green Umbrella
+1302024	Equip	19500		Light Purple Umbrella
+1302025	Equip	23500		Red Umbrella
+1302026	Equip	27500		Black Umbrella
 1312000	Equip			Hand Axe
 1312001	Equip	1500		Double Axe
 1312002	Equip	2500		Battle Axe
@@ -1031,6 +1044,8 @@ id	tab	sell	flags	name
 1312008	Equip	13500		Buck
 1312009	Equip	17500		Hawkhead
 1312010	Equip	21500		Mikhail
+1312011	Equip	11500		Green Paint Brush
+1312012	Equip	15500		Black Paint Brush
 1322000	Equip			Wooden Club
 1322001	Equip	1500		Steel Pipe
 1322002	Equip	1900		Leather Purse
@@ -1049,14 +1064,15 @@ id	tab	sell	flags	name
 1322015	Equip	7500		Heavy Hammer
 1322016	Equip	9500		Jacker
 1322017	Equip	13500		Knuckle Mace
-1322018	Equip	1		Blue Flowery Tube
-1322019	Equip	1		Red Flowery Tube
-1322020	Equip	1		Purple Tube
-1322021	Equip	1		Black Tube
-1322022	Equip	1		Emergency Rescue Tube
-1322023	Equip	1		Colorful Tube
+1322018	Equip	7500		Blue Flowery Tube
+1322019	Equip	11500		Red Flowery Tube
+1322020	Equip	9500		Purple Tube
+1322021	Equip	13500		Black Tube
+1322022	Equip	17500		Emergency Rescue Tube
+1322023	Equip	21500		Colorful Tube
 1322024	Equip	17500		Tamus
 1322025	Equip	21500		The Judgement
+1322026	Equip	15500		Frying Pan
 1322999	Equip	1		Wizet Secret Agent Suitcase
 1332000	Equip	250		Razor
 1332001	Equip	750		Fruit Knife
@@ -1080,6 +1096,9 @@ id	tab	sell	flags	name
 1332019	Equip	17500		Serpent's Coil
 1332020	Equip	21500		Kandine
 1332021	Equip	21500		Golden River
+1332022	Equip	13500		Plastic Bottle
+1332023	Equip	15500		Honorbound
+1332024	Equip	15500		Sworn Brother Dagger
 1372000	Equip	1500		Wooden Wand
 1372001	Equip	2500		Hardwood Wand
 1372002	Equip	3500		Metal Wand
@@ -1110,6 +1129,7 @@ id	tab	sell	flags	name
 1402008	Equip	16500		Lion's Fang
 1402009	Equip	21500		Sparta
 1402010	Equip	26500		Doombringer
+1402011	Equip	14000		Blade of Harmony
 1412000	Equip	2500		Metal Axe
 1412001	Equip	4500		Iron Axe
 1412002	Equip	4500		Pickaxe
@@ -1139,6 +1159,7 @@ id	tab	sell	flags	name
 1432006	Equip	16500		Serpent's Tongue
 1432007	Equip	21500		Holy Spear
 1432008	Equip	26500		Redemption
+1432009	Equip	14000		Bamboo Spear
 1442000	Equip	2500		Pole Arm
 1442001	Equip	3500		Iron Ball
 1442002	Equip	4500		Studded Polearm
@@ -1149,6 +1170,9 @@ id	tab	sell	flags	name
 1442007	Equip	16500		The Nine Dragons
 1442008	Equip	21500		Skylar
 1442009	Equip	26500		The Gold Dragon
+1442010	Equip	14000		Yellow Mop
+1442011	Equip	14000		White Mop
+1442012	Equip	14000		Indigo Mop
 1452000	Equip	2500		War Bow
 1452001	Equip	3500		Composite Bow
 1452002	Equip	4500		Hunter's Bow
@@ -1162,6 +1186,7 @@ id	tab	sell	flags	name
 1452010	Equip	26500		Red Hinkel
 1452011	Equip	26500		Blue Hinkel
 1452012	Equip	26500		Golden Hinkel
+1452013	Equip	14000		Magical Destruction Bow
 1462000	Equip	2500		Crossbow
 1462001	Equip	3500		Battle Crossbow
 1462002	Equip	4500		Balanche
@@ -1212,6 +1237,9 @@ id	tab	sell	flags	name
 2000006	Use	1000		Mana Elixir
 2000007	Use	5		Red Potion
 2000008	Use	22		Blue Potion
+2000009	Use	56		Hollow Extract
+2000010	Use	100		Sylka's Brew
+2000011	Use	500		Elixir
 2002000	Use	250		Warrior Potion
 2002001	Use	250		Magic Potion
 2002002	Use	250		Sniper Potion
@@ -1264,6 +1292,14 @@ id	tab	sell	flags	name
 2020021	Use	1		Blue Malady's Candy
 2020022	Use	1		Green Malady's Candy
 2020023	Use	15		Cake
+2020024	Use	1		Moon Bunny's Rice Cake
+2020025	Use	1		Moon Bunny's Flower Rice Cake
+2020026	Use	1		Moon Bunny's Fullmoon Rice Cake
+2020027	Use	100		Pumpkin Pie
+2020028	Use	1		Roasted Turkey
+2020029	Use	1		Gravy
+2020030	Use	1		Turkey Leg
+2020031	Use	1		Cranberry Sauce
 2022000	Use	112		Pure Water
 2022001	Use	40		Red Bean Porridge
 2022002	Use	1		Cider
@@ -1322,6 +1358,8 @@ id	tab	sell	flags	name
 2040321	Use	1		Earring Evasion Scroll: Intermediate
 2040322	Use	1		Earring Evasion Scroll: Greater
 2040323	Use	1		Earring Evasion Scroll: Chaos
+2040324	Use	1		Earring Crit. Damage Scroll: Lesser
+2040325	Use	1		Earring Evasion Scroll: Lesser
 2040400	Use	1		Topwear DEF Scroll: Lesser
 2040401	Use	1		Topwear DEF Scroll: Intermediate
 2040402	Use	1		Topwear DEF Scroll: Greater
@@ -1334,6 +1372,7 @@ id	tab	sell	flags	name
 2040409	Use	1		Topwear MP Scroll: Intermediate
 2040410	Use	1		Topwear MP Scroll: Greater
 2040411	Use	1		Topwear MP Scroll: Chaos
+2040412	Use	1		Topwear DEF Scroll: Lesser
 2040500	Use	1		Overall Armor DEF Scroll: Lesser
 2040501	Use	1		Overall Armor DEF Scroll: Intermediate
 2040502	Use	1		Overall Armor DEF Scroll: Greater
@@ -1354,6 +1393,10 @@ id	tab	sell	flags	name
 2040517	Use	1		Overall Armor LUK Scroll: Intermediate
 2040518	Use	1		Overall Armor LUK Scroll: Greater
 2040519	Use	1		Overall Armor LUK Scroll: Chaos
+2040520	Use	1		Overall Armor STR Scroll: Lesser
+2040521	Use	1		Overall Armor DEX Scroll: Lesser
+2040522	Use	1		Overall Armor INT Scroll: Lesser
+2040523	Use	1		Overall Armor LUK Scroll: Lesser
 2040600	Use	1		Bottomwear DEF Scroll: Lesser
 2040601	Use	1		Bottomwear DEF Scroll: Intermediate
 2040602	Use	1		Bottomwear DEF Scroll: Greater
@@ -1366,6 +1409,7 @@ id	tab	sell	flags	name
 2040609	Use	1		Bottomwear MP Scroll: Intermediate
 2040610	Use	1		Bottomwear MP Scroll: Greater
 2040611	Use	1		Bottomwear MP Scroll: Chaos
+2040612	Use	1		Bottomwear DEF Scroll: Lesser
 2040700	Use	1		Shoes Jump Scroll: Lesser
 2040701	Use	1		Shoes Jump Scroll: Intermediate
 2040702	Use	1		Shoes Jump Scroll: Greater
@@ -1394,6 +1438,8 @@ id	tab	sell	flags	name
 2040813	Use	1		Gloves Crit. Rate Scroll: Intermediate
 2040814	Use	1		Gloves Crit. Rate Scroll: Greater
 2040815	Use	1		Gloves Crit. Rate Scroll: Chaos
+2040816	Use	1		Gloves Attack Scroll: Lesser
+2040817	Use	1		Gloves Magic Attack Scroll: Lesser
 2040900	Use	1		Shield DEF Scroll: Lesser
 2040901	Use	1		Shield DEF Scroll: Intermediate
 2040902	Use	1		Shield DEF Scroll: Greater
@@ -1521,12 +1567,19 @@ id	tab	sell	flags	name
 2100005	Use	1		GM Black Sack: Rotten Mushmom Level 60
 2100006	Use	1		GM Black Sack: Jr. Balrog Level 80
 2100007	Use	1		Summoning New-Type Balrog
+2100009	Use	1		Turkey Egg
+2100010	Use	1		Black Sack: Mano
+2100011	Use	1		Black Sack: Stumpy
+2100012	Use	1		Black Sack: Mushmom
+2100013	Use	1		Black Sack: Shade
+2100014	Use	1		Black Sack: Zombie Mushmom
+2100015	Use	1		Black Sack: Rotten Mushmum
 2120000	Use	15		Pet Food
 2120001	Use	15		Pet Food
 2190000	Use	5000	untradeable	Lie Detector Test
 2190001	Use		quest,untradeable	Lie Detector Test
 2190002	Use	1		Lie Detector Test
-2210000	Use	100	untradeable	Rainbow-colored Snail Shell
+2210000	Use	100		Rainbow-colored Snail Shell
 2210001	Use		untradeable	Red Snail Invasion
 2210002	Use		untradeable	Orange Mushroom Invasion
 2210003	Use		untradeable	Ribbon Pig Invasion
@@ -1536,8 +1589,8 @@ id	tab	sell	flags	name
 2210007	Use		untradeable	Jr. Balrog Invasion
 2375000	Use	1		The Songs of Solomon
 2430000	Use		untradeable	Companion's Magic Box
-2430001	Use		untradeable	Natalie's Fashion Box (M)
-2430002	Use		untradeable	Natalie's Fashion Box (F)
+2430001	Use	1000		Nyroth’s Mystery Deco Box
+2430002	Use		untradeable	Zelya's Magic Box
 2430003	Use		untradeable	Gift for the New Journey
 2430004	Use		untradeable	Leaf Points (1,000) Exchange Coupon
 2430005	Use		untradeable	Leaf Points (5,000) Exchange Coupon
@@ -1600,6 +1653,9 @@ id	tab	sell	flags	name
 2430062	Use			Avatar Gift Box
 2430063	Use			MapleStory Community VIP Label Ring Exchange Coupon
 2430064	Use			MapleStory Community VIP Chat Ring Exchange Coupon
+2430066	Use			Turkey Exchange Coupon
+2430067	Use			Baby Turkey Carriage Exchange Coupon
+2430068	Use			Roasted Relaxer Exchange Coupon
 2450000	Use			1.5x EXP Coupon (15 min)
 2450001	Use			2x EXP Coupon (15 min)
 2450002	Use			3x EXP Coupon (15 min)
@@ -1682,6 +1738,33 @@ id	tab	sell	flags	name
 3000061	Setup	500		Painting of Rotten Mushmom
 3000062	Setup	500		Jr. Balrog Horn
 3000063	Setup	500		Crimson Balrog Helmet
+3000064	Setup	10		Hollow Bakery Basket
+3000065	Setup	10		Glowshroom Planter
+3000066	Setup	10		Hollow Oak Dresser
+3000067	Setup	10		Hollow Nest Bed
+3000068	Setup	10		Firefly Lantern
+3000069	Setup	300		Zelya’s Bronze Statue
+3000070	Setup	500		Zelya’s Golden Statue
+3000071	Setup	1000		Zelya’s Platinum Statue
+3000072	Setup	10		Glowspore Tree
+3000073	Setup	10		Wild Glowshroom
+3000074	Setup	10		Wild Plate Mushrooms
+3000075	Setup	10		Short Wild Vine
+3000076	Setup	10		Long Wild Vine
+3000077	Setup	10		Leaf Garland
+3000078	Setup	10		Fairy Kitchen Rack
+3000079	Setup	10		Mossy Display Shelf
+3000080	Setup	10		Fairy Study Books
+3000081	Setup	10		Glowspore Pendant Lights
+3000082	Setup	10		Fairy Crystal Ball
+3000083	Setup	10		Fairy Tapestry
+3000084	Setup	10		Standing Glowspore Lamp
+3000085	Setup	10		Hearthkeeper’s Lantern
+3000086	Setup	10		Roast Turkey Platter
+3000087	Setup	10		Autumn Leaf Wreath
+3000088	Setup	10		Harvest Feast Table
+3000089	Setup	10		Harvest Hay Bale
+3000090	Setup	10		Pumpkin Harvest Wagon
 3010000	Setup		untradeable	The Green Relaxer
 3010001	Setup		untradeable	The Yellow Relaxer
 3010002	Setup		untradeable	The Red Relaxer
@@ -2017,6 +2100,7 @@ id	tab	sell	flags	name
 4000156	Etc	57		Rib
 4000157	Etc	63		Pelvic Bone
 4000158	Etc	73		Horse Skull
+4000159	Etc			Primrose Seed
 4001000	Etc	250		Arwen's Glass Shoe
 4001001	Etc			Coupon
 4001002	Etc			Pass
@@ -2041,6 +2125,7 @@ id	tab	sell	flags	name
 4001021	Etc	1		Yellow Primrose Seed
 4001022	Etc	1		Blue Primrose Seed
 4001023	Etc	1		Moon Bunny's Rice Cake
+4001024	Etc			Glowing Dust
 4003000	Etc	1		Screw
 4003001	Etc	10		Processed Wood
 4003002	Etc	10		Stiff Feather
@@ -2245,6 +2330,15 @@ id	tab	sell	flags	name
 4031140	Etc	1	quest	Hearthkeeper's Journal
 4031141	Etc	1	quest	Elda's Name-Charm
 4031142	Etc	1	quest	Elda's Last Message
+4031143	Etc		quest	Alston's Ledger Page
+4031144	Etc		quest	Untainted Mushroom Cap
+4031145	Etc	1	quest	Myen's Ward Scrolls
+4031146	Etc		untradeable	Character Name Change Coupon
+4031147	Etc		quest	Pumpkin Piece
+4031148	Etc		quest	Pie Flour
+4031149	Etc		quest	Milk Jug
+4031151	Etc	1	quest,untradeable	Maple Leaf
+4031250	Etc	1	quest	Glowspore Ward
 4080000	Etc	1		Slime & Mushroom Omok Set
 4080001	Etc	1		Slime & Pig Omok Set
 4080002	Etc	1		Slime & Octopus Omok Set
