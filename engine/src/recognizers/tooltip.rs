@@ -43,13 +43,27 @@
 //! alike, so names are compared with the two folded together.
 //!
 //! Names the item list doesn't have (cash items, skills) aren't named. Given the names the game
-//! shows that aren't items ([`TooltipReader::with_other_names`]: the price service's cash items),
-//! they compete like any name and are never reported, so a cash item one letter from a listed
-//! item ("Black Kitty" and the listed "Black Nitty") isn't read as it; and then a name whose other
-//! letters are all known, which only one name in the game fits, teaches its last letter too.
+//! shows that aren't items ([`TooltipReader::with_other_names`]: the price service's cash items,
+//! with their ids), they compete like any name, so a cash item one letter from a listed item
+//! ("Black Kitty" and the listed "Black Nitty") isn't read as it; one given with ids is reported
+//! like an item, one without never is. Given them, a name whose other letters are all known, which
+//! only one name in the game fits, teaches its last letter too. A letter counts as known there when
+//! the piece is close to one learned letter and clearly farther from every other, the decoder's own
+//! measure: the box is see-through, so a letter's edge pixels change with the scene behind it and
+//! a new name's pieces are rarely shapes learned exactly.
+//!
+//! **Learning.** A name held back only by letters not learned yet is reported as such, with the
+//! listed names its known letters and widths fit ([`Stuck`]), so the player can say which one it is
+//! ([`TooltipReader::teach_name`]) or that it's none of them ([`TooltipReader::dismiss`]). A box
+//! wider than any item's (a skill's) never is: while letters are unknown a skill's name can't be
+//! told from an item's.
+//!
+//! **Untradable.** A cash item that can't be traded carries the game's orange "Untradable" notice,
+//! one centred word right under the name ([`Tooltip::untradable`]).
 //!
 //! **Trust.** An item counts once two whole frames in a row show a box of the same size with the
-//! same name ([`Tooltip::confirmed`]); it's gone on the first frame where the box isn't. The box may
+//! same name ([`Tooltip::confirmed`]), and a name being learned once they show it cut the same way;
+//! it's gone on the first frame where the box isn't. The box may
 //! have moved between the two: a tooltip follows the cursor, and a hand resting on an item drifts
 //! a few pixels between most frames. A sweep across the grid shows a new item in each frame, so it
 //! still shows nothing.
@@ -149,6 +163,21 @@ const TEACH: u32 = 2;
 /// list's names rarely fit by chance.
 const NAMES_TO_CONFIRM: usize = 2;
 const STRONG: usize = 3;
+/// The widest box an item's tooltip draws (a long name widens it a little past 288); a skill's is
+/// 428 wide, so a wider box is never an item's.
+const ITEM_MAX_WIDTH: u32 = 300;
+/// The game's "Untradable" notice: one word in one of two opaque oranges (equips, other items),
+/// centred under the name, about this wide and tall with about this much ink. Longer notices
+/// ("Account-bound. Transferable within world.") are far wider, and the scene seen through the box
+/// is never these exact colours.
+const NOTICE_ORANGE: [[u8; 3]; 2] = [[255, 170, 0], [255, 138, 24]];
+const NOTICE_TOLERANCE: u8 = 3;
+const UNTRADABLE_SIZE: (u32, u32) = (59, 9);
+const UNTRADABLE_INK: (u32, u32) = (150, 170);
+/// Rows under the name's dot where a notice line can sit.
+const NOTICE_ROWS: (u32, u32) = (8, 32);
+/// The most names a player is offered for one name being learned.
+const MAX_CANDIDATES: usize = 6;
 /// What a trusted glyph kept from before counts as having been taught by: names no list has.
 const KEPT: [usize; NAMES_TO_CONFIRM] = [usize::MAX, usize::MAX - 1];
 /// A piece may stand for up to this many touching letters.
@@ -164,11 +193,33 @@ pub struct Tooltip {
     pub items: Option<Vec<u32>>,
     /// The name as the item list writes it, when read.
     pub name: Option<String>,
-    /// The last whole frame showed a box of the same size with the same items, wherever the cursor
-    /// moved it: only then should anything be shown for it.
+    /// The last whole frame showed a box of the same size with the same items (or, for a name being
+    /// learned, the name cut the same way), wherever the cursor moved it: only then should anything
+    /// be shown for it.
     pub confirmed: bool,
     /// Why the name wasn't read, when it wasn't.
     pub unsure: Option<Unsure>,
+    /// The game's orange "Untradable" notice sits under the name: this copy can't be sold.
+    pub untradable: bool,
+    /// For a name held back only by letters not learned yet: the names it could be.
+    pub stuck: Option<Stuck>,
+}
+
+/// A name held back only by letters the reader hasn't learned, as it was last read: the listed
+/// names its known letters and pieces' widths fit, best first, for the player to say which one it
+/// is; and its pieces, which that answer teaches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stuck {
+    pub candidates: Vec<Candidate>,
+    pieces: Vec<Piece>,
+}
+
+/// One name a [`Stuck`] name could be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Candidate {
+    pub name: String,
+    pub ids: Vec<u32>,
 }
 
 /// Why a tooltip's name wasn't read.
@@ -181,7 +232,7 @@ pub enum Unsure {
     NoLetters,
     /// No listed name fits (a cash item, a skill, or a letter misread).
     NoFit,
-    /// Too many of the name's letters haven't been learned yet.
+    /// Some of the name's letters haven't been learned yet ([`Tooltip::stuck`]).
     Learning,
     /// A piece isn't close to its letter's shapes.
     Unclear,
@@ -207,6 +258,9 @@ struct Name {
     starts: HashSet<usize>,
     words: usize,
     ids: Vec<u32>,
+    /// In the game's item list. Only those teach letters from a pattern; the price service's
+    /// other names (cash items) compete there but never teach, as before they were priced.
+    listed: bool,
 }
 
 /// A piece cut from a name: its glyph's id, whether a space comes before it, and how many
@@ -217,6 +271,10 @@ struct Piece {
     space: bool,
     letters: usize,
 }
+
+/// How a name was cut: each piece's width, and whether a space comes before it. The pieces' pixels
+/// change with the scene behind the box; their cut doesn't.
+type CutShape = Vec<(u32, bool)>;
 
 /// A reading's pieces and the letters known for them then.
 type PatternKey = (Vec<Piece>, Vec<Option<String>>);
@@ -256,8 +314,15 @@ pub struct TooltipReader {
     /// The one listed name each reading's pattern fit, by the pieces and the letters known then.
     patterns: HashMap<PatternKey, Option<(usize, Vec<String>, bool)>>,
     learned: usize,
-    /// The last whole frame's hovered box and items, for two frames in a row.
-    last: Option<(Rect, Option<Vec<u32>>)>,
+    /// The last whole frame's hovered box, its items, and the cut of a name being learned, for two
+    /// frames in a row.
+    last: Option<(Rect, Option<Vec<u32>>, Option<CutShape>)>,
+    /// The last name read: its cut, and, when it was held back by letters not learned yet, what it
+    /// could be.
+    cut: Option<CutShape>,
+    stuck: Option<Stuck>,
+    /// Names the player said aren't any listed item, by their pieces' shapes and word breaks.
+    dismissed: Vec<Vec<(Glyph, bool)>>,
 }
 
 impl Default for TooltipReader {
@@ -281,26 +346,30 @@ impl TooltipReader {
             strong: HashSet::new(),
             learned: 0,
             last: None,
+            cut: None,
+            stuck: None,
+            dismissed: Vec::new(),
         }
     }
 
-    /// A reader that also tells items apart from `names` the game shows that aren't items (cash
-    /// items the price service lists): see [`TooltipReader::set_other_names`].
+    /// A reader that also tells items apart from `names` the game shows that aren't in the item list
+    /// (cash items the price service lists): see [`TooltipReader::set_other_names`].
     pub fn with_other_names<'a>(
         mut self,
-        names: impl IntoIterator<Item = &'a str>,
+        names: impl IntoIterator<Item = (&'a str, &'a [u32])>,
     ) -> TooltipReader {
         self.set_other_names(names);
         self
     }
 
-    /// Tells items apart from `names` the game shows that aren't items (cash items the price
-    /// service lists): they're matched like any name and never reported, so a cash item one
-    /// letter from a listed item ("Black Kitty", "Black Nitty") isn't read as it. Given them, a
-    /// name whose other letters are all known teaches its last letter on its own. Letters already
-    /// trusted are kept; what was half learned starts again.
-    pub fn set_other_names<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) {
-        let names: Vec<&str> = names.into_iter().collect();
+    /// Tells items apart from `names` the game shows that aren't in the item list (cash items the
+    /// price service lists), each with its ids: they're matched like any name, so a cash item one
+    /// letter from a listed item ("Black Kitty", "Black Nitty") isn't read as it. One with ids is
+    /// reported like an item; one without never is. Given them, a name whose other letters are all
+    /// known teaches its last letter on its own. Letters already trusted are kept; what was half
+    /// learned starts again.
+    pub fn set_other_names<'a>(&mut self, names: impl IntoIterator<Item = (&'a str, &'a [u32])>) {
+        let names: Vec<(&str, &[u32])> = names.into_iter().collect();
         // Names are numbered afresh, so what a glyph was taught by which name no longer holds:
         // a trusted glyph keeps its letters as kept knowledge does, the rest are taught again.
         let trusted: Vec<(u32, String)> = self
@@ -337,11 +406,12 @@ impl TooltipReader {
             return TooltipReading::default();
         };
         let tooltip = self.look(&px);
-        self.last = tooltip.as_ref().map(|t| (t.rect, t.items.clone()));
         TooltipReading { tooltip }
     }
 
     fn look(&mut self, px: &Pixels) -> Option<Tooltip> {
+        // Until a box is found this frame, there's no last box for the next one to agree with.
+        let last = self.last.take();
         let dots = find_dots(px);
         // A dot with another on its row to its left is the worn item's box: its name teaches
         // letters, and it's never reported.
@@ -366,24 +436,39 @@ impl TooltipReader {
             })
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(rect, _)| rect)?;
+        let mut stuck = None;
         let (items, name, unsure) = if on_quick_slots(px, rect) {
             (None, None, Some(Unsure::QuickSlot))
         } else {
             match self.read_name(px, (dx, dy), rect.x + rect.width - 1) {
                 Ok((name, ids)) => (Some(ids), Some(name), None),
+                Err(Unsure::Learning) => match self.stuck.take() {
+                    // Wider than any item's box (a skill's), or a name the player said is none
+                    // of the listed ones: not an item being learned.
+                    Some(s) if rect.width <= ITEM_MAX_WIDTH && !self.is_dismissed(&s.pieces) => {
+                        stuck = Some(s);
+                        (None, None, Some(Unsure::Learning))
+                    }
+                    _ => (None, None, Some(Unsure::NoFit)),
+                },
                 Err(why) => (None, None, Some(why)),
             }
         };
-        let confirmed = items.is_some()
-            && self.last.as_ref().is_some_and(|(r, i)| {
-                (r.width, r.height) == (rect.width, rect.height) && *i == items
+        let cut = stuck.as_ref().and(self.cut.clone());
+        let confirmed = (items.is_some() || cut.is_some())
+            && last.is_some_and(|(r, i, c)| {
+                (r.width, r.height) == (rect.width, rect.height) && i == items && c == cut
             });
+        let untradable = items.is_some() && untradable(px, rect, dy);
+        self.last = Some((rect, items.clone(), cut));
         Some(Tooltip {
             rect,
             items,
             name,
             confirmed,
             unsure,
+            untradable,
+            stuck,
         })
     }
 
@@ -394,11 +479,14 @@ impl TooltipReader {
         dot: (u32, u32),
         right: u32,
     ) -> Result<(String, Vec<u32>), Unsure> {
+        self.cut = None;
+        self.stuck = None;
         let cut = cut_name(px, dot, right).ok_or(Unsure::NoLetters)?;
         let (base, inner) = split_suffix(&cut);
         if base.is_empty() {
             return Err(Unsure::NoLetters);
         }
+        self.cut = Some(base.iter().map(|p| (p.glyph.width(), p.space)).collect());
         let pieces: Vec<Piece> = base
             .iter()
             .map(|p| Piece {
@@ -412,6 +500,7 @@ impl TooltipReader {
         let best = *fits.first().ok_or(Unsure::NoFit)?;
         let second = fits.get(1).map_or(u32::MAX, |f| f.cost);
         if best.unseen > 0 || best.touching > MAX_NEW_TOUCHING {
+            self.stuck = Some(self.stuck_on(&pieces, &fits));
             return Err(Unsure::Learning);
         }
         if best.worst > CLOSE {
@@ -479,18 +568,40 @@ impl TooltipReader {
 
     /// Teaches the pieces their letters when their repeated shapes fit exactly one listed name.
     fn learn_from_pattern(&mut self, pieces: &[Piece]) {
-        let known: Vec<Option<String>> = pieces
+        let exact: Vec<Option<String>> = pieces
             .iter()
             .map(|p| self.confirmed(p.glyph).map(str::to_string))
             .collect();
-        if known.iter().all(Option::is_some) {
+        if exact.iter().all(Option::is_some) {
             return;
         }
-        let key = (pieces.to_vec(), known.clone());
+        self.learn_with(pieces, &exact, false);
+        // Context: with names that aren't items told apart too, a name whose other pieces are all
+        // close to learned letters, which only one name in the game fits, teaches its last letter.
+        // Only there: everywhere else a close letter is weaker proof than an exact one.
+        if !self.others || exact.iter().filter(|k| k.is_none()).count() <= 1 {
+            return;
+        }
+        let mut close = exact;
+        for (piece, known) in pieces.iter().zip(close.iter_mut()) {
+            if known.is_none() {
+                *known = self.close_letter(piece.glyph);
+            }
+        }
+        if close.iter().filter(|k| k.is_none()).count() == 1 {
+            self.learn_with(pieces, &close, true);
+        }
+    }
+
+    /// Teaches the pieces the letters of the one listed name their pattern fits, given the letters
+    /// `known` for them. In `context_only`, only when that name is alone in the game and one piece
+    /// is left to learn.
+    fn learn_with(&mut self, pieces: &[Piece], known: &[Option<String>], context_only: bool) {
+        let key = (pieces.to_vec(), known.to_vec());
         let fit = match self.patterns.get(&key) {
             Some(fit) => fit.clone(),
             None => {
-                let fit = self.pattern_fit_one(pieces, &known);
+                let fit = self.pattern_fit_one(pieces, known);
                 self.patterns.insert(key, fit.clone());
                 fit
             }
@@ -502,7 +613,11 @@ impl TooltipReader {
         let unknown = known.iter().filter(|k| k.is_none()).count();
         // Strong: many repeats, or (when names that aren't items are told apart too) every other
         // letter already known, so only one name in the game fits.
-        if pieces.len() - distinct.len() >= STRONG || (self.others && alone && unknown <= 1) {
+        let context = self.others && alone && unknown <= 1;
+        if context_only && !context {
+            return;
+        }
+        if pieces.len() - distinct.len() >= STRONG || context {
             self.strong.insert(name);
         }
         for (piece, letters) in pieces.iter().zip(assigned) {
@@ -517,9 +632,146 @@ impl TooltipReader {
         }
     }
 
-    /// The one item name the pieces' pattern fits, with the letters each piece stands for, and
-    /// whether no other name (one that isn't an item) fits it too; `None` when no item name or
-    /// several do.
+    /// The one learned letter (or touching letters) a glyph is close to by the decoder's measure,
+    /// and clearly closer to than to any other. On the see-through box a letter's edge pixels change
+    /// with the scene behind it, so a new name's pieces are rarely the shapes learned exactly.
+    fn close_letter(&mut self, glyph: u32) -> Option<String> {
+        let letters: Vec<String> = self.shapes.keys().cloned().collect();
+        let mut costs: Vec<(u32, String)> = letters
+            .into_iter()
+            .map(|letter| (self.cost(glyph, &letter), letter))
+            .collect();
+        costs.sort();
+        match costs.as_slice() {
+            [(best, letter), rest @ ..]
+                if *best <= CLOSE
+                    && rest.first().is_none_or(|(next, _)| *next >= best + MARGIN) =>
+            {
+                Some(letter.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// What a name held back by letters not learned yet could be: the listed names whose known
+    /// letters are close and whose pieces' widths fit, within `MARGIN` of the best, best first.
+    fn stuck_on(&self, pieces: &[Piece], fits: &[Fit]) -> Stuck {
+        let best = fits.first().map_or(0, |f| f.cost);
+        let candidates = fits
+            .iter()
+            .filter(|f| f.worst <= CLOSE && f.cost <= best.saturating_add(MARGIN))
+            .map(|f| &self.lexicon.names[f.name])
+            .filter(|name| !name.ids.is_empty())
+            .take(MAX_CANDIDATES)
+            .map(|name| Candidate {
+                name: name.text.clone(),
+                ids: name.ids.clone(),
+            })
+            .collect();
+        Stuck {
+            candidates,
+            pieces: pieces.to_vec(),
+        }
+    }
+
+    /// Teaches a name being learned the letters of `name`, one of its candidates, as the player
+    /// picked it: they count as learned at once, as kept letters do, and one a later name
+    /// contradicts is dropped like any learned letter. `false` when `name` isn't a candidate or
+    /// its letters can't be lined up with the pieces.
+    pub fn teach_name(&mut self, stuck: &Stuck, name: &str) -> bool {
+        if !stuck.candidates.iter().any(|c| c.name == name) {
+            return false;
+        }
+        let lexicon = Arc::clone(&self.lexicon);
+        let Some(index) = lexicon.names.iter().position(|n| n.text == name) else {
+            return false;
+        };
+        let Some(letters) = self.align(&stuck.pieces, index) else {
+            return false;
+        };
+        for (piece, letters) in stuck.pieces.iter().zip(letters) {
+            let taught = self.taught.entry(piece.glyph).or_default();
+            taught.entry(letters.clone()).or_default().extend(KEPT);
+            if taught.len() > 1 {
+                self.forget_shape(piece.glyph);
+            } else {
+                self.add_shape(piece.glyph, &letters);
+            }
+        }
+        true
+    }
+
+    /// Remembers a name being learned as none of the listed ones (the player's "None of these"):
+    /// a name cut like it, each piece close to its shapes, isn't reported as being learned again.
+    pub fn dismiss(&mut self, stuck: &Stuck) {
+        let shape: Vec<(Glyph, bool)> = stuck
+            .pieces
+            .iter()
+            .map(|p| (self.glyphs[p.glyph as usize].clone(), p.space))
+            .collect();
+        if !self.dismissed.contains(&shape) {
+            self.dismissed.push(shape);
+        }
+    }
+
+    fn is_dismissed(&self, pieces: &[Piece]) -> bool {
+        self.dismissed.iter().any(|shape| {
+            shape.len() == pieces.len()
+                && shape.iter().zip(pieces).all(|((glyph, space), piece)| {
+                    *space == piece.space
+                        && distance(glyph, &self.glyphs[piece.glyph as usize]) <= CLOSE
+                })
+        })
+    }
+
+    /// The names dismissed with "None of these", to keep on the player's device apart from the
+    /// letters (so a build that doesn't know them still reads its letters): one line per name, its
+    /// pieces' glyphs separated by spaces, `+` before a piece that starts a word.
+    pub fn dismissed_knowledge(&self) -> Option<String> {
+        if self.dismissed.is_empty() {
+            return None;
+        }
+        let lines: Vec<String> = self
+            .dismissed
+            .iter()
+            .map(|shape| {
+                let pieces: Vec<String> = shape
+                    .iter()
+                    .map(|(glyph, space)| {
+                        format!("{}{}", if *space { "+" } else { "" }, glyph.encode())
+                    })
+                    .collect();
+                pieces.join(" ")
+            })
+            .collect();
+        Some(lines.join("\n"))
+    }
+
+    /// Takes back what [`TooltipReader::dismissed_knowledge`] kept. Text it couldn't have written
+    /// changes nothing and gives `false`.
+    pub fn keep_dismissed(&mut self, text: &str) -> bool {
+        let mut shapes = Vec::new();
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let mut shape = Vec::new();
+            for piece in line.split(' ') {
+                let (space, glyph) = match piece.strip_prefix('+') {
+                    Some(rest) => (true, rest),
+                    None => (false, piece),
+                };
+                let Some(glyph) = Glyph::decode(glyph) else {
+                    return false;
+                };
+                shape.push((glyph, space));
+            }
+            shapes.push(shape);
+        }
+        self.dismissed = shapes;
+        true
+    }
+
+    /// The one item-list name the pieces' pattern fits, with the letters each piece stands for, and
+    /// whether no other name (one the item list doesn't have) fits it too; `None` when no item-list
+    /// name or several do.
     fn pattern_fit_one(
         &self,
         pieces: &[Piece],
@@ -535,11 +787,11 @@ impl TooltipReader {
         for n in k..=most {
             for &i in index_of.get(&(words, n)).into_iter().flatten() {
                 let name = &lexicon.names[i];
-                if name.ids.is_empty() && !alone {
+                if !name.listed && !alone {
                     continue;
                 }
                 if let Some(assigned) = pattern_fit(pieces, known, name) {
-                    if name.ids.is_empty() {
+                    if !name.listed {
                         alone = false;
                     } else if fit.is_some() {
                         return None;
@@ -880,23 +1132,29 @@ struct Lexicon {
 }
 
 impl Lexicon {
-    /// The item list's names, then `others` that aren't one.
-    fn new(others: &[&str]) -> Lexicon {
+    /// The item list's names, then `others` that aren't one, with their ids (none: never reported).
+    fn new(others: &[(&str, &[u32])]) -> Lexicon {
         let mut by_name: HashMap<String, Vec<u32>> = HashMap::new();
+        let mut listed: HashSet<String> = HashSet::new();
         for item in game_data::items() {
             by_name
                 .entry(item.name.to_string())
                 .or_default()
                 .push(item.id);
+            listed.insert(item.name.to_string());
         }
-        for other in others {
-            by_name.entry(other.trim().to_string()).or_default();
+        for (other, ids) in others {
+            by_name
+                .entry(other.trim().to_string())
+                .or_default()
+                .extend(ids.iter().copied());
         }
         by_name.retain(|text, _| !text.is_empty());
         let mut names: Vec<Name> = by_name
             .into_iter()
             .map(|(text, mut ids)| {
                 ids.sort_unstable();
+                ids.dedup();
                 let mut letters = Vec::new();
                 let mut starts = HashSet::new();
                 let mut words = 0;
@@ -908,6 +1166,7 @@ impl Lexicon {
                     letters.extend(word.chars().map(fold));
                 }
                 Name {
+                    listed: listed.contains(&text),
                     text,
                     letters,
                     starts,
@@ -1057,6 +1316,37 @@ fn on_quick_slots(px: &Pixels, rect: Rect) -> bool {
 
 fn near(p: [u8; 3], c: [u8; 3], tolerance: u8) -> bool {
     p.iter().zip(c).all(|(&a, b)| a.abs_diff(b) <= tolerance)
+}
+
+/// Whether the game's "Untradable" notice sits under the name in the box `rect`, whose name's dot
+/// is on row `dot_y`: notice-orange pixels under the name forming one centred word of its size.
+fn untradable(px: &Pixels, rect: Rect, dot_y: u32) -> bool {
+    let (x0, x1) = (rect.x, (rect.x + rect.width).min(px.width));
+    let y0 = dot_y + NOTICE_ROWS.0;
+    let y1 = (dot_y + NOTICE_ROWS.1)
+        .min(rect.y + rect.height)
+        .min(px.height);
+    let (mut left, mut right, mut top, mut bottom, mut ink) = (u32::MAX, 0, u32::MAX, 0, 0);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let p = px.rgb(x, y);
+            if NOTICE_ORANGE.iter().any(|&c| near(p, c, NOTICE_TOLERANCE)) {
+                (left, right) = (left.min(x), right.max(x));
+                (top, bottom) = (top.min(y), bottom.max(y));
+                ink += 1;
+            }
+        }
+    }
+    if ink == 0 {
+        return false;
+    }
+    let (width, height) = (right - left + 1, bottom - top + 1);
+    // Twice the word's offset from the box's middle, so an odd width needs no rounding.
+    let off_centre = (left + right).abs_diff(2 * rect.x + rect.width - 1);
+    width.abs_diff(UNTRADABLE_SIZE.0) <= 2
+        && height.abs_diff(UNTRADABLE_SIZE.1) <= 1
+        && off_centre <= 4
+        && (UNTRADABLE_INK.0..=UNTRADABLE_INK.1).contains(&ink)
 }
 
 /// The middles of the name dots in a frame.
@@ -1538,6 +1828,11 @@ mod tests {
             )
         }
 
+        fn paint(&mut self, x: u32, y: u32, [r, g, b]: [u8; 3]) {
+            let i = ((y * self.width + x) * 4) as usize;
+            self.bgra[i..i + 3].copy_from_slice(&[b, g, r]);
+        }
+
         fn frame(&self) -> Frame<'_> {
             Frame::new(
                 self.width,
@@ -1705,7 +2000,8 @@ mod tests {
     // listed "Black Nitty") is still never read as it, before or after its letters are learned.
     #[test]
     fn a_cash_item_a_letter_from_a_listed_one_is_never_named() {
-        let mut reader = taught().with_other_names(["Black Kitty", "Kitty Hat"]);
+        let mut reader =
+            taught().with_other_names([("Black Kitty", &[][..]), ("Kitty Hat", &[][..])]);
         for _ in 0..3 {
             for name in ["Black Kitty", "Kitty Hat", "Kumbi Throwing Stars"] {
                 let t = show(&mut reader, name).tooltip.unwrap();
@@ -1716,6 +2012,179 @@ mod tests {
         }
         let t = show(&mut reader, "Kumbi Throwing Stars").tooltip.unwrap();
         assert_eq!(t.items, Some(ids_of("Kumbi Throwing Stars")));
+    }
+
+    /// Adds one stray inked pixel to each 6-pixel letter of a name drawn in a box at (`x0`, `y0`),
+    /// as the scene seen through a real box shifts a letter's edge pixels: close to the shape
+    /// learned, never the same. Narrow letters (i, l) are drawn the same every time and kept.
+    fn smudge(canvas: &mut Canvas, x0: u32, y0: u32, name: &str) {
+        let top = y0 + 16 - 4;
+        let mut x = x0 + DOT_TO_LEFT + 6;
+        for c in name.chars() {
+            if c == ' ' {
+                x += 4;
+                continue;
+            }
+            let (width, rows) = test_support::letter(c);
+            let blank = (0..10u32)
+                .flat_map(|r| (0..width).map(move |b| (r, b)))
+                .find(|&(r, b)| rows[r as usize] >> b & 1 == 0);
+            if let (6, Some((r, b))) = (width, blank) {
+                canvas.paint(x + b, top + r, [255, 255, 255]);
+            }
+            x += width + 1;
+        }
+    }
+
+    /// Paints a notice under the name of a box drawn at (`x0`, `y0`), `box_width` wide: `width` x 9
+    /// pixels of `rgb`, centred where the game writes "Untradable", inked about as much as that
+    /// word (its top and bottom rows, its ends, every other pixel of its middle row).
+    fn notice(canvas: &mut Canvas, x0: u32, y0: u32, box_width: u32, width: u32, rgb: [u8; 3]) {
+        let (left, top) = (x0 + (box_width - width) / 2, y0 + 16 + 17);
+        for y in 0..9 {
+            for x in 0..width {
+                let ink = y == 0 || y == 8 || x == 0 || x == width - 1 || (y == 4 && x % 2 == 0);
+                if ink {
+                    canvas.paint(left + x, top + y, rgb);
+                }
+            }
+        }
+    }
+
+    // A see-through box shifts a letter's edge pixels with the scene behind it, so a name's
+    // letters are rarely the exact shapes learned. With every letter of "Black Wizard Robe" but z
+    // learned, the one name in the game that fits teaches z from the close letters around it.
+    // Fails if context learning counts only exactly learned shapes again.
+    #[test]
+    fn a_names_last_letter_is_learned_from_close_letters() {
+        let mut reader = taught().with_other_names([("Black Kitty", &[][..])]);
+        let mut canvas = Canvas::new(1366, 768);
+        canvas.tooltip(500, 300, 288, 113, "Black Wizard Robe", false);
+        smudge(&mut canvas, 500, 300, "Black Wizard Robe");
+        let t = reader.observe(&canvas.frame(), None).tooltip.unwrap();
+        assert_eq!(t.items, Some(ids_of("Black Wizard Robe")), "{:?}", t.unsure);
+    }
+
+    // A name whose letters aren't all learned is reported as being learned, with the listed names
+    // it could be, and counts once two frames cut it the same way, even as the box drifts with the
+    // cursor. Fails if a name being learned never confirms, or offers nothing to pick.
+    #[test]
+    fn a_name_being_learned_confirms_as_its_box_drifts_and_says_what_it_could_be() {
+        let mut reader = taught();
+        let mut seen = Vec::new();
+        for x in [500, 503] {
+            let mut canvas = Canvas::new(1366, 768);
+            canvas.tooltip(x, 300, 288, 113, "Black Wizard Robe", false);
+            seen.push(reader.observe(&canvas.frame(), None).tooltip.unwrap());
+        }
+        assert_eq!(seen[0].unsure, Some(Unsure::Learning));
+        assert!(!seen[0].confirmed && seen[1].confirmed);
+        let stuck = seen[1].stuck.as_ref().unwrap();
+        assert!(stuck.candidates.len() <= MAX_CANDIDATES);
+        assert_eq!(stuck.candidates[0].name, "Black Wizard Robe");
+        assert_eq!(stuck.candidates[0].ids, ids_of("Black Wizard Robe"));
+    }
+
+    // A skill's tooltip is wider than any item's: while letters are unknown a skill's name can't be
+    // told from an item's, so a box that wide is never reported as an item being learned. Fails if
+    // the learning card could show under a skill.
+    #[test]
+    fn a_box_wider_than_an_items_is_never_an_item_being_learned() {
+        let mut reader = taught();
+        let mut last = None;
+        for _ in 0..2 {
+            let mut canvas = Canvas::new(1366, 768);
+            canvas.tooltip(500, 300, 428, 160, "Black Wizard Robe", false);
+            last = reader.observe(&canvas.frame(), None).tooltip;
+        }
+        let t = last.unwrap();
+        assert_eq!(t.rect.width, 428);
+        assert_eq!(
+            (t.unsure, t.stuck, t.confirmed),
+            (Some(Unsure::NoFit), None, false)
+        );
+    }
+
+    // The player's pick in the Prices tab teaches a name's missing letter for good: the name reads
+    // from the next frame, and in a later session from the letters kept. A name that isn't one of
+    // the candidates teaches nothing. Fails if a pick doesn't stick, or any name can be taught.
+    #[test]
+    fn a_pick_teaches_a_names_missing_letter_for_good() {
+        let mut reader = taught();
+        let mut canvas = Canvas::new(1366, 768);
+        canvas.tooltip(500, 300, 288, 113, "Black Wizard Robe", false);
+        let stuck = reader
+            .observe(&canvas.frame(), None)
+            .tooltip
+            .unwrap()
+            .stuck
+            .unwrap();
+        assert!(!reader.teach_name(&stuck, "Mithril Ingot"));
+        assert!(reader.teach_name(&stuck, "Black Wizard Robe"));
+        let t = reader.observe(&canvas.frame(), None).tooltip.unwrap();
+        assert_eq!(t.items, Some(ids_of("Black Wizard Robe")));
+        let mut later = TooltipReader::from_knowledge(&reader.knowledge().unwrap()).unwrap();
+        let t = later.observe(&canvas.frame(), None).tooltip.unwrap();
+        assert_eq!(t.items, Some(ids_of("Black Wizard Robe")));
+    }
+
+    // "None of these" keeps a name from being reported as being learned again, also in a later
+    // session, and is kept as its own text, which letters never read (so a build that doesn't know
+    // it keeps its letters). Fails if a dismissed name comes back, or the two kinds of text mix.
+    #[test]
+    fn none_of_these_keeps_a_name_from_coming_back_and_is_kept_apart_from_letters() {
+        let mut reader = taught();
+        let mut canvas = Canvas::new(1366, 768);
+        canvas.tooltip(500, 300, 288, 113, "Black Wizard Robe", false);
+        let stuck = reader
+            .observe(&canvas.frame(), None)
+            .tooltip
+            .unwrap()
+            .stuck
+            .unwrap();
+        reader.dismiss(&stuck);
+        let t = reader.observe(&canvas.frame(), None).tooltip.unwrap();
+        assert_eq!((t.unsure, t.stuck), (Some(Unsure::NoFit), None));
+        let kept = reader.dismissed_knowledge().unwrap();
+        assert!(TooltipReader::from_knowledge(&kept).is_none());
+        let mut later = TooltipReader::from_knowledge(&reader.knowledge().unwrap()).unwrap();
+        assert!(!later.keep_dismissed("not a glyph"));
+        assert!(later.keep_dismissed(&kept));
+        let t = later.observe(&canvas.frame(), None).tooltip.unwrap();
+        assert_eq!(t.unsure, Some(Unsure::NoFit));
+    }
+
+    // A cash item the price service lists comes with its game ids and is named like any item, so
+    // it gets a price. Fails if cash items stay silent though the price file has them.
+    #[test]
+    fn a_cash_name_given_with_its_ids_is_named_like_an_item() {
+        let mut reader = taught().with_other_names([("Black Kitty", &[1_002_999][..])]);
+        for _ in 0..3 {
+            let _ = show(&mut reader, "Kumbi Throwing Stars");
+        }
+        let t = show(&mut reader, "Black Kitty").tooltip.unwrap();
+        assert_eq!((t.items, t.confirmed), (Some(vec![1_002_999]), true));
+    }
+
+    // The game's "Untradable" notice, one centred word in its orange under the name, marks the
+    // copy as untradable; a longer notice ("Account-bound...") or orange scenery seen through the
+    // box doesn't. Fails if any orange under a name counts, or the notice is missed.
+    #[test]
+    fn only_the_untradable_word_marks_a_copy_untradable() {
+        for (width, rgb, untradable) in [
+            (59, [255, 138, 24], true),
+            (59, [255, 170, 0], true),
+            (225, [255, 138, 24], false),
+            (59, [204, 153, 85], false),
+        ] {
+            let mut reader = taught();
+            let mut canvas = Canvas::new(1366, 768);
+            canvas.tooltip(500, 300, 288, 133, "Mithril Ingot", false);
+            notice(&mut canvas, 500, 300, 288, width, rgb);
+            let t = reader.observe(&canvas.frame(), None).tooltip.unwrap();
+            assert_eq!(t.items, Some(ids_of("Mithril Ingot")));
+            assert_eq!(t.untradable, untradable, "{width} wide in {rgb:?}");
+        }
     }
 
     // A men's or women's item's (M) or (F) picks that item: the item list names both alike.

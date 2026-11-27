@@ -16,8 +16,9 @@
 //!
 //! - `--knowledge` starts from what an earlier replay kept with `--keep`, as the app starts a
 //!   session from what it kept.
-//! - `--other-names` gives names the game shows that aren't items (one per line: the price
-//!   service's names the item list lacks), told apart and never reported, as the app does.
+//! - `--other-names` gives names the game shows that the item list lacks (one per line, each
+//!   optionally followed by a tab and its ids, comma-separated: the price service's cash items),
+//!   told apart from items, and reported when they have ids, as the app does.
 //! - `--quiet` leaves out the line per frame.
 //!
 //! Runs are replayed in the order given, as one session, so name them in the order they were
@@ -115,12 +116,24 @@ fn main() -> ExitCode {
             TooltipReader::new()
         }
     };
-    if let Some(names) = &args.other_names {
-        reader = reader.with_other_names(names.lines());
-        println!(
-            "telling items apart from {} other names",
-            names.lines().count()
-        );
+    if let Some(text) = &args.other_names {
+        // One name per line, or a name, a tab and its ids ("Angel Halo\t1007077"), as the app
+        // gives the price file's cash items.
+        let names: Vec<(&str, Vec<u32>)> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|line| match line.split_once('\t') {
+                Some((name, ids)) => (
+                    name,
+                    ids.split(',')
+                        .filter_map(|id| id.trim().parse().ok())
+                        .collect(),
+                ),
+                None => (line, Vec::new()),
+            })
+            .collect();
+        reader = reader.with_other_names(names.iter().map(|(name, ids)| (*name, ids.as_slice())));
+        println!("telling items apart from {} other names", names.len());
     }
     let mut exp = ExpBarReader::new();
     let mut scene = Scene::default();
