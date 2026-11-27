@@ -9,7 +9,7 @@ and leaves the sell price blank for items shops won't buy. MapleStory names and 
 are © Nexon and not covered by that license. MesoVibe is not affiliated with Nexon or OSMS Data
 Explorer.
 
-Game build `ff3827e3105012aca0a590cda46d17f356001fad`, data last changed 2026-10-29T15:56:20Z.
+Game build `697c569e0500f56b6cc53e329dcc57bda728c862`, data last changed 2026-11-24T19:06:14Z.
 
 ## Files
 

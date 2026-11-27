@@ -2139,7 +2139,7 @@ dependencies = [
 
 [[package]]
 name = "mesovibe-app"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "mesovibe-engine",
  "objc2-app-kit",
@@ -2158,7 +2158,7 @@ dependencies = [
 
 [[package]]
 name = "mesovibe-capture-windows"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "png",
  "serde_json",
@@ -2167,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "mesovibe-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "block2",
  "dispatch2",
