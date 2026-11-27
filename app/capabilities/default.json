@@ -32,6 +32,8 @@
     "allow-price-recent",
     "allow-set-price-recent",
     "allow-set-price-world",
+    "allow-set-price-label",
+    "allow-teach-tooltip-name",
     "allow-open-price-page"
   ]
 }

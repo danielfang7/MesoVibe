@@ -11,14 +11,15 @@ export default defineConfig({
     },
   },
   server: { strictPort: true },
-  // Three pages: the panel, and the mini-HUD and chat overlay the host opens over the game
-  // (app/src/dock.rs).
+  // Four pages: the panel, and the mini-HUD, chat overlay and price label the host opens over the
+  // game (app/src/dock.rs).
   build: {
     rollupOptions: {
       input: {
         panel: fileURLToPath(new URL("index.html", import.meta.url)),
         hud: fileURLToPath(new URL("hud.html", import.meta.url)),
         chat: fileURLToPath(new URL("chat.html", import.meta.url)),
+        label: fileURLToPath(new URL("label.html", import.meta.url)),
       },
     },
   },

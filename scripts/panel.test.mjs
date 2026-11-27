@@ -765,7 +765,7 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     await page.until(`${movers}.length === 4`, "Biggest moves");
     assert.equal(await page.evaluate(`${movers}[0].innerText.replace(/\\s+/g, " ")`), "Work Gloves 1.5M ▲ 25% up 25% this week", "the arrow seen, the words heard");
     assert.equal(await page.evaluate(`${movers}[0].querySelector('[aria-hidden="true"]').textContent`), "▲ 25%");
-    assert.equal(await page.evaluate(textOf("price-how")), "Search for an item to see its Free Market price.");
+    assert.equal(await page.evaluate(textOf("price-how")), "Point at an item in game, or search for one.", "the price label is on");
 
     const field = `document.querySelector('[data-key="price-search"]')`;
     const type = (text) => page.evaluate(`(() => { const f = ${field}; f.focus(); f.value = ${JSON.stringify(text)}; f.dispatchEvent(new Event("input", { bubbles: true })); })()`);
@@ -867,6 +867,153 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
   });
 
   // Fails if Settings and What MesoVibe sees swap back, or a view goes missing from the rail.
+  // Pointing at an item in game shows it in the open Prices tab and adds it to Recently checked,
+  // but never while the player is typing a search; a name the game gives several items offers
+  // them to pick from. Fails if the tab ignores pointing, or clears what the player typed.
+  await t.test("the Prices tab follows the item pointed at in game, unless a search is being typed", async () => {
+    const page = await openPage(devtools, at("prices"));
+    await page.until(`document.querySelector(".strip")`, "the panel");
+    await page.evaluate(`document.querySelector('[aria-label="Prices"]').click()`);
+    await page.until(textOf("price-how"), "the Prices tab");
+    await page.until(`typeof window.__mockPoint === "function"`, "pointing hooked up");
+    await page.evaluate(`window.__mockPoint([1082000])`);
+    await page.until(`${textOf("price-title")} === "Work Gloves"`, "the item pointed at");
+    const recent = `[...document.querySelectorAll('[data-key="price-recent-rows"] button.price-row')].map((b) => b.querySelector(".price-name").textContent)`;
+    assert.deepEqual(await page.until(`${recent}.length && ${recent}`, "Recently checked"), ["Work Gloves"]);
+
+    const field = `document.querySelector('[data-key="price-search"]')`;
+    await page.evaluate(`(() => { const f = ${field}; f.focus(); f.value = "subi"; f.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await page.until(`document.querySelectorAll('#price-results [role="option"]').length === 1`, "a search under way");
+    await page.evaluate(`window.__mockPoint([2070006])`);
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(await page.evaluate(`${field}.value`), "subi", "what the player typed stays");
+    assert.equal(await page.evaluate(`document.querySelectorAll('#price-results [role="option"]').length`), 1, "the results stay");
+
+    await page.evaluate(`(() => { const f = ${field}; f.value = ""; f.dispatchEvent(new Event("input", { bubbles: true })); f.blur(); })()`);
+    await page.evaluate(`window.__mockPoint([2000002, 2000000])`);
+    await page.until(`${textOf("price-which")} === "Which item was it?"`, "the items to pick from");
+    const which = `[...document.querySelectorAll('[data-key="price-which-list"] button.price-row')].map((b) => b.querySelector(".price-name").textContent)`;
+    assert.deepEqual(await page.evaluate(which), ["White Potion", "Red Potion"]);
+    await page.evaluate(`document.querySelector('[data-key="price-which-list"] button.price-row').click()`);
+    await page.until(`${textOf("price-title")} === "White Potion"`, "the item picked");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // A name MesoVibe is still learning offers the items it could be: a pick goes back with the name's
+  // token and shows the item; "None of these" goes back with none. While the label is learning the
+  // game's letters, the how-to line and What MesoVibe sees say so. Fails if a stuck name can't be
+  // taught from the tab, or the first minutes go unexplained.
+  await t.test("a name being learned is taught from the Prices tab, and learning is explained", async () => {
+    const page = await openPage(devtools, `${at("prices")}&tooltips=learning`);
+    await page.until(`document.querySelector(".strip")`, "the panel");
+    await page.evaluate(`document.querySelector('[aria-label="Prices"]').click()`);
+    await page.until(`${textOf("price-how")}?.startsWith("Point at a few different items")`, "the learning how-to line");
+    await page.until(`typeof window.__mockPoint === "function"`, "pointing hooked up");
+    const stuck = (token) =>
+      `window.__mockPoint({ ids: [], stuck: { token: ${token}, candidates: [{ name: "Work Gloves", ids: [1082000] }, { name: "Mystery Hat", ids: [9999] }] } })`;
+    const names = `[...document.querySelectorAll('[data-key="price-teach-list"] button.price-row')].map((b) => b.querySelector(".price-name").textContent)`;
+    await page.evaluate(stuck(7));
+    await page.until(`${textOf("price-teach")} === "Which item is this?"`, "the items it could be");
+    assert.deepEqual(await page.evaluate(names), ["Work Gloves", "Mystery Hat"]);
+    await page.evaluate(`document.querySelector('[data-key="price-teach-list"] button.price-row').click()`);
+    await page.until(`${textOf("price-title")} === "Work Gloves"`, "the item picked");
+    assert.deepEqual(await page.evaluate(`window.__mockTaught`), [[7, "Work Gloves"]]);
+    await page.evaluate(stuck(8));
+    await page.until(`${textOf("price-teach")} === "Which item is this?"`, "the next name being learned");
+    await page.evaluate(`document.querySelector('[data-key="price-teach-none"]').click()`);
+    await page.until(`document.querySelector('[data-key="price-teach"]') === null`, "the list closed");
+    assert.deepEqual(await page.evaluate(`window.__mockTaught`), [[7, "Work Gloves"], [8, null]]);
+    await page.evaluate(`document.querySelector('[aria-label="What MesoVibe sees"]').click()`);
+    assert.match(await page.until(textOf("sees-item-names"), "the item names line"), /Learning the game's letters from the items you point at\. Only the first time\.$/);
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // "Prices next to item tooltips" is on at first, and What MesoVibe sees lists the tooltips it reads
+  // only while it's on. Fails if the switch or the disclosure drifts from what's read.
+  await t.test("Settings switches the price label, and What MesoVibe sees lists tooltips only while it's on", async () => {
+    const page = await openPage(devtools, at("grind"));
+    await page.until(`document.querySelector(".strip")`, "the panel");
+    await page.evaluate(`document.querySelector('[aria-label="What MesoVibe sees"]').click()`);
+    assert.match(await page.until(textOf("sees-tooltips"), "the tooltip line"), /^Item tooltips, while your inventory, equipment window, an NPC shop or storage is open/);
+    await page.evaluate(`document.querySelector('[aria-label="Settings"]').click()`);
+    assert.equal(await page.until(checked("settings-price-label"), "the price label switch"), "true");
+    await page.evaluate(`document.querySelector('[data-key="settings-price-label"]').click()`);
+    await page.until(`${checked("settings-price-label")} === "false"`, "the price label off");
+    await page.evaluate(`document.querySelector('[aria-label="What MesoVibe sees"]').click()`);
+    await page.until(`document.querySelector('[data-key="sees-tooltips"]') === null && document.body.innerText.includes("Never reads")`, "no tooltip line");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
+  // The label over the game: the usual price, "usual", the week's move and the world's credit;
+  // old prices muted with their date; no market price, what an NPC shop pays. Fails if a state's
+  // words or tone drift from the design.
+  await t.test("the price label shows the price, move and world, muted and dated when old, or what an NPC pays", async () => {
+    const page = await openPage(devtools, at("label", "label.html"));
+    await page.until(textOf("label-price"), "the label");
+    assert.equal(await page.evaluate(textOf("label-price")), "21M");
+    assert.equal(await page.evaluate(textOf("label-move")), "▲ 8% week");
+    assert.equal(await page.evaluate(`document.querySelector('[data-key="label-move"]').classList.contains("up")`), true);
+    assert.equal(await page.evaluate(textOf("label-credit")), "Windia · Cozy Markets");
+    assert.equal(await page.evaluate(`document.querySelector(".label-frame").style.width`), "236px", "as wide as the tooltip");
+    // The card itself, edge to edge with the tooltip: in MesoVibe a style attribute is dropped, which
+    // drew the card only as wide as its text and 8px left of the tooltip.
+    assert.deepEqual(
+      await page.evaluate(`(() => { const r = document.querySelector(".label-card").getBoundingClientRect(); return [r.left, r.width]; })()`),
+      [8, 236],
+    );
+    // No row cuts off its letters (the credit's "y" lost its tail in a tight line box).
+    assert.equal(await page.evaluate(`[...document.querySelectorAll(".label-card > *")].every((row) => row.scrollHeight <= row.clientHeight)`), true);
+    assert.deepEqual(page.errors, []);
+    page.close();
+
+    // Without a week of prices: the price in full digits and no move at all, never a "—".
+    const fresh = await openPage(devtools, at("labelnew", "label.html"));
+    await fresh.until(textOf("label-price"), "the label without a week");
+    assert.equal(await fresh.evaluate(textOf("label-price")), "1,050");
+    assert.equal(await fresh.evaluate(`document.querySelector('[data-key="label-move"]')`), null);
+    assert.equal(await fresh.evaluate(`document.body.innerText.includes("—")`), false);
+    fresh.close();
+
+    // An untradable copy: what tradable copies sell for, muted, and the word in the move's place.
+    const untradable = await openPage(devtools, at("labeluntradable", "label.html"));
+    await untradable.until(textOf("label-price"), "the untradable label");
+    assert.equal(await untradable.evaluate(textOf("label-price")), "1.33M");
+    assert.equal(await untradable.evaluate(textOf("label-untradable")), "Untradable");
+    assert.equal(await untradable.evaluate(`document.querySelector('[data-key="label-move"]')`), null);
+    assert.equal(await untradable.evaluate(`document.querySelector(".label-frame").classList.contains("stale")`), true);
+    untradable.close();
+
+    // While a name's letters are being learned: the same card says so, and where to teach it.
+    for (const [scenario, top, second] of [
+      ["labellearn", "Learning item names", "Point at a few more items"],
+      ["labelpick", "Learning this name", "Pick it in the Prices tab"],
+    ]) {
+      const learning = await openPage(devtools, at(scenario, "label.html"));
+      await learning.until(textOf("label-learning"), scenario);
+      assert.equal(await learning.evaluate(textOf("label-learning")), top);
+      assert.equal(await learning.evaluate(textOf("label-credit")), second);
+      assert.equal(await learning.evaluate(`document.querySelector('[data-key="label-price"]')`), null);
+      assert.equal(await learning.evaluate(`document.querySelector(".label-card").getBoundingClientRect().height`), 52);
+      learning.close();
+    }
+
+    const old = await openPage(devtools, at("labelold", "label.html"));
+    await old.until(textOf("label-price"), "the old label");
+    assert.match(await old.evaluate(textOf("label-credit")), /^Windia · Cozy Markets · from [A-Z][a-z]{2} \d{1,2}$/);
+    assert.equal(await old.evaluate(`document.querySelector(".label-frame").classList.contains("stale")`), true);
+    assert.equal(await old.evaluate(`getComputedStyle(document.querySelector('[data-key="label-move"]')).color === getComputedStyle(document.querySelector(".label-credit")).color`), true, "the move muted, never re-colored");
+    old.close();
+
+    const npc = await openPage(devtools, at("labelnpc", "label.html"));
+    await npc.until(textOf("label-price"), "the NPC label");
+    assert.equal(await npc.evaluate(textOf("label-price")), "NPC pays 30");
+    assert.equal(await npc.evaluate(textOf("label-credit")), "No Free Market price");
+    npc.close();
+  });
+
   await t.test("the rail lists Session, Loot, Prices and Chat, then Settings, then What MesoVibe sees", async () => {
     const page = await openPage(devtools, at("grind"));
     await page.until(`document.querySelector(".rail")`, "the rail");

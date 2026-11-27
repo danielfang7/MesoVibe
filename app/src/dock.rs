@@ -13,6 +13,11 @@
 //! click-through window, just above the game's chat box, with the latest whisper, party and
 //! friend lines (Chat Hub) at the chat's own size. It's off until then.
 //!
+//! The price label is one more: the Free Market price of the item the player points at, flush
+//! under the game's own tooltip and as wide as it, or over it when the tooltip sits at the game's
+//! bottom edge ([`label_rect`]). It's placed only from the tooltip found in the picture, never the
+//! cursor, and shows only while the game is in front.
+//!
 //! MesoVibe only moves its own windows. Where the game window is comes from the window list
 //! the capture already reads; the game is never moved, resized or sent anything.
 //!
@@ -25,8 +30,8 @@ use mesovibe_engine::recognizers::chat::{self, ChatPlace};
 use mesovibe_engine::unstretch;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position,
-    Size, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
+    Position, Size, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
 use crate::store::Store;
@@ -41,6 +46,15 @@ pub const HUD_WIDTH: f64 = 216.0;
 pub const HUD_HEIGHT: f64 = 124.0;
 /// The chat overlay window's label (capabilities/chat.json).
 pub const CHAT: &str = "chat";
+/// The price label window's label (capabilities/label.json).
+pub const LABEL: &str = "price-label";
+/// The price label's card, in logical pixels: its height (a 16px price row and a 13px credit row
+/// with their padding and border), and the narrowest it gets.
+pub const LABEL_HEIGHT: f64 = 52.0;
+const LABEL_MIN_WIDTH: f64 = 180.0;
+/// Room around the card in its window for the card's shadow, in logical pixels: at the sides and
+/// below. None above, so the card's top edge is the window's and sits flush on the tooltip.
+const LABEL_SHADOW: f64 = 8.0;
 /// Chat lines the overlay has room for above the game's chat box.
 const CHAT_LINES: u32 = 6;
 /// The chat overlay in a box at the game's side: as wide as this, in game pixels (long lines
@@ -312,6 +326,63 @@ pub fn chat_side(window: &GameWindow, game: &Placement, source: u32, left: bool)
     })
 }
 
+/// Where the price label goes: the card's place and size, and its window's frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LabelPlace {
+    /// The window's frame, in desktop units, with room for the card's shadow.
+    pub frame: Rect,
+    /// The card's width and the shadow room left of it, in logical pixels.
+    pub card_width: f64,
+    pub card_left: f64,
+}
+
+/// Where the price label goes for an item tooltip whose box is `tooltip` (x, y, width, height in
+/// game pixels) in the game window `window` at `game`, scaled up from a picture `source` lines
+/// tall, on a display with `scale` desktop units per logical pixel: flush against the tooltip's
+/// bottom edge and as wide as it on screen, or against its top edge when there's no room below it
+/// in the game area. A label wider than the tooltip (MesoVibe's own text sizes in a small game
+/// window) grows away from the game area's nearer side, so it stays inside. `None` for an empty
+/// game area.
+pub fn label_rect(
+    window: &GameWindow,
+    game: &Placement,
+    source: u32,
+    tooltip: (u32, u32, u32, u32),
+    scale: f64,
+) -> Option<LabelPlace> {
+    let area = Rect::from(game.area);
+    let (across, down) = game_pixel(window.width, window.height, source, &area)?;
+    let (tx, ty, tw, th) = tooltip;
+    let left = area.x + f64::from(tx) * across;
+    let width = f64::from(tw) * across;
+    let card_width = (width / scale).max(LABEL_MIN_WIDTH);
+    let card = (card_width * scale, LABEL_HEIGHT * scale);
+    let below = area.y + f64::from(ty + th) * down;
+    let y = if below + card.1 <= area.bottom() {
+        below
+    } else {
+        (area.y + f64::from(ty) * down - card.1).max(area.y)
+    };
+    // Wider than the tooltip: grow away from the nearer side of the game area.
+    let extra = card.0 - width;
+    let x = if extra > 0.0 && left + width / 2.0 > area.x + area.width / 2.0 {
+        left - extra
+    } else {
+        left
+    };
+    let shadow = LABEL_SHADOW * scale;
+    Some(LabelPlace {
+        frame: Rect {
+            x: x - shadow,
+            y,
+            width: card.0 + 2.0 * shadow,
+            height: card.1 + shadow,
+        },
+        card_width,
+        card_left: LABEL_SHADOW,
+    })
+}
+
 /// Applies [`layout`] to the real windows, from the engine thread, each tick.
 #[derive(Default)]
 pub struct Docker {
@@ -327,6 +398,11 @@ pub struct Docker {
     /// Where the game's chat box was last seen. It stays put while the box can't be read for a
     /// moment (a map change, the player scrolling back).
     chat_box: Option<ChatPlace>,
+    /// The game or MesoVibe was in front on the last tick: overlays show only then.
+    in_front: bool,
+    label_shown: bool,
+    /// Where the price label was last put, so the window moves only when that changes.
+    label_placed: Option<Rect>,
 }
 
 impl Docker {
@@ -373,6 +449,10 @@ impl Docker {
             return;
         };
         let in_front = placement.front || panel.is_focused().unwrap_or(false);
+        self.in_front = in_front;
+        if !in_front {
+            self.hide_label(app);
+        }
         let displays = displays(app);
         let overlay = match settings.chat_overlay_position {
             ChatPosition::AboveChat => self
@@ -418,6 +498,7 @@ impl Docker {
         }
         self.close_hud(app);
         self.close_chat(app);
+        self.close_label(app);
     }
 
     /// No game to stay with: the panel is a plain window, and the mini-HUD and chat overlay are
@@ -427,6 +508,8 @@ impl Docker {
         self.keep_on_top(panel, false);
         self.hide_hud(app);
         self.hide_chat(app);
+        self.in_front = false;
+        self.hide_label(app);
     }
 
     /// Changing the window level never activates MesoVibe, so the game keeps the keyboard.
@@ -506,6 +589,62 @@ impl Docker {
         self.chat_shown = false;
         self.chat_placed = None;
     }
+
+    /// Shows the price label at `place`, saying `view`, while the game is in front.
+    pub fn show_label<T: Serialize + Clone>(
+        &mut self,
+        app: &AppHandle,
+        place: &LabelPlace,
+        view: &T,
+    ) {
+        if !self.in_front {
+            self.hide_label(app);
+            return;
+        }
+        let label = match app.get_webview_window(LABEL) {
+            Some(label) => label,
+            None => match create_overlay(app, LABEL) {
+                Ok(label) => {
+                    self.label_shown = false;
+                    self.label_placed = None;
+                    label
+                }
+                Err(_) => return,
+            },
+        };
+        // What it says first, so it never shows the last item's price in the new place.
+        let _ = app.emit_to(LABEL, "label://view", view.clone());
+        if self
+            .label_placed
+            .is_none_or(|placed| placed.differs(&place.frame))
+        {
+            let _ = label.set_position(position(place.frame.x, place.frame.y));
+            let _ = label.set_size(size(place.frame.width, place.frame.height));
+            self.label_placed = Some(place.frame);
+        }
+        if !self.label_shown {
+            let _ = label.show();
+            self.label_shown = true;
+        }
+    }
+
+    pub fn hide_label(&mut self, app: &AppHandle) {
+        if self.label_shown {
+            if let Some(label) = app.get_webview_window(LABEL) {
+                let _ = label.hide();
+            }
+            self.label_shown = false;
+        }
+    }
+
+    /// The price label switched off: no window for it at all.
+    pub fn close_label(&mut self, app: &AppHandle) {
+        if let Some(label) = app.get_webview_window(LABEL) {
+            let _ = label.destroy();
+        }
+        self.label_shown = false;
+        self.label_placed = None;
+    }
 }
 
 fn create_hud(app: &AppHandle) -> tauri::Result<WebviewWindow> {
@@ -523,6 +662,12 @@ fn create_overlay(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> 
             "MesoVibe chat",
             f64::from(chat::BOX_WIDTH),
             f64::from(CHAT_LINES * chat::LINE_HEIGHT),
+        ),
+        LABEL => (
+            "label.html",
+            "MesoVibe price label",
+            LABEL_MIN_WIDTH + 2.0 * LABEL_SHADOW,
+            LABEL_HEIGHT + LABEL_SHADOW,
         ),
         _ => ("hud.html", "MesoVibe mini-HUD", HUD_WIDTH, HUD_HEIGHT),
     };
@@ -1145,5 +1290,69 @@ mod tests {
         assert!(summary.ask_for_mesos);
         latest.set(Some(summary));
         assert_eq!(serde_json::to_value(latest.get()).unwrap(), asking);
+    }
+
+    // The price label sits flush under the tooltip and as wide as it on screen; over it when the
+    // tooltip ends at the game's bottom; and a label wider than a small tooltip grows away from the
+    // game's nearer side. Fails if the label covers the tooltip, leaves a gap, or runs off the game.
+    #[test]
+    fn the_price_label_sits_flush_under_the_tooltip() {
+        let window = GameWindow {
+            id: 7,
+            width: 1366,
+            height: 768,
+            scale: 1,
+            minimized: false,
+            placement: None,
+        };
+        // A 1366x768 game at 1x on a Mac: a game pixel is a point, a logical pixel too.
+        let mac = game(76, 40, 1366, 768);
+        let area = Rect::from(mac.area);
+        let place = label_rect(&window, &mac, NATIVE, (300, 200, 236, 206), 1.0).unwrap();
+        assert!(
+            close(
+                place.frame,
+                Rect {
+                    x: area.x + 300.0 - LABEL_SHADOW,
+                    y: area.y + 406.0,
+                    width: 236.0 + 2.0 * LABEL_SHADOW,
+                    height: LABEL_HEIGHT + LABEL_SHADOW,
+                }
+            ),
+            "{place:?}"
+        );
+        assert_eq!((place.card_width, place.card_left), (236.0, LABEL_SHADOW));
+        // At the bottom: over the tooltip, its bottom on the tooltip's top.
+        let low = label_rect(&window, &mac, NATIVE, (300, 700, 236, 68), 1.0).unwrap();
+        assert!(
+            (low.frame.y + LABEL_HEIGHT - (area.y + 700.0)).abs() < 0.01,
+            "{low:?}"
+        );
+        // Windows at 150%: desktop units are pixels, 1.5 per logical pixel.
+        let pc = game(0, 0, 1366, 768);
+        let scaled = label_rect(&window, &pc, NATIVE, (300, 200, 236, 206), 1.5).unwrap();
+        assert!(
+            (scaled.card_width - 236.0 / 1.5).abs() < 0.01 || scaled.card_width == 180.0,
+            "{scaled:?}"
+        );
+        assert!((scaled.frame.height - (LABEL_HEIGHT + LABEL_SHADOW) * 1.5).abs() < 0.01);
+        // A small game window's tooltip is narrower than the label: on the right half it grows left.
+        let small = GameWindow {
+            width: 800,
+            height: 600,
+            ..window
+        };
+        let tiny = game(0, 0, 400, 300);
+        let right = label_rect(&small, &tiny, NATIVE, (600, 100, 140, 80), 1.0).unwrap();
+        let card_right = right.frame.x + right.card_left + right.card_width;
+        assert!(
+            (card_right - (300.0 + 70.0)).abs() < 0.01,
+            "ends with the tooltip: {right:?}"
+        );
+        let left = label_rect(&small, &tiny, NATIVE, (40, 100, 140, 80), 1.0).unwrap();
+        assert!(
+            (left.frame.x + left.card_left - 20.0).abs() < 0.01,
+            "starts with the tooltip: {left:?}"
+        );
     }
 }

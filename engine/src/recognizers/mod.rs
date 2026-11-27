@@ -10,6 +10,7 @@ pub mod meso_total;
 pub mod notices;
 mod pixels;
 pub mod quick_slots;
+pub mod tooltip;
 
 /// A name as the game drew it (an item's, a map's), for showing it before or without its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
