@@ -1529,7 +1529,7 @@ html.label-page body {
 .label-card {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   height: 52px;
   justify-content: center;
   padding: 6px 10px;
@@ -1540,11 +1540,19 @@ html.label-page body {
   user-select: none;
 }
 
+/* Each row's line box fits its type (20px for the 16px price, 16px for the 13px credit), and no
+   row gives up height to the other: the price row's mixed sizes line up on one baseline at 21px,
+   so 21 + 1 + 16 fills the card's 38px inside exactly and the credit's descenders aren't cut off. */
+.label-card > * {
+  flex-shrink: 0;
+}
+
 .label-top {
   display: flex;
   align-items: baseline;
   gap: var(--space-xs);
   min-width: 0;
+  line-height: 20px;
 }
 
 .label-price {
@@ -1569,6 +1577,7 @@ html.label-page body {
 .label-credit {
   color: var(--text-muted);
   font-size: 13px;
+  line-height: 16px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

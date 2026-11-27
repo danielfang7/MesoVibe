@@ -928,8 +928,24 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.evaluate(`document.querySelector('[data-key="label-move"]').classList.contains("up")`), true);
     assert.equal(await page.evaluate(textOf("label-credit")), "Windia · Cozy Markets");
     assert.equal(await page.evaluate(`document.querySelector(".label-frame").style.width`), "236px", "as wide as the tooltip");
+    // The card itself, edge to edge with the tooltip: in MesoVibe a style attribute is dropped, which
+    // drew the card only as wide as its text and 8px left of the tooltip.
+    assert.deepEqual(
+      await page.evaluate(`(() => { const r = document.querySelector(".label-card").getBoundingClientRect(); return [r.left, r.width]; })()`),
+      [8, 236],
+    );
+    // No row cuts off its letters (the credit's "y" lost its tail in a tight line box).
+    assert.equal(await page.evaluate(`[...document.querySelectorAll(".label-card > *")].every((row) => row.scrollHeight <= row.clientHeight)`), true);
     assert.deepEqual(page.errors, []);
     page.close();
+
+    // Without a week of prices: the price in full digits and no move at all, never a "—".
+    const fresh = await openPage(devtools, at("labelnew", "label.html"));
+    await fresh.until(textOf("label-price"), "the label without a week");
+    assert.equal(await fresh.evaluate(textOf("label-price")), "1,050");
+    assert.equal(await fresh.evaluate(`document.querySelector('[data-key="label-move"]')`), null);
+    assert.equal(await fresh.evaluate(`document.body.innerText.includes("—")`), false);
+    fresh.close();
 
     const old = await openPage(devtools, at("labelold", "label.html"));
     await old.until(textOf("label-price"), "the old label");

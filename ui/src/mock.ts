@@ -330,7 +330,9 @@ export function mockLabelHost(scenario: string): LabelHost {
         ? { ...base, usual: null, change: null, npc: 30 }
         : scenario === "labelwide"
           ? { ...base, cardWidth: 180 }
-          : base;
+          : scenario === "labelnew"
+            ? { ...base, usual: 1_050, change: null, cardWidth: 288 }
+            : base;
   return {
     onView: async (handler) => handler(view),
   };

@@ -28,7 +28,9 @@ function card(view: LabelShown): HTMLElement {
         { class: "label-top" },
         h("span", { class: "label-price number", attrs: { "data-key": "label-price" } }, priceText(view.usual)),
         h("span", { class: "label-unit" }, "usual"),
-        h("span", { class: `label-move number move ${move.tone}`, attrs: { "data-key": "label-move" } }, move.tone === "none" ? "—" : `${move.shown} week`),
+        // Without a week of prices there's no move to show, and a "—" would read as missing data.
+        move.tone !== "none" &&
+          h("span", { class: `label-move number move ${move.tone}`, attrs: { "data-key": "label-move" } }, `${move.shown} week`),
       ),
       h("div", { class: "label-credit", attrs: { "data-key": "label-credit" } }, `${view.world} · Cozy Markets${old ? ` · from ${day(view.oldSinceMs as number)}` : ""}`),
     );
@@ -38,11 +40,12 @@ function card(view: LabelShown): HTMLElement {
       h("div", { class: "label-credit", attrs: { "data-key": "label-credit" } }, "No Free Market price"),
     );
   }
-  return h(
-    "div",
-    { class: `label-frame${old ? " stale" : ""}`, attrs: { style: `left: ${view.cardLeft}px; width: ${view.cardWidth}px` } },
-    h("div", { class: "label-card" }, ...rows),
-  );
+  const frame = h("div", { class: `label-frame${old ? " stale" : ""}` }, h("div", { class: "label-card" }, ...rows));
+  // Through the style properties: the app's security policy drops a style attribute, which left the
+  // card as narrow as its text and off the tooltip's left edge.
+  frame.style.left = `${view.cardLeft}px`;
+  frame.style.width = `${view.cardWidth}px`;
+  return frame;
 }
 
 void (async () => {

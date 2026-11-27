@@ -23,9 +23,14 @@ const RECENT_MAX = 8;
 /** How often the tab looks again at how old its prices are, so they turn muted while it's open. */
 const AGE_CHECK_MS = 60_000;
 
-/** A price as the panel writes it: "21M", "1.5M", "950", and "under 1" for a fraction of a meso. */
+/**
+ * A price as the panel and the label write it: in full up to 99,999 ("950", "1,050", "19,999"),
+ * shorter than "1.05K" and never rounded up to "20K"; compact from there ("795K", "21M"); and
+ * "under 1" for a fraction of a meso.
+ */
 export function priceText(n: number): string {
-  return n > 0 && n < 1 ? "under 1" : formatCompact(n);
+  if (n > 0 && n < 1) return "under 1";
+  return n < 100_000 ? formatDigits(n) : formatCompact(n);
 }
 
 /** A weekly change, shown with an arrow and read aloud in words, so color is never the only sign. */
