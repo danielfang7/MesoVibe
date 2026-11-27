@@ -42,6 +42,15 @@
 //! as wide as those letters), and it beats the next name clearly. Capital I and small l are drawn
 //! alike, so names are compared with the two folded together.
 //!
+//! **Guesses.** Each reader starts from letter shapes drawn from Liberation Sans Bold, an openly
+//! licensed font close to the game's ([`SEED`]), so it can name items before the game has shown
+//! it each letter. A letter not learned yet counts as seen for a piece close to one of its
+//! guesses, as close as a learned shape must be, and a name read that way teaches its pieces as
+//! learned shapes. A piece close to none of them leaves the letter unseen, as it was before any
+//! guess, so a name the guesses don't fit is still one being learned (below); so is one read
+//! partly through guesses that another name fits almost as well. Guesses are never kept as
+//! learned ([`TooltipReader::knowledge`]).
+//!
 //! Names the item list doesn't have (cash items, skills) aren't named. Given the names the game
 //! shows that aren't items ([`TooltipReader::with_other_names`]: the price service's cash items,
 //! with their ids), they compete like any name, so a cash item one letter from a listed item
@@ -52,8 +61,9 @@
 //! measure: the box is see-through, so a letter's edge pixels change with the scene behind it and
 //! a new name's pieces are rarely shapes learned exactly.
 //!
-//! **Learning.** A name held back only by letters not learned yet is reported as such, with the
-//! listed names its known letters and widths fit ([`Stuck`]), so the player can say which one it is
+//! **Learning.** A name held back only by letters not learned yet (unseen, or guessed where
+//! another name fits about as well) is reported as such, with the listed names its known letters
+//! and widths fit ([`Stuck`]), so the player can say which one it is
 //! ([`TooltipReader::teach_name`]) or that it's none of them ([`TooltipReader::dismiss`]). A box
 //! wider than any item's (a skill's) never is: while letters are unknown a skill's name can't be
 //! told from an item's.
@@ -287,6 +297,8 @@ struct Fit {
     unseen: u32,
     /// Pieces read as letters never seen touching.
     touching: u32,
+    /// Pieces read as a letter not learned yet, through a guess close to them.
+    guessed: u32,
     worst: u32,
     name: usize,
 }
@@ -307,6 +319,13 @@ pub struct TooltipReader {
     shapes: HashMap<String, Vec<u32>>,
     /// Each glyph's distance to the nearest learned shape of each letter.
     distances: HashMap<u32, HashMap<String, u32>>,
+    /// Each letter's guesses ([`seed`]): shapes drawn from an open font, never kept as learned.
+    guesses: Vec<(String, Vec<u32>)>,
+    /// Where each letter is in `guesses`.
+    guess_index: HashMap<String, usize>,
+    /// Each glyph's distance to the nearest guess of each letter, in `guesses`' order: one byte a
+    /// letter, as a row is kept for every glyph seen.
+    guess_distances: HashMap<u32, Vec<u8>>,
     /// Decoded names, by the pieces read and how many shapes were known then.
     decoded: HashMap<(Vec<Piece>, usize), Vec<Fit>>,
     /// Names whose pattern was strong enough to confirm the letters they taught on their own.
@@ -332,8 +351,9 @@ impl Default for TooltipReader {
 }
 
 impl TooltipReader {
+    /// A reader that has learned nothing yet, starting from the guesses in [`seed`].
     pub fn new() -> Self {
-        TooltipReader {
+        let mut reader = TooltipReader {
             lexicon: Arc::clone(item_lexicon()),
             others: false,
             glyphs: Vec::new(),
@@ -341,6 +361,9 @@ impl TooltipReader {
             taught: HashMap::new(),
             shapes: HashMap::new(),
             distances: HashMap::new(),
+            guesses: Vec::new(),
+            guess_index: HashMap::new(),
+            guess_distances: HashMap::new(),
             decoded: HashMap::new(),
             patterns: HashMap::new(),
             strong: HashSet::new(),
@@ -349,7 +372,17 @@ impl TooltipReader {
             cut: None,
             stuck: None,
             dismissed: Vec::new(),
+        };
+        for (letter, glyph) in seed() {
+            let id = reader.intern(glyph);
+            let next = reader.guesses.len();
+            let at = *reader.guess_index.entry(letter.clone()).or_insert(next);
+            if at == next {
+                reader.guesses.push((letter.clone(), Vec::new()));
+            }
+            reader.guesses[at].1.push(id);
         }
+        reader
     }
 
     /// A reader that also tells items apart from `names` the game shows that aren't in the item list
@@ -507,6 +540,12 @@ impl TooltipReader {
             return Err(Unsure::Unclear);
         }
         if second.saturating_sub(best.cost) < MARGIN {
+            // Read partly through guesses, the name could still be either: it's being learned,
+            // and the player can say which it is.
+            if best.guessed > 0 {
+                self.stuck = Some(self.stuck_on(&pieces, &fits));
+                return Err(Unsure::Learning);
+            }
             return Err(Unsure::TwoNames);
         }
         let lexicon = Arc::clone(&self.lexicon);
@@ -636,10 +675,18 @@ impl TooltipReader {
     /// and clearly closer to than to any other. On the see-through box a letter's edge pixels change
     /// with the scene behind it, so a new name's pieces are rarely the shapes learned exactly.
     fn close_letter(&mut self, glyph: u32) -> Option<String> {
-        let letters: Vec<String> = self.shapes.keys().cloned().collect();
+        // Guesses count here too, so a piece close to a learned letter but also to another
+        // letter's guess isn't taken as the learned one.
+        let guessed = self.guesses.iter().filter(|(_, shapes)| !shapes.is_empty());
+        let letters: HashSet<String> = self
+            .shapes
+            .keys()
+            .chain(guessed.map(|(letter, _)| letter))
+            .cloned()
+            .collect();
         let mut costs: Vec<(u32, String)> = letters
             .into_iter()
-            .map(|letter| (self.cost(glyph, &letter), letter))
+            .map(|letter| (self.nearness(glyph, &letter), letter))
             .collect();
         costs.sort();
         match costs.as_slice() {
@@ -872,22 +919,29 @@ impl TooltipReader {
     }
 
     /// Each learned letter's usual width: the middle of its shapes' widths.
+    /// For a letter not learned yet, its guesses' usual width.
     fn letter_widths(&self) -> HashMap<char, u32> {
-        self.shapes
+        let median = |(letters, shapes): (&String, &Vec<u32>)| {
+            let mut w: Vec<u32> = shapes
+                .iter()
+                .map(|&s| self.glyphs[s as usize].width())
+                .collect();
+            w.sort_unstable();
+            Some((letters.chars().next()?, *w.get(w.len() / 2)?))
+        };
+        let single = |(letters, _): &(&String, &Vec<u32>)| letters.chars().count() == 1;
+        let mut widths: HashMap<char, u32> = self
+            .guesses
             .iter()
-            .filter(|(letters, _)| letters.chars().count() == 1)
-            .filter_map(|(letters, shapes)| {
-                let mut w: Vec<u32> = shapes
-                    .iter()
-                    .map(|&s| self.glyphs[s as usize].width())
-                    .collect();
-                w.sort_unstable();
-                Some((letters.chars().next()?, *w.get(w.len() / 2)?))
-            })
-            .collect()
+            .map(|(letters, shapes)| (letters, shapes))
+            .filter(single)
+            .filter_map(median)
+            .collect();
+        widths.extend(self.shapes.iter().filter(single).filter_map(median));
+        widths
     }
 
-    /// Drops a glyph from the shapes learned, for every letter.
+    /// Drops a glyph from the shapes learned and the guesses, for every letter.
     fn forget_shape(&mut self, glyph: u32) {
         let mut changed = false;
         for shapes in self.shapes.values_mut() {
@@ -895,9 +949,20 @@ impl TooltipReader {
             shapes.retain(|&s| s != glyph);
             changed |= shapes.len() != before;
         }
+        let mut guess_changed = false;
+        for (_, shapes) in &mut self.guesses {
+            let before = shapes.len();
+            shapes.retain(|&s| s != glyph);
+            guess_changed |= shapes.len() != before;
+        }
         if changed {
             self.shapes.retain(|_, shapes| !shapes.is_empty());
             self.distances.clear();
+        }
+        if guess_changed {
+            self.guess_distances.clear();
+        }
+        if changed || guess_changed {
             self.learned += 1;
         }
     }
@@ -950,15 +1015,65 @@ impl TooltipReader {
         &self.distances[&glyph]
     }
 
-    /// How far a glyph is from a letter's learned shapes: `UNSEEN` for a letter with none yet.
-    /// A narrow glyph (i, l, a quote) is drawn the same every time, so only an exact match counts.
-    fn cost(&mut self, glyph: u32, letter: &str) -> u32 {
-        if !self.shapes.contains_key(letter) {
-            return UNSEEN;
+    /// How far a glyph is from a letter's guesses, `CAP` for a letter with none.
+    fn guess_distance(&mut self, glyph: u32, letter: &str) -> u32 {
+        let Some(&at) = self.guess_index.get(letter) else {
+            return CAP;
+        };
+        if !self.guess_distances.contains_key(&glyph) {
+            let g = &self.glyphs[glyph as usize];
+            let row = self
+                .guesses
+                .iter()
+                .map(|(_, shapes)| {
+                    let d = shapes
+                        .iter()
+                        .map(|&s| {
+                            if s == glyph {
+                                0
+                            } else {
+                                distance(g, &self.glyphs[s as usize])
+                            }
+                        })
+                        .min()
+                        .unwrap_or(CAP);
+                    // Distances are capped at CAP, well within a byte.
+                    d.min(CAP) as u8
+                })
+                .collect();
+            self.guess_distances.insert(glyph, row);
         }
+        u32::from(self.guess_distances[&glyph][at])
+    }
+
+    /// How far a glyph is from the nearest of a letter's learned shapes and guesses. A narrow
+    /// glyph (i, l, a quote) is drawn the same every time, so only an exact match counts.
+    fn nearness(&mut self, glyph: u32, letter: &str) -> u32 {
+        let learned = if self.shapes.contains_key(letter) {
+            self.distances_of(glyph).get(letter).copied().unwrap_or(CAP)
+        } else {
+            CAP
+        };
+        let d = learned.min(self.guess_distance(glyph, letter));
         let narrow = self.glyphs[glyph as usize].width() <= 3;
-        let d = self.distances_of(glyph).get(letter).copied().unwrap_or(CAP);
         if narrow && d > 0 { CAP } else { d }
+    }
+
+    /// Whether the game hasn't shown a letter the reader can tell from a glyph yet: none of its
+    /// shapes is learned, and none of its guesses is close to the glyph.
+    fn unseen(&mut self, glyph: u32, letter: &str) -> bool {
+        !self.shapes.contains_key(letter) && self.nearness(glyph, letter) > CLOSE
+    }
+
+    /// How far a glyph is from a letter: `UNSEEN` for a letter the game hasn't shown yet. A guess
+    /// counts only when it's close, so a name whose letters the guesses don't fit is still one
+    /// being learned, which the player can name, and never one read unclearly.
+    fn cost(&mut self, glyph: u32, letter: &str) -> u32 {
+        if self.unseen(glyph, letter) {
+            UNSEEN
+        } else {
+            self.nearness(glyph, letter)
+        }
     }
 
     /// The cost of a piece read as `letters` (two or three touching ones), and whether those
@@ -995,9 +1110,9 @@ impl TooltipReader {
         let words = 1 + pieces.iter().skip(1).filter(|p| p.space).count();
         let extra: usize = pieces.iter().map(|p| p.letters - 1).sum();
         let mut fits = Vec::new();
-        // Each piece's cost as each letter it might be, and whether that letter has no shapes
-        // yet, worked out once per decode.
-        let mut single: HashMap<(usize, char), (u32, bool)> = HashMap::new();
+        // Each piece's cost as each letter it might be, whether the game hasn't shown that letter
+        // yet, and whether the piece reads as it only through a guess, worked out once per decode.
+        let mut single: HashMap<(usize, char), (u32, bool, bool)> = HashMap::new();
         let lexicon = Arc::clone(&self.lexicon);
         let index_of = &lexicon.by_size;
         let candidates: Vec<usize> = (k..=k + extra)
@@ -1007,15 +1122,15 @@ impl TooltipReader {
             .collect();
         for index in candidates {
             let n = lexicon.names[index].letters.len();
-            const NONE: (u32, u32, u32, u32) = (u32::MAX, 0, 0, 0);
-            // best[i][j]: (cost, unseen letters, new touching pieces, worst) reading pieces[..i]
-            // as letters[..j].
+            const NONE: (u32, u32, u32, u32, u32) = (u32::MAX, 0, 0, 0, 0);
+            // best[i][j]: (cost, unseen letters, new touching pieces, guessed letters, worst)
+            // reading pieces[..i] as letters[..j].
             let mut best = vec![vec![NONE; n + 1]; k + 1];
-            best[0][0] = (0, 0, 0, 0);
+            best[0][0] = (0, 0, 0, 0, 0);
             for i in 0..k {
                 let piece = pieces[i];
                 for j in 0..n {
-                    let (cost, unseen, touching, worst) = best[i][j];
+                    let (cost, unseen, touching, guessed, worst) = best[i][j];
                     if cost == u32::MAX {
                         continue;
                     }
@@ -1029,15 +1144,17 @@ impl TooltipReader {
                         if (j + 1..j + t).any(|q| lexicon.names[index].starts.contains(&q)) {
                             break;
                         }
-                        let (c, new_letter) = if t == 1 {
+                        let (c, new_letter, by_guess) = if t == 1 {
                             let letter = lexicon.names[index].letters[j];
                             match single.get(&(i, letter)) {
                                 Some(&known) => known,
                                 None => {
                                     let text = letter.to_string();
+                                    let unseen = self.unseen(piece.glyph, &text);
                                     let known = (
                                         self.cost(piece.glyph, &text),
-                                        !self.shapes.contains_key(&text),
+                                        unseen,
+                                        !unseen && !self.shapes.contains_key(&text),
                                     );
                                     single.insert((i, letter), known);
                                     known
@@ -1049,7 +1166,7 @@ impl TooltipReader {
                             match self.cost_touching(piece.glyph, &letters, &widths) {
                                 // Too narrow or wide for those letters: not a way to read it.
                                 (CAP, _) => continue,
-                                cost => cost,
+                                (cost, new) => (cost, new, false),
                             }
                         };
                         let total = cost.saturating_add(c);
@@ -1059,18 +1176,20 @@ impl TooltipReader {
                                 total,
                                 unseen + u32::from(new_letter && single),
                                 touching + u32::from(new_letter && !single),
+                                guessed + u32::from(by_guess),
                                 if new_letter { worst } else { worst.max(c) },
                             );
                         }
                     }
                 }
             }
-            let (cost, unseen, touching, worst) = best[k][n];
+            let (cost, unseen, touching, guessed, worst) = best[k][n];
             if cost < 200 {
                 fits.push(Fit {
                     cost,
                     unseen,
                     touching,
+                    guessed,
                     worst,
                     name: index,
                 });
@@ -1082,7 +1201,8 @@ impl TooltipReader {
     }
 
     /// What was learned of the name font, to keep on the player's device: one line per shape,
-    /// its letters, a tab, then the glyph.
+    /// its letters, a tab, then the glyph. Only shapes read off the game's tooltips: the guesses
+    /// every reader starts from aren't learned, and a later build may draw them differently.
     pub fn knowledge(&self) -> Option<String> {
         if self.shapes.is_empty() {
             return None;
@@ -1100,8 +1220,8 @@ impl TooltipReader {
         Some(lines.join("\n"))
     }
 
-    /// A reader that knows what [`TooltipReader::knowledge`] kept. `None` when the text isn't
-    /// knowledge.
+    /// A reader that knows what [`TooltipReader::knowledge`] kept, on top of the guesses every
+    /// reader starts from. `None` when the text isn't knowledge.
     pub fn from_knowledge(text: &str) -> Option<TooltipReader> {
         let mut reader = TooltipReader::new();
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
@@ -1191,6 +1311,26 @@ impl Lexicon {
 fn item_lexicon() -> &'static Arc<Lexicon> {
     static ITEMS: OnceLock<Arc<Lexicon>> = OnceLock::new();
     ITEMS.get_or_init(|| Arc::new(Lexicon::new(&[])))
+}
+
+/// Letter shapes drawn from Liberation Sans Bold, an openly licensed font close to the one the
+/// game draws names in, by `examples/tooltip_seed.rs`: one line per shape, its letter, a tab, then
+/// the glyph, as [`TooltipReader::knowledge`] writes them, after lines starting `# ` that say
+/// where they're from (a guess for `#` itself starts with `#` and a tab).
+const SEED: &str = include_str!("../../data/tooltip-seed.txt");
+
+/// The guesses each reader starts from, read once: [`SEED`]'s shapes.
+fn seed() -> &'static [(String, Glyph)] {
+    static SHAPES: OnceLock<Vec<(String, Glyph)>> = OnceLock::new();
+    SHAPES.get_or_init(|| {
+        SEED.lines()
+            .filter(|line| !line.is_empty() && !line.starts_with("# "))
+            .filter_map(|line| {
+                let (letter, glyph) = line.split_once('\t')?;
+                Some((letter.to_string(), Glyph::decode(glyph)?))
+            })
+            .collect()
+    })
 }
 
 /// Capital I and small l are drawn alike, so names are compared with them folded together.
@@ -1709,6 +1849,20 @@ pub(crate) mod test_support {
         }
     }
 
+    /// A letter as the reader's guesses draw it ([`seed`]): its first shape, the whole 15-row band
+    /// the reader cuts. Drawn from an open font, so tests can use it.
+    pub(crate) fn seed_letter(c: char) -> (u32, Vec<u32>) {
+        let letter = fold(c).to_string();
+        let (_, glyph) = seed()
+            .iter()
+            .find(|(l, _)| *l == letter)
+            .unwrap_or_else(|| panic!("no guess for {c:?}"));
+        (
+            glyph.width(),
+            (0..glyph.height()).map(|y| glyph.row(y)).collect(),
+        )
+    }
+
     /// Draws an item tooltip on a BGRA picture `width` pixels wide: a box from (`x0`, `y0`),
     /// `w` x `h`, tinted with its untinted ring and cut corners, its dot and `name` in the test
     /// font (an equip's name a row lower). Returns the box's rect.
@@ -1722,6 +1876,18 @@ pub(crate) mod test_support {
         h: u32,
         name: &str,
         equip: bool,
+    ) -> Rect {
+        draw_in(bgra, width, (x0, y0, w, h), name, equip, letter)
+    }
+
+    /// [`draw`], with `name` in the letters `font` gives.
+    pub(crate) fn draw_in(
+        bgra: &mut [u8],
+        width: u32,
+        (x0, y0, w, h): (u32, u32, u32, u32),
+        name: &str,
+        equip: bool,
+        font: fn(char) -> (u32, Vec<u32>),
     ) -> Rect {
         let get = |bgra: &[u8], x: u32, y: u32| {
             let i = ((y * width + x) * 4) as usize;
@@ -1758,8 +1924,14 @@ pub(crate) mod test_support {
                 x += 4;
                 continue;
             }
-            let (lw, rows) = letter(c);
-            let top = if rows.len() > 10 { dy - 5 } else { dy - 4 };
+            let (lw, rows) = font(c);
+            // A letter as tall as the reader's whole band fills it; the test font's letters sit
+            // where the game's capitals do, a bracket a row higher.
+            let top = match rows.len() {
+                15 => dy - 6,
+                n if n > 10 => dy - 5,
+                _ => dy - 4,
+            };
             for (r, bits) in rows.iter().enumerate() {
                 for b in 0..lw {
                     if bits >> b & 1 == 1 {
@@ -2211,6 +2383,96 @@ mod tests {
         let t = show(&mut reader, "Mithril Ingot").tooltip.unwrap();
         assert_eq!(t.items, Some(ids_of("Mithril Ingot")));
         assert!(TooltipReader::from_knowledge("not\tknowledge").is_none());
+    }
+
+    /// Shows one name's tooltip for two frames, its name in the guesses' own letters.
+    fn show_in_guesses(reader: &mut TooltipReader, name: &str) -> TooltipReading {
+        let mut canvas = Canvas::new(1366, 768);
+        let (width, bgra) = (canvas.width, &mut canvas.bgra);
+        test_support::draw_in(
+            bgra,
+            width,
+            (300, 200, 288, 113),
+            name,
+            false,
+            test_support::seed_letter,
+        );
+        let _ = reader.observe(&canvas.frame(), None);
+        reader.observe(&canvas.frame(), None)
+    }
+
+    // The baked-in guesses parse whole and cover every character item names use but the double
+    // quote, which the reader cuts as two pieces. Fails if the file is cut short or misses one.
+    #[test]
+    fn the_guesses_cover_every_character_item_names_use() {
+        let lines = SEED
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with("# "))
+            .count();
+        assert_eq!(seed().len(), lines);
+        assert!(seed().iter().any(|(l, _)| l == "#"));
+        let guessed: HashSet<String> = seed().iter().map(|(l, _)| l.clone()).collect();
+        let missing: HashSet<char> = item_lexicon()
+            .names
+            .iter()
+            .flat_map(|n| n.letters.iter().copied())
+            .filter(|c| !guessed.contains(&c.to_string()))
+            .collect();
+        assert_eq!(missing, HashSet::from(['"']));
+        assert!(SEED.contains("SIL Open Font License"));
+    }
+
+    // Before the game has shown a single letter, a name drawn like the guesses is named; what's
+    // kept afterwards is only letters read off the tooltip, never the guesses themselves.
+    #[test]
+    fn guesses_name_an_item_before_any_letter_is_learned_and_are_never_kept() {
+        let mut reader = TooltipReader::new();
+        assert_eq!(reader.knowledge(), None);
+        let t = show_in_guesses(&mut reader, "Brown Skullcap")
+            .tooltip
+            .unwrap();
+        assert_eq!(t.items, Some(ids_of("Brown Skullcap")));
+        assert!(t.confirmed);
+        let kept = reader.knowledge().unwrap();
+        assert!(
+            kept.lines()
+                .all(|l| "BrownSkulcap".contains(l.split('\t').next().unwrap()))
+        );
+    }
+
+    // A name the guesses don't fit (here in the made-up test font) is still one being learned,
+    // with names it could be, so the player can still pick it in the Prices tab.
+    #[test]
+    fn a_name_the_guesses_dont_fit_is_still_being_learned() {
+        let mut reader = TooltipReader::new();
+        let t = show(&mut reader, "Brown Skullcap").tooltip.unwrap();
+        assert_eq!(t.unsure, Some(Unsure::Learning));
+        assert!(t.stuck.is_some_and(|s| !s.candidates.is_empty()));
+    }
+
+    // Read through guesses, a name another fits almost as well ('h' and 'n' are drawn alike) is
+    // one being learned with both to pick from, not a name shown nothing for.
+    #[test]
+    fn a_guessed_name_close_to_another_is_being_learned_with_both() {
+        let ids = [5_999_999];
+        let mut reader = TooltipReader::new().with_other_names([("Sky Snark", &ids[..])]);
+        let t = show_in_guesses(&mut reader, "Sky Shark").tooltip.unwrap();
+        assert_eq!(t.unsure, Some(Unsure::Learning));
+        let stuck = t.stuck.unwrap();
+        let names: Vec<&str> = stuck.candidates.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names[..2], ["Sky Shark", "Sky Snark"]);
+    }
+
+    // The app restores a reader from the letters it kept on top of the guesses, so letters
+    // learned before still leave the guesses to read what the game hasn't shown yet.
+    #[test]
+    fn a_reader_restored_from_kept_letters_keeps_its_guesses() {
+        let text = taught().knowledge().unwrap();
+        let mut reader = TooltipReader::from_knowledge(&text).unwrap();
+        let t = show_in_guesses(&mut reader, "Brown Skullcap")
+            .tooltip
+            .unwrap();
+        assert_eq!(t.items, Some(ids_of("Brown Skullcap")));
     }
 
     // Over dark scenes (black, or the dark grey of a cave) the tint barely changes what's behind,
