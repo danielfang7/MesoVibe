@@ -105,7 +105,10 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "NSWorkspace",
 ] }
 
-# Only for examples/replay_exp.rs, which replays private captures (PNG plus meta.json).
 [dev-dependencies]
+# Only for examples/replay_exp.rs, which replays private captures (PNG plus meta.json).
 png = "0.18"
 serde_json = "1"
+# Only for examples/tooltip_seed.rs, which draws the tooltip reader's starting letter shapes from
+# an open font (engine/data/tooltip-seed.txt). Nothing it draws with ships in the app.
+ab_glyph = "0.2.32"

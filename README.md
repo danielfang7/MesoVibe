@@ -21,7 +21,7 @@ MesoVibe only looks at the game window, through the operating system's screen ca
 
 MesoVibe reads your HP and MP numbers and your quick slots to count the potions you drink, and never drinks one for you.
 
-With "Prices next to item tooltips" on, MesoVibe reads the name in the game's item tooltip when you point at an item in your inventory, equipment window, an NPC shop or storage, and shows its Free Market price just under the tooltip in a window of its own that clicks go through. That includes the cash items Cozy Markets prices; a copy the game marks "Untradable" says so. MesoVibe learns the tooltip's letters on your computer from the bundled item list and the first items you point at, and while it's learning the label says so. If a name stays unread, the Prices tab lists what it could be: picking one there teaches MesoVibe that name. Nothing is sent anywhere.
+With "Prices next to item tooltips" on, MesoVibe reads the name in the game's item tooltip when you point at an item in your inventory, equipment window, an NPC shop or storage, and shows its Free Market price just under the tooltip in a window of its own that clicks go through. That includes the cash items Cozy Markets prices; a copy the game marks "Untradable" says so. MesoVibe starts from letter shapes drawn from Liberation Sans, a free font close to the game's, so it can name many items from the first tooltip. It learns the game's own letters on your computer from the bundled item list and the items you point at, and while a name is still being learned the label says so. If a name stays unread, the Prices tab lists what it could be: picking one there teaches MesoVibe that name. Nothing is sent anywhere.
 
 A few times a day MesoVibe downloads Free Market prices from mesovibe.com, one file built from [Cozy Markets](https://cozy.markets) prices. The request carries nothing about you or the game; the server sees your IP address, as any website does. Cozy Markets isn't part of MesoVibe and doesn't endorse it.
 
@@ -53,6 +53,8 @@ pnpm tauri dev
 ### License
 
 MesoVibe is licensed under the BSD 2-clause license. See [LICENSE](LICENSE).
+
+The tooltip reader's starting letter shapes in [engine/data](engine/data/) are drawn from Liberation Sans Bold, licensed under the [SIL Open Font License 1.1](engine/data/LiberationSans-OFL.txt). Nothing in them comes from the game.
 
 The game pictures in [web/img](web/img/), the game window, an item tooltip and the map name in the panel's screenshots, are from MapleStory Classic World and belong to Nexon; that license doesn't cover them. They're on the website only to show what MesoVibe reads and shows, with names and chat blurred.
 
