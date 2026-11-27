@@ -6,10 +6,11 @@
 // Restart to update), `updatefail` (GitHub couldn't be reached; Check now then finds nothing)
 // `unreadable` (the Session Tracker's saved data can't be opened the first time it's read), and
 // `loot` (play with pickups: a map read from the minimap, mesos every few kills, a second map
-// after a while).
+// after a while), and `site` (a steady session for the website's pictures: level 41 at 39%, mesos
+// every few kills, no deaths, no map).
 // The mini-HUD page (hud.html) takes `grind`, `learning` and `blocked`; the chat overlay page
 // (chat.html) takes `grind`; the price label page (label.html) takes `label`, `labelold`,
-// `labelnpc` and `labelwide`. During play, whisper, party and friend lines arrive every few
+// `labelnpc`, `labelwide`, `labelnew`, `labeluntradable`, `labellearn` and `labelpick`. During play, whisper, party and friend lines arrive every few
 // seconds, drawn here as pictures the way the host hands them over.
 // Release builds leave this file out (ipc.ts loads it only in development).
 import { SCHEMA_VERSION, type Event as GameEvent } from "@mesovibe/sdk";
@@ -156,8 +157,8 @@ export function mockHost(scenario: string): Host {
   const storage = { reads: 0, saves: 0 };
   (window as unknown as { __mockStorage: typeof storage }).__mockStorage = storage;
   const started = Date.now();
-  let exp = scenario === "levelup" ? NEEDED - 400 : 230_000;
-  let level = 42;
+  let exp = scenario === "levelup" ? NEEDED - 400 : scenario === "site" ? 140_520 : 230_000;
+  let level = scenario === "site" ? 41 : 42;
   let lastGain = 0;
   /** The `loot` scenario's meso total, as the inventory shows it, and the last one sent. */
   let mesos = 1_204_330;
@@ -233,7 +234,7 @@ export function mockHost(scenario: string): Host {
       lastGain = s.atMs;
       const before = level;
       exp += 63 + Math.round(Math.random() * 40);
-      if (Math.random() < 0.02) exp = Math.max(0, exp - 5_000);
+      if (scenario !== "site" && Math.random() < 0.02) exp = Math.max(0, exp - 5_000);
       if (exp >= NEEDED) {
         exp -= NEEDED;
         level += 1;
@@ -248,9 +249,9 @@ export function mockHost(scenario: string): Host {
       };
       for (const handler of eventHandlers) handler(event, s.atMs);
       if (level > before) for (const handler of eventHandlers) handler({ type: "LevelUp", level }, s.atMs);
-      if (scenario === "loot") {
-        const map = lootMap(s.atMs - started);
-        if (map !== lastMap) {
+      if (scenario === "loot" || scenario === "site") {
+        const map = scenario === "loot" ? lootMap(s.atMs - started) : null;
+        if (map !== null && map !== lastMap) {
           lastMap = map;
           for (const handler of eventHandlers) handler({ type: "MapChanged", map_key: map }, s.atMs);
         }
