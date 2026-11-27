@@ -15,7 +15,8 @@ export const FORMAT_VERSION = 1;
 export const STATE_PATH = "prices/state.json";
 /** The file /api/prices serves. */
 export const FILE_PATH = "prices/prices.json";
-/** The one-off history backfill's own file (_lib/backfill.js): days this job reads where it kept none. */
+/** The history a one-off backfill filled from Cozy's per-item answers (removed once it was done):
+ * days this job reads where it kept none, until they're older than the chart. */
 export const BACKFILL_PATH = "prices/backfill.json";
 /** When the job runs: 15 minutes after each Cozy update (00, 06, 12 and 18 UTC). vercel.json repeats it. */
 export const REFRESH_SCHEDULE = "15 0,6,12,18 * * *";
@@ -344,7 +345,7 @@ export function shiftDay(day, by) {
   return date.toISOString().slice(0, 10);
 }
 
-/** For each world, each backfilled item's days by game id (_lib/backfill.js). */
+/** For each world, each backfilled item's days by game id. */
 export function filledDays(text) {
   const state = readBackfill(text, { error() {} });
   const out = {};

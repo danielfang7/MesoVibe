@@ -6,18 +6,11 @@
     {
       "path": "/api/refresh",
       "schedule": "15 0,6,12,18 * * *"
-    },
-    {
-      "path": "/api/backfill",
-      "schedule": "* * * * *"
     }
   ],
   "functions": {
     "api/refresh.js": {
       "maxDuration": 120
-    },
-    "api/backfill.js": {
-      "maxDuration": 60
     }
   },
   "headers": [
