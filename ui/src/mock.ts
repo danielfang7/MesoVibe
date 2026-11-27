@@ -215,6 +215,11 @@ export function mockHost(scenario: string): Host {
     if (t < 1500) return { ...base, state: "no_game", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
     if (scenario === "dark") return darkStatus(started, game);
     if (scenario === "fullscreen") return fullScreenStatus(started);
+    // A first reading named by the digits' shapes, which no EXP gain has confirmed yet.
+    if (scenario === "checking") {
+      const unconfirmed = { level: 42, exp: 230_640, expShown: true, pctHundredths: 6462, needed: NEEDED, confirmed: false };
+      return { ...base, state: "capturing", game, exp: unconfirmed, unreadable: null, error: null, calibration: "provisional" };
+    }
     if (t < 4000) {
       return { ...base, state: "capturing", game, exp: null, unreadable: "learning", error: null, chat: "reading", calibration: "learning", hpMpState: "learning" };
     }

@@ -22,16 +22,24 @@
 //! color and position. As EXP moves,
 //! [`ExpBarReader::observe`] goes through three states ([`Calibration`]):
 //!
-//! - **Learning:** too few different EXP values to tell. Nothing is read.
+//! - **Learning:** too few different EXP values to tell, and the digits' shapes don't name them.
+//!   Nothing is read.
 //! - **Provisional:** one naming fits if EXP needed is a value from meowdb's EXP table
-//!   ([`super::exp_table`]). Readings come out marked unconfirmed and produce no events.
-//! - **Confirmed:** one naming fits on the HUD's evidence alone, without the table.
+//!   ([`super::exp_table`]), or, before that, the digits' own loops and strokes name them
+//!   ([`digit_shapes`]) and the field read that way fits exactly one level of the table.
+//!   Readings come out marked unconfirmed and produce no events.
+//! - **Confirmed:** one naming fits on the HUD's evidence alone, without the table or the shapes.
 //!
-//! On recorded Windows captures, readings appeared after four different EXP values and were
-//! confirmed after six, about four seconds of grinding. The level is the table's level whose EXP
-//! needed fits the bar. Once confirmed, the level tiles' digits are learned from it, and a
-//! level-up teaches each new tile digit as the previous level plus one. Typing a reading
-//! ([`ExpBarReader::calibrate`]) stays as a fallback.
+//! The HUD's digits are a plain pixel font whose shapes the rules name right, on recorded Mac
+//! and Windows captures at every size recorded, so a reading shows from the first frame, standing
+//! still. Confirming still takes EXP gains: on recorded fields, a wrong naming (a font the rules
+//! misread) fit one field's EXP and percent about one time in twenty, and three different fields
+//! in a row up to one time in a hundred. The level tiles are another font, one whose 3 and 4 the
+//! rules misread, so they're never named by shape. On recorded Windows captures, the gains
+//! confirmed the digits after six different EXP values, about four seconds of grinding. The
+//! level is the table's level whose EXP needed fits the bar. Once confirmed, the level tiles'
+//! digits are learned from it, and a level-up teaches each new tile digit as the previous level
+//! plus one. Typing a reading ([`ExpBarReader::calibrate`]) stays as a fallback.
 //!
 //! **Late in a level the HUD shows only the percent**, `[92.61%]`. On a recorded Windows run at
 //! level 58 it did from 92.61% on, past the point where the EXP reached a million (91.95% of
@@ -39,9 +47,12 @@
 //! earlier one ([`ExpBarReader::from_knowledge`]), and the reading's EXP is worked out from the
 //! percent and the level's EXP needed ([`ExpReading::exp_shown`] is false). A reader that has
 //! only ever seen the percent names the digits by the order they climb in ([`Climb`]), in one or
-//! two whole percents of grinding. It reads the percent from then on, but the level and the EXP
-//! wait for the full field, at the next level.
+//! two whole percents of grinding. Until then the digits' shapes show the percent, unconfirmed,
+//! while no step of the climb goes against them; nothing else can check the percent alone. It
+//! reads the percent from then on, but the level and the EXP wait for the full field, at the next
+//! level.
 
+use super::digit_shapes;
 use super::exp_table;
 use super::hp_mp::{self, HpMp, HpMpUnreadable, SlashLearner};
 use crate::events::Event;
@@ -489,8 +500,12 @@ struct Learner {
     /// Distinct EXP fields seen, with digits as indexes into `shapes`.
     observations: Vec<Observation>,
     /// Punctuation and digits as named so far, before confirmation: the naming the HUD alone
-    /// singles out, or else the one the EXP table singles out.
+    /// singles out, or else the one the EXP table singles out, or else the one the digits' own
+    /// shapes give ([`shape_naming`]).
     provisional: Option<Atlas>,
+    /// Whether `provisional` came from the digits' shapes, not from the bar's evidence. Such a
+    /// naming is worked out again from each new field, so evidence against it drops it at once.
+    shaped: bool,
     /// The naming the HUD alone singles out, and for how many new fields in a row it has.
     candidate: Option<(Vec<u8>, usize)>,
     /// The level tiles' glyphs in the frames the evidence came from. When they change, the level
@@ -882,6 +897,7 @@ impl ExpBarReader {
             // fell to the start of the new level, too.
             self.keep_newest(0);
             self.learner.provisional = None;
+            self.learner.shaped = false;
             self.learner.candidate = None;
             self.learner.climb = Climb::default();
         }
@@ -912,6 +928,14 @@ impl ExpBarReader {
                         ..Learner::default()
                     };
                 }
+            }
+            // Until the climb names the digits, which takes a whole percent or two, the shapes
+            // show the percent. A naming from the full field's evidence stays first.
+            if !self.learner.confirmed
+                && (self.learner.provisional.is_none() || self.learner.shaped)
+            {
+                let named = self.learner.climb.by_shape();
+                self.set_shaped(&self.learner.climb.shapes.clone(), named);
             }
             return Ok(());
         }
@@ -955,8 +979,30 @@ impl ExpBarReader {
         if self.learner.observations.len() > MAX_OBSERVATIONS {
             self.keep_newest(MAX_OBSERVATIONS / 2);
         }
+        // A naming from the shapes is only ever a stand-in for the evidence: drop it before
+        // solving, and give it back only if the evidence names nothing and it still fits.
+        if self.learner.shaped {
+            self.learner.provisional = None;
+            self.learner.shaped = false;
+        }
         self.solve();
+        if !self.learner.confirmed && self.learner.provisional.is_none() {
+            let named = shape_naming(&self.learner.observations, &self.learner.shapes);
+            self.set_shaped(&self.learner.shapes.clone(), named);
+        }
         Ok(())
+    }
+
+    /// Makes a naming of `shapes` from their own loops and strokes the provisional one, shown
+    /// unconfirmed: on top of the punctuation, and only if it names no shape the way the
+    /// punctuation already does. `None` leaves nothing provisional.
+    fn set_shaped(&mut self, shapes: &[Glyph], named: Option<Vec<u8>>) {
+        let atlas = named.and_then(|named| {
+            let mut digits = self.digits.clone();
+            digits.learn(shapes, &names(&named)).ok().map(|_| digits)
+        });
+        self.learner.shaped = atlas.is_some();
+        self.learner.provisional = atlas;
     }
 
     fn solve(&mut self) {
@@ -1513,6 +1559,47 @@ impl Observation {
     }
 }
 
+/// Each shape's digit by its loops and strokes ([`digit_shapes::guess`]), the way a person reads
+/// digits in a font they haven't seen, or `None` unless every shape gets one and no two get the
+/// same.
+fn shape_digits(shapes: &[Glyph]) -> Option<Vec<u8>> {
+    let mut used = [false; 10];
+    shapes
+        .iter()
+        .map(|glyph| {
+            let digit = digit_shapes::guess(glyph)?.to_digit(10)? as u8;
+            (!std::mem::replace(&mut used[usize::from(digit)], true)).then_some(digit)
+        })
+        .collect()
+}
+
+/// A naming of the EXP field's digit shapes that needs no EXP gains: the shapes' own
+/// ([`shape_digits`]), kept only when every field seen at this level, read with it, agrees on
+/// an EXP needed that exactly one level of the EXP table has. It lets the bar show from the
+/// first frame, while standing still. It's never confirmed on its own: a font it misreads can
+/// still fit one field by chance (on recorded fields, a wrong naming fit about one time in
+/// twenty), so confirming takes the HUD's own evidence, as without it.
+fn shape_naming(observations: &[Observation], shapes: &[Glyph]) -> Option<Vec<u8>> {
+    let digits = shape_digits(shapes)?;
+    let mut range = (1, u64::MAX);
+    for o in observations {
+        let leading_zero = |idx: &[usize]| idx.len() > 1 && digits[idx[0]] == 0;
+        if leading_zero(&o.exp) || leading_zero(&o.whole) {
+            return None;
+        }
+        let (lo, hi) = o.range(&digits)?;
+        range = (range.0.max(lo), range.1.min(hi));
+        if range.0 > range.1 {
+            return None;
+        }
+    }
+    let mut levels = exp_table::levels_within(range.0, range.1);
+    match (levels.next(), levels.next()) {
+        (Some(_), None) => Some(digits),
+        _ => None,
+    }
+}
+
 /// Up to `limit` ways to name `shapes` digit shapes with different digits, under which every
 /// observation's EXP and percent agree on one EXP needed (and, with `use_table`, that EXP needed
 /// is one of the table's values). Shapes are numbered in order of first appearance, so each
@@ -1738,6 +1825,18 @@ impl Climb {
         Order::Named(digits)
     }
 
+    /// The shapes' own naming ([`shape_digits`]), shown while the steps can't name the digits
+    /// yet: kept only while the last field reads as a percent with it and no step seen goes
+    /// against it. Nothing else can check the percent alone, so it's never confirmed on its own:
+    /// the steps confirm the digits, as without it.
+    fn by_shape(&self) -> Option<Vec<u8>> {
+        let digits = shape_digits(&self.shapes)?;
+        let against = (0..self.shapes.len()).any(|lo| {
+            (0..self.shapes.len()).any(|hi| self.below[lo][hi] > 0 && digits[lo] > digits[hi])
+        });
+        (!against && self.spells_a_percent(&digits)).then_some(digits)
+    }
+
     /// Whether the last field, named by `digits`, is a percent the HUD could show: no leading
     /// zero, and no more than 100.00%.
     fn spells_a_percent(&self, digits: &[u8]) -> bool {
@@ -1942,6 +2041,36 @@ pub(crate) mod test_support {
             Font { glyphs }
         }
 
+        /// [`Font::new`] with its digits drawn in the plain style the shape rules read
+        /// ([`digit_shapes::test_support::PLAIN`]), except that each pair in `swapped` is drawn
+        /// with the other's shape: a font the rules misread.
+        pub(crate) fn plain(chars: &str, swapped: &[(char, char)]) -> Font {
+            let mut font = Font::new(chars, 0);
+            for (c, columns) in &mut font.glyphs {
+                let drawn_as = swapped
+                    .iter()
+                    .find_map(|&(a, b)| match *c {
+                        x if x == a => Some(b),
+                        x if x == b => Some(a),
+                        _ => None,
+                    })
+                    .unwrap_or(*c);
+                let plain = digit_shapes::test_support::PLAIN
+                    .iter()
+                    .find(|(digit, _)| *digit == drawn_as);
+                if let Some((_, rows)) = plain {
+                    *columns = (0..5)
+                        .map(|x| {
+                            (0..7)
+                                .filter(|&y| rows[y].as_bytes()[x] == b'#')
+                                .fold(0u8, |bits, y| bits | 1 << y)
+                        })
+                        .collect();
+                }
+            }
+            font
+        }
+
         pub(crate) fn columns(&self, c: char) -> &[u8] {
             &self
                 .glyphs
@@ -2038,6 +2167,14 @@ pub(crate) mod test_support {
                 level_font: Font::new(LEVEL_CHARS, 7),
                 slash_font: Font::new("/", 11),
                 label: 3,
+            }
+        }
+
+        /// A HUD whose EXP field has [`Font::plain`] digits.
+        pub(crate) fn plain(swapped: &[(char, char)]) -> Hud {
+            Hud {
+                exp_font: Font::plain(EXP_CHARS, swapped),
+                ..Hud::new()
             }
         }
 
@@ -2256,6 +2393,82 @@ mod tests {
         assert_eq!(reader.calibration(), Calibration::Confirmed);
         // The table's level taught the tiles, so the level now reads from them.
         assert!(!reader.missing().level.contains(&'4') && !reader.missing().level.contains(&'1'));
+    }
+
+    // Digit shapes.
+
+    /// Where the first confirmed reading came, in a fresh reader fed `exps`.
+    fn first_confirmed(hud: &Hud, level: u16, needed: u64, exps: &[u64]) -> Option<usize> {
+        let results = feed(hud, &mut ExpBarReader::new(), level, needed, exps);
+        results
+            .iter()
+            .position(|r| r.as_ref().is_ok_and(|r| r.confirmed))
+    }
+
+    // Digits the shape rules can read show from the first frame, before any EXP gain, marked
+    // unconfirmed: no events, nothing kept. Fails if they wait for gains or confirm any sooner.
+    #[test]
+    fn readable_digits_show_from_the_first_frame_and_confirm_as_before() {
+        let hud = Hud::plain(&[]);
+        let mut reader = ExpBarReader::new();
+        let pct = pct_of(GRIND[0], NEEDED_41);
+        let first = reader
+            .observe(&hud.draw_values(41, GRIND[0], pct).frame())
+            .unwrap();
+        assert_eq!(
+            values(&first),
+            (Some(41), GRIND[0], pct),
+            "the table's level"
+        );
+        assert_eq!(first.needed, Some(NEEDED_41));
+        assert!(!first.confirmed);
+        assert_eq!(reader.calibration(), Calibration::Provisional);
+        assert!(events_between(None, &first).is_empty());
+        assert_eq!(reader.knowledge(), None, "only confirmed shapes are kept");
+        assert!(
+            reader.missing().level.contains(&'4'),
+            "tiles aren't named by shape"
+        );
+
+        let results = feed(&hud, &mut reader, 41, NEEDED_41, &GRIND[1..]);
+        for (r, &exp) in results.iter().zip(&GRIND[1..]) {
+            let r = r.as_ref().expect("shown on every frame");
+            assert_eq!(values(r), (Some(41), exp, pct_of(exp, NEEDED_41)));
+        }
+        assert_eq!(reader.calibration(), Calibration::Confirmed);
+        assert!(reader.knowledge().is_some());
+        assert_eq!(
+            first_confirmed(&hud, 41, NEEDED_41, &GRIND),
+            first_confirmed(&Hud::new(), 41, NEEDED_41, &GRIND),
+            "the same gains confirm the digits"
+        );
+    }
+
+    // A font whose 4 and 5 the shape rules swap: its first frames fit the table at the wrong
+    // level, so they show, unconfirmed. Fails if the wrong naming is ever confirmed.
+    #[test]
+    fn a_font_the_shapes_misread_is_shown_unconfirmed_and_never_confirmed() {
+        let hud = Hud::plain(&[('4', '5')]);
+        let needed_20 = 20_216;
+        let exps: Vec<u64> = (0..40).map(|i| 11_797 + 21 * i).collect();
+        let results = feed(&hud, &mut ExpBarReader::new(), 20, needed_20, &exps);
+        let first = results[0].as_ref().unwrap();
+        assert_eq!(
+            (first.level, first.pct_hundredths, first.confirmed),
+            (Some(21), 4834, false),
+            "58.35% at level 20, read as 48.34% at level 21"
+        );
+        for (r, &exp) in results.iter().zip(&exps) {
+            if let Ok(r) = r
+                && r.confirmed
+            {
+                assert_eq!(values(r), (Some(20), exp, pct_of(exp, needed_20)));
+            }
+        }
+        assert!(
+            results.last().unwrap().as_ref().is_ok_and(|r| r.confirmed),
+            "the bar's own evidence confirms the right digits"
+        );
     }
 
     // Saved knowledge: a later session shows level and EXP at once, not "learning".
@@ -3064,6 +3277,63 @@ mod tests {
         assert_eq!(up.needed, Some(needed_59));
         assert!(reader.missing().exp.is_empty());
         assert!(!reader.missing().level.contains(&'9'));
+    }
+
+    /// The percent alone at level 58 as a recorded run climbed it, from 92.61% to 99.5%, and what
+    /// a fresh reader made of each frame.
+    fn climb_pct(hud: &Hud) -> Vec<(u16, Result<ExpReading, Unreadable>)> {
+        let needed_58 = 1_087_536;
+        let mut reader = ExpBarReader::new();
+        let mut exp = 1_007_166;
+        (0..)
+            .map(|i| {
+                exp += [0, 270, 0, 310, 120, 0, 290][i % 7];
+                pct_of(exp, needed_58)
+            })
+            .take_while(|&pct| pct <= 9_950)
+            .map(|pct| (pct, reader.observe(&hud.draw_pct(58, pct).frame())))
+            .collect()
+    }
+
+    // Late in a level on a fresh install, digits the shape rules can read show the percent from
+    // the first frame, unconfirmed. Fails if that changes when the climb confirms them.
+    #[test]
+    fn the_percent_alone_shows_from_the_first_frame_and_its_climb_confirms_it() {
+        let confirmed_at = |frames: &[(u16, Result<ExpReading, Unreadable>)]| {
+            frames
+                .iter()
+                .position(|(_, r)| r.as_ref().is_ok_and(|r| r.confirmed))
+        };
+        let plain = climb_pct(&Hud::plain(&[]));
+        let at = confirmed_at(&plain).expect("the climb confirms the digits");
+        assert_eq!(at, confirmed_at(&climb_pct(&Hud::new())).unwrap());
+        for (i, (pct, r)) in plain.iter().enumerate() {
+            let r = r.as_ref().expect("shown from the first frame");
+            assert_eq!((r.level, r.exp, r.pct_hundredths), (None, None, *pct));
+            assert_eq!(r.confirmed, i >= at, "frame {i}");
+            assert!(i >= at || events_between(None, r).is_empty());
+        }
+    }
+
+    // The same climb in a font whose 4 and 5 the shape rules swap: a step from x4 to x5 goes
+    // against them, so the wrong percent stops showing. Fails if it's ever confirmed.
+    #[test]
+    fn a_climb_against_the_shapes_drops_them_and_confirms_only_the_climb() {
+        let frames = climb_pct(&Hud::plain(&[('4', '5')]));
+        let (mut dropped, mut shown_wrong) = (false, false);
+        for (pct, r) in &frames {
+            match r {
+                Ok(r) if r.confirmed => assert_eq!(r.pct_hundredths, *pct),
+                Ok(r) => {
+                    assert!(!dropped, "a dropped naming doesn't come back");
+                    shown_wrong |= r.pct_hundredths != *pct;
+                }
+                Err(Unreadable::Learning) => dropped = true,
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(shown_wrong && dropped);
+        assert!(frames.last().unwrap().1.as_ref().is_ok_and(|r| r.confirmed));
     }
 
     // A death costing under 1% within one whole percent reads as a rise: here 92.91% to 92.01%
