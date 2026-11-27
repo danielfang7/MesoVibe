@@ -1,6 +1,8 @@
 //! What MesoVibe keeps on this computer: settings, each plugin's own data (JSON files), and the
 //! shapes the readers named (the EXP bar's digits in `exp-bar.txt`, the meso total's in
-//! `meso-total.txt`, so later sessions read from the first frame), all in the app's data folder.
+//! `meso-total.txt`, the item tooltips' letters in `tooltip-font.txt`, so later sessions read from
+//! the first frame, and the names the player said aren't items in `tooltip-dismissed.txt`), all in
+//! the app's data folder.
 //! Nothing leaves the device.
 //!
 //! Writes go to a temporary file that is then renamed over the old one, so a crash never leaves a
@@ -32,6 +34,13 @@ pub enum Learned {
     /// The meso total's digits
     /// ([`mesovibe_engine::recognizers::meso_total::MesoReader::knowledge`]).
     MesoTotal,
+    /// The item tooltips' name letters
+    /// ([`mesovibe_engine::recognizers::tooltip::TooltipReader::knowledge`]).
+    TooltipFont,
+    /// Names the player said in the Prices tab are none of the listed items
+    /// ([`mesovibe_engine::recognizers::tooltip::TooltipReader::dismissed_knowledge`]). Its own
+    /// file, so a MesoVibe that doesn't know it still reads `tooltip-font.txt`.
+    TooltipDismissed,
 }
 
 impl Learned {
@@ -39,6 +48,8 @@ impl Learned {
         match self {
             Learned::ExpBar => "exp-bar.txt",
             Learned::MesoTotal => "meso-total.txt",
+            Learned::TooltipFont => "tooltip-font.txt",
+            Learned::TooltipDismissed => "tooltip-dismissed.txt",
         }
     }
 }
@@ -77,8 +88,11 @@ pub struct Settings {
     /// Where the panel was when it last closed, so it comes back there and keeps the width the
     /// player gave it (presence.rs rebuilds the panel for each play session).
     pub panel: Option<PanelFrame>,
-    /// The world whose Free Market prices the Prices tab shows (prices.rs).
+    /// The world whose Free Market prices the Prices tab and the price label show (prices.rs).
     pub price_world: World,
+    /// The price label: the Free Market price under the game's tooltip for the item the player
+    /// points at (label.rs). Off, no tooltip is read.
+    pub price_label: bool,
 }
 
 /// The panel's visible frame, in desktop units (points on a Mac, pixels on Windows; dock.rs).
@@ -176,6 +190,7 @@ impl Default for Settings {
             chat_overlay_colors: ChatColors::default(),
             panel: None,
             price_world: World::Windia,
+            price_label: true,
         }
     }
 }

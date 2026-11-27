@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import {
+  BACKFILL_PATH,
   FILE_PATH,
   REFRESH_SCHEDULE,
   STATE_PATH,
@@ -356,7 +357,10 @@ test("the cached copy lasts until just after the next scheduled run", () => {
 // vercel.json and the code both name the schedule. Fails if they drift apart.
 test("vercel.json runs the job on the schedule the code expects", async () => {
   const config = JSON.parse(await readFile(new URL("../web/vercel.json", import.meta.url), "utf8"));
-  assert.deepEqual(config.crons, [{ path: "/api/refresh", schedule: REFRESH_SCHEDULE }]);
+  assert.deepEqual(
+    config.crons.filter((cron) => cron.path === "/api/refresh"),
+    [{ path: "/api/refresh", schedule: REFRESH_SCHEDULE }],
+  );
 });
 
 // The two limits are "more than": a list that moves by exactly 20%, or exactly 5% priced 0, still
@@ -392,4 +396,44 @@ test("the endpoint answers HEAD without a body, refuses POST, and honors If-None
   }
   const stale = await serve({ request: get(url, { "If-None-Match": '"old"' }), store, now: NOW });
   assert.equal(stale.status, 200);
+});
+
+const BACKFILL_NOW = new Date("2026-11-26T18:00:30Z");
+const BACKFILL_TODAY = "2026-11-26";
+
+// The price job uses backfilled days only where it kept none, so the week's change and the chart
+// work before it has a week of its own: a day it kept always wins. Fails if the backfill could
+// overwrite a kept price, or the week's change ignores it.
+test("the price job fills missing days from the backfill, never over a kept one", async () => {
+  const usual = (items, world) => ({ source: "Cozy Markets", world, updated_at: "2026-11-26T18:08:00.000Z", count: items.length, items });
+  const trends = (world) => ({ source: "Cozy Markets", world, basis: "sold", movers: { "7d": { up: [], down: [] } } });
+  const item = (game_id, price) => ({ item_id: 7, game_id, name: "Cap", gender: null, usual: price, basis: "sold", window: "day", listings: 1, sales: 1, url: "u" });
+  const answers = {
+    "/usual-prices": usual([item(1002071, 1200)], "windia"),
+    "/trends": trends("windia"),
+    "/usual-prices?world=zenith": usual([item(1002071, 1300)], "zenith"),
+    "/trends?world=zenith": trends("zenith"),
+  };
+  const fetchImpl = async (url) => Response.json(answers[url.replace("https://cozy.markets/trade-api/dev/v1", "")]);
+  const kept = { [shiftDay(BACKFILL_TODAY, -2)]: { 1002071: 1100 } };
+  const filled = { [shiftDay(BACKFILL_TODAY, -7)]: 1000, [shiftDay(BACKFILL_TODAY, -2)]: 1, [shiftDay(BACKFILL_TODAY, -20)]: 900 };
+  const store = memoryStore({
+    [STATE_PATH]: JSON.stringify({ version: 1, worlds: { windia: { count: 1, days: kept } } }),
+    [BACKFILL_PATH]: JSON.stringify({ version: 1, lease: null, worlds: { windia: { 1002071: { days: filled } } } }),
+  });
+  const response = await refresh({
+    request: new Request("https://mesovibe.com/api/refresh", { headers: { authorization: "Bearer test-secret" } }),
+    env: ENV,
+    fetchImpl,
+    store,
+    now: BACKFILL_NOW,
+    log: silent,
+  });
+  assert.equal(response.status, 200);
+  const cap = JSON.parse(store.data.get(FILE_PATH)).worlds.windia.items[0];
+  assert.equal(cap.change_7d, 0.2, "1200 against the backfilled 1000 seven days ago");
+  assert.equal(cap.history.at(-3), 1100, "the kept day, not the backfill's 1");
+  assert.equal(cap.history.at(-21), 900);
+  const state = JSON.parse(store.data.get(STATE_PATH));
+  assert.equal(state.worlds.windia.days[shiftDay(BACKFILL_TODAY, -7)], undefined, "backfilled days stay in the backfill's file");
 });

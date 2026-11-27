@@ -6,14 +6,32 @@
 // Restart to update), `updatefail` (GitHub couldn't be reached; Check now then finds nothing)
 // `unreadable` (the Session Tracker's saved data can't be opened the first time it's read), and
 // `loot` (play with pickups: a map read from the minimap, mesos every few kills, a second map
-// after a while).
+// after a while), and `site` (a steady session for the website's pictures: level 41 at 39%, mesos
+// every few kills, no deaths, no map).
 // The mini-HUD page (hud.html) takes `grind`, `learning` and `blocked`; the chat overlay page
-// (chat.html) takes `grind`. During play, whisper, party and friend lines arrive every few
+// (chat.html) takes `grind`; the price label page (label.html) takes `label`, `labelold`,
+// `labelnpc`, `labelwide`, `labelnew`, `labeluntradable`, `labellearn` and `labelpick`. During play, whisper, party and friend lines arrive every few
 // seconds, drawn here as pictures the way the host hands them over.
 // Release builds leave this file out (ipc.ts loads it only in development).
 import { SCHEMA_VERSION, type Event as GameEvent } from "@mesovibe/sdk";
 
-import type { ChatChannel, ChatHost, ChatLine, ChatPosition, GamePicture, HudHost, HudSummary, Host, Settings, Startup, Status, UpdateStatus } from "./ipc.js";
+import type {
+  ChatChannel,
+  ChatHost,
+  ChatLine,
+  ChatPosition,
+  GamePicture,
+  HudHost,
+  HudSummary,
+  Host,
+  LabelHost,
+  LabelShown,
+  Pointed,
+  Settings,
+  Startup,
+  Status,
+  UpdateStatus,
+} from "./ipc.js";
 import { mockPrices } from "./mock-prices.js";
 
 const NEEDED = 356_916;
@@ -130,6 +148,7 @@ export function mockHost(scenario: string): Host {
     chatOverlayColors: { whisper: "#66ff66", party: "#ff88cc", friend: "#ffaa44" },
     chatOverlayPosition: "left",
     priceWorld: "windia",
+    priceLabel: true,
   };
   const statusHandlers: ((status: Status) => void)[] = [];
   const eventHandlers: ((event: GameEvent, atMs: number) => void)[] = [];
@@ -138,8 +157,8 @@ export function mockHost(scenario: string): Host {
   const storage = { reads: 0, saves: 0 };
   (window as unknown as { __mockStorage: typeof storage }).__mockStorage = storage;
   const started = Date.now();
-  let exp = scenario === "levelup" ? NEEDED - 400 : 230_000;
-  let level = 42;
+  let exp = scenario === "levelup" ? NEEDED - 400 : scenario === "site" ? 140_520 : 230_000;
+  let level = scenario === "site" ? 41 : 42;
   let lastGain = 0;
   /** The `loot` scenario's meso total, as the inventory shows it, and the last one sent. */
   let mesos = 1_204_330;
@@ -159,6 +178,13 @@ export function mockHost(scenario: string): Host {
       map: null,
       mesos: settings.safeMode ? null : ("reading" as const),
       slots: settings.safeMode ? null : ("reading" as const),
+      // `&tooltips=learning` shows the price label still learning the game's letters.
+      tooltips:
+        settings.safeMode || !settings.priceLabel
+          ? null
+          : new URLSearchParams(location.search).get("tooltips") === "learning"
+            ? ("learning" as const)
+            : ("reading" as const),
       fullScreen: false,
     };
     if (!base.reading) return { ...base, state: "off", game: null, exp: null, unreadable: null, error: null, calibration: "learning" };
@@ -208,7 +234,7 @@ export function mockHost(scenario: string): Host {
       lastGain = s.atMs;
       const before = level;
       exp += 63 + Math.round(Math.random() * 40);
-      if (Math.random() < 0.02) exp = Math.max(0, exp - 5_000);
+      if (scenario !== "site" && Math.random() < 0.02) exp = Math.max(0, exp - 5_000);
       if (exp >= NEEDED) {
         exp -= NEEDED;
         level += 1;
@@ -223,9 +249,9 @@ export function mockHost(scenario: string): Host {
       };
       for (const handler of eventHandlers) handler(event, s.atMs);
       if (level > before) for (const handler of eventHandlers) handler({ type: "LevelUp", level }, s.atMs);
-      if (scenario === "loot") {
-        const map = lootMap(s.atMs - started);
-        if (map !== lastMap) {
+      if (scenario === "loot" || scenario === "site") {
+        const map = scenario === "loot" ? lootMap(s.atMs - started) : null;
+        if (map !== null && map !== lastMap) {
           lastMap = map;
           for (const handler of eventHandlers) handler({ type: "MapChanged", map_key: map }, s.atMs);
         }
@@ -291,6 +317,48 @@ export function mockHost(scenario: string): Host {
     },
     ...mockPrices(scenario),
     setPriceWorld: async (world) => (settings = { ...settings, priceWorld: world }),
+    setPriceLabel: async (on) => (settings = { ...settings, priceLabel: on }),
+    onPricePointed: async (handler) => {
+      // The panel tests point at items with `window.__mockPoint([id])`, or at a name being learned
+      // with `window.__mockPoint({ ids: [], stuck: { token, candidates } })`.
+      (window as unknown as { __mockPoint: (pointed: number[] | Pointed) => void }).__mockPoint = (pointed) =>
+        handler(Array.isArray(pointed) ? { ids: pointed, stuck: null } : pointed);
+    },
+    teachTooltipName: async (token, name) => {
+      // The panel tests read the answers sent from `window.__mockTaught`.
+      const w = window as unknown as { __mockTaught?: [number, string | null][] };
+      (w.__mockTaught ??= []).push([token, name]);
+    },
+  };
+}
+
+/**
+ * The price label's stand-in (label.html): `?mock=label` a fresh price, `labelold` two-day-old
+ * prices, `labelnpc` an item with no Free Market price, `labelwide` a card wider than the window
+ * would give, `labelnew` a price with no week yet, `labeluntradable` an untradable copy,
+ * `labellearn` a name being learned, `labelpick` one the Prices tab can teach.
+ */
+export function mockLabelHost(scenario: string): LabelHost {
+  const base: LabelShown = { usual: 21_000_000, change: 0.08, npc: 20_000, world: "Windia", oldSinceMs: null, untradable: false, learning: null, cardWidth: 236, cardLeft: 8 };
+  const learning = (pick: boolean): LabelShown => ({ learning: { pick }, cardWidth: 236, cardLeft: 8 });
+  const view: LabelShown =
+    scenario === "labelold"
+      ? { ...base, change: -0.03, oldSinceMs: Date.now() - 48 * 60 * 60 * 1000 }
+      : scenario === "labelnpc"
+        ? { ...base, usual: null, change: null, npc: 30 }
+        : scenario === "labelwide"
+          ? { ...base, cardWidth: 180 }
+          : scenario === "labelnew"
+            ? { ...base, usual: 1_050, change: null, cardWidth: 288 }
+            : scenario === "labeluntradable"
+              ? { ...base, usual: 1_333_333, untradable: true }
+              : scenario === "labellearn"
+                ? learning(false)
+                : scenario === "labelpick"
+                  ? learning(true)
+                  : base;
+  return {
+    onView: async (handler) => handler(view),
   };
 }
 
@@ -307,6 +375,7 @@ export function mockChatHost(scenario: string): ChatHost {
     // `?position=above-chat` or `right` shows the other places in a browser.
     chatOverlayPosition: (new URLSearchParams(location.search).get("position") as ChatPosition | null) ?? "left",
     priceWorld: "windia",
+    priceLabel: true,
   };
   return {
     settings: async () => settings,

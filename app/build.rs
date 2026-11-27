@@ -1,6 +1,6 @@
 fn main() {
-    // The panel, the mini-HUD and the chat overlay may call only these commands, and only as
-    // capabilities/ allows each window.
+    // The panel, the mini-HUD, the chat overlay and the price label may call only these
+    // commands, and only as capabilities/ allows each window.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "app_info",
@@ -30,6 +30,8 @@ fn main() {
             "price_recent",
             "set_price_recent",
             "set_price_world",
+            "set_price_label",
+            "teach_tooltip_name",
             "open_price_page",
         ]),
     ))

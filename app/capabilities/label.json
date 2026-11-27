@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "price-label",
+  "description": "Allow-listed IPC for the price label window: listening to what it should say. No commands.",
+  "windows": ["price-label"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

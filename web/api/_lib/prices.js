@@ -15,6 +15,9 @@ export const FORMAT_VERSION = 1;
 export const STATE_PATH = "prices/state.json";
 /** The file /api/prices serves. */
 export const FILE_PATH = "prices/prices.json";
+/** The history a one-off backfill filled from Cozy's per-item answers (removed once it was done):
+ * days this job reads where it kept none, until they're older than the chart. */
+export const BACKFILL_PATH = "prices/backfill.json";
 /** When the job runs: 15 minutes after each Cozy update (00, 06, 12 and 18 UTC). vercel.json repeats it. */
 export const REFRESH_SCHEDULE = "15 0,6,12,18 * * *";
 const REFRESH_HOURS = [0, 6, 12, 18];
@@ -123,6 +126,7 @@ export async function refresh({ request, env, fetchImpl, store, now, log = conso
   }
 
   const state = readState(await store.read(STATE_PATH, { fresh: true }), log);
+  const filled = filledDays(await store.read(BACKFILL_PATH, { fresh: true }));
   // Every world is checked on every run, so each one's hold reflects this run's answer.
   const fetched = {};
   const holds = {};
@@ -170,7 +174,7 @@ export async function refresh({ request, env, fetchImpl, store, now, log = conso
     const today = dayOf(usual.updated_at);
     const days = recordDay(state.worlds[world]?.days ?? {}, today, usual.items);
     nextState.worlds[world] = { count: usual.items.length, days };
-    file.worlds[world] = buildWorld(usual, trends, days, today);
+    file.worlds[world] = buildWorld(usual, trends, days, today, filled[world]);
   }
   await store.write(STATE_PATH, JSON.stringify(nextState));
   await store.write(FILE_PATH, JSON.stringify(file));
@@ -178,7 +182,7 @@ export async function refresh({ request, env, fetchImpl, store, now, log = conso
   return json(200, { built_at: file.built_at, items });
 }
 
-async function getCozy(fetchImpl, key, path, world) {
+export async function getCozy(fetchImpl, key, path, world) {
   const url = `${COZY_API}${path}${world === "windia" ? "" : `?world=${world}`}`;
   let response;
   try {
@@ -252,7 +256,7 @@ function checkCommon(body, world) {
 }
 
 /** Whether the request carries the job's secret. Compared as digests, in constant time. */
-function signedWith(request, secret) {
+export function signedWith(request, secret) {
   const digest = (value) => createHash("sha256").update(value).digest();
   return timingSafeEqual(digest(request.headers.get("authorization") ?? ""), digest(`Bearer ${secret}`));
 }
@@ -279,16 +283,17 @@ export function recordDay(days, today, items) {
  * One world's part of the file. Items the game doesn't have (no `game_id`) are left out, since the
  * app finds items by the game's own id, and so are items at a usual price of 0, which the app
  * shows at their NPC price. The weekly change is against the price kept 7 days ago, like Cozy's
- * own; it's null until 7 days have been kept.
+ * own; it's null until 7 days are known. A day this job didn't keep comes from `filled`, the
+ * backfill's days by game id, when it has one: a kept day always wins.
  */
-export function buildWorld(usual, trends, days, today) {
+export function buildWorld(usual, trends, days, today, filled = {}) {
   const historyDays = Array.from({ length: HISTORY_DAYS }, (_, i) => shiftDay(today, i - (HISTORY_DAYS - 1)));
   const week = historyDays.slice(-7);
   const weekAgo = shiftDay(today, -7);
   const items = usual.items
     .filter(priced)
     .map((item) => {
-      const kept = (day) => days[day]?.[item.game_id];
+      const kept = (day) => days[day]?.[item.game_id] ?? filled[item.game_id]?.[day];
       const base = kept(weekAgo);
       const thisWeek = week.map(kept).filter(isPrice);
       return {
@@ -340,6 +345,35 @@ export function shiftDay(day, by) {
   return date.toISOString().slice(0, 10);
 }
 
+/** For each world, each backfilled item's days by game id. */
+export function filledDays(text) {
+  const state = readBackfill(text, { error() {} });
+  const out = {};
+  for (const world of WORLDS) {
+    out[world] = {};
+    for (const [gameId, kept] of Object.entries(state.worlds[world] ?? {})) {
+      if (kept?.days) out[world][gameId] = kept.days;
+    }
+  }
+  return out;
+}
+
+/** The backfill's file, or an empty one when it's missing or can't be read. */
+export function readBackfill(text, log) {
+  const empty = { version: 1, lease: null, worlds: {} };
+  if (text === null || text === undefined) return empty;
+  try {
+    const state = JSON.parse(text);
+    if (state?.version === 1 && typeof state.worlds === "object" && state.worlds !== null) {
+      return { version: 1, lease: typeof state.lease === "string" ? state.lease : null, worlds: state.worlds };
+    }
+  } catch {
+    // Falls through: a damaged file only costs what was filled, which later runs fill again.
+  }
+  log.error("backfill: its file couldn't be read; starting again");
+  return empty;
+}
+
 function readState(text, log) {
   if (text === null) return { version: 1, worlds: {} };
   try {
@@ -354,7 +388,7 @@ function readState(text, log) {
 
 // MARK: responses
 
-function json(status, body, headers = {}) {
+export function json(status, body, headers = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers },

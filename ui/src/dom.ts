@@ -18,6 +18,9 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   const element = document.createElement(tag);
   if (props.class) element.className = props.class;
   for (const [name, value] of Object.entries(props.attrs ?? {})) {
+    // The app's content security policy (style-src 'self') drops style attributes, so a page that
+    // set one would look right in a browser and wrong in MesoVibe. Set element.style instead.
+    if (name === "style") throw new Error("set element.style, not a style attribute: the app's security policy drops those");
     if (value === true) element.setAttribute(name, "");
     else if (typeof value === "string") element.setAttribute(name, value);
   }

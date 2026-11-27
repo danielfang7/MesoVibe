@@ -10,6 +10,7 @@ mod chat;
 mod dock;
 mod engine;
 mod game_text;
+mod label;
 mod presence;
 mod prices;
 mod store;
@@ -105,6 +106,8 @@ fn main() {
             price_recent,
             set_price_recent,
             set_price_world,
+            set_price_label,
+            teach_tooltip_name,
             open_price_page,
         ])
         .build(tauri::generate_context!());
@@ -244,6 +247,13 @@ fn set_price_world(world: prices::World, store: State<'_, Store>) -> Result<Sett
     store.update(|s| s.price_world = world)
 }
 
+/// "Prices next to item tooltips" (Settings > Display): off, no tooltip is read and no label
+/// shows (label.rs).
+#[tauri::command]
+fn set_price_label(on: bool, store: State<'_, Store>) -> Result<Settings, String> {
+    store.update(|s| s.price_label = on)
+}
+
 /// "Open on Cozy Markets ↗": the item's page on Cozy, or Cozy's front page with no item. Only
 /// Cozy's own addresses from the price file open, never one the panel names.
 #[tauri::command]
@@ -271,6 +281,17 @@ fn set_safe_mode(
 #[tauri::command]
 fn retry_capture(engine: State<'_, Engine>) {
     engine.send(Command::Retry);
+}
+
+/// The player's answer in the Prices tab's "Which item is this?" for the name being learned with
+/// `token`: the item's name, or none of the listed ones (`None`). It reaches the tooltip reader on
+/// the engine thread; an answer for a name the player has since pointed away from does nothing.
+#[tauri::command]
+fn teach_tooltip_name(token: u64, name: Option<String>, engine: State<'_, Engine>) {
+    engine.send(Command::TeachTooltip {
+        token,
+        choice: name,
+    });
 }
 
 /// The "What MesoVibe sees" view opened or closed: thumbnails only flow while it's open.
@@ -478,6 +499,7 @@ mod tests {
             include_str!("../capabilities/default.json"),
             include_str!("../capabilities/hud.json"),
             include_str!("../capabilities/chat.json"),
+            include_str!("../capabilities/label.json"),
         ]
         .concat();
         let commands = handlers(main);

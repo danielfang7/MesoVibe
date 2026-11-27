@@ -397,6 +397,7 @@ function shell(initial: Settings): void {
 
   const setSafeMode = async (on: boolean) => {
     panel.settings = await host.setSafeMode(on);
+    pricesTab.setPointing(panel.settings.priceLabel && !panel.settings.safeMode);
     panel.helpOpen = false;
     paintStrip();
     paintView();
@@ -458,6 +459,14 @@ function shell(initial: Settings): void {
     if (panel.view === "settings") paintView();
   };
   const pricesTab = new PricesTab(host, panel.settings.priceWorld, (world) => void setPriceWorld(world));
+  pricesTab.setPointing(panel.settings.priceLabel && !panel.settings.safeMode);
+
+  /** "Prices next to item tooltips": the price label over the game. */
+  const setPriceLabel = async (on: boolean) => {
+    panel.settings = await host.setPriceLabel(on);
+    pricesTab.setPointing(panel.settings.priceLabel && !panel.settings.safeMode);
+    if (panel.view === "settings" || panel.view === "sees") paintView();
+  };
 
   const setDisplay = async (change: Partial<Display>) => {
     const s = panel.settings;
@@ -1038,6 +1047,20 @@ function shell(initial: Settings): void {
         reading && status?.slots
           ? h("div", { class: "reading-box", attrs: { "data-key": "sees-slots" } }, h("span", { class: "label" }, "Quick slots"), h("span", {}, slotsLine(status.slots)))
           : null,
+        reading && status?.tooltips
+          ? h(
+              "div",
+              { class: "reading-box", attrs: { "data-key": "sees-item-names" } },
+              h("span", { class: "label" }, "Item names"),
+              h(
+                "span",
+                {},
+                status.tooltips === "learning"
+                  ? "Learning the game's letters from the items you point at. Only the first time."
+                  : "Read when you point at an item while your inventory, equipment window, an NPC shop or storage is open.",
+              ),
+            )
+          : null,
         h(
           "dl",
           { class: "key-value" },
@@ -1064,6 +1087,13 @@ function shell(initial: Settings): void {
         h("p", {}, "The minimap's map name, as a picture."),
         h("p", {}, "Your mesos, when your inventory, an NPC shop or storage is open: the mesos you carry, never the amount stored."),
         h("p", {}, "Your quick slots: which item each holds and when its count changes, to count the potions you drink."),
+        panel.settings.priceLabel
+          ? h(
+              "p",
+              { attrs: { "data-key": "sees-tooltips" } },
+              "Item tooltips, while your inventory, equipment window, an NPC shop or storage is open: the name of the item you point at, to show its price.",
+            )
+          : null,
         h("p", {}, "The chat box: whisper, party and friend lines, as pictures."),
         h("h2", { class: "label" }, "Never reads"),
         h("p", {}, "Your keyboard or mouse · the game's memory · the game's files · network traffic"),
@@ -1111,6 +1141,11 @@ function shell(initial: Settings): void {
             ),
           )
         : null,
+      hinted(
+        toggle("Prices next to item tooltips", s.priceLabel, (on) => void setPriceLabel(on), "settings-price-label"),
+        "While your inventory, equipment window, an NPC shop or storage is open, the item you point at shows its Free Market price under its tooltip. Clicks go through it to the game.",
+        "settings-price-label-hint",
+      ),
     );
   }
 
@@ -1330,6 +1365,7 @@ function shell(initial: Settings): void {
   const fullScreen = fullScreenWatch();
   void host.onStatus((status) => {
     panel.status = status;
+    pricesTab.setLearning(status.tooltips === "learning");
     panel.longDark = dark(status);
     panel.fullScreenUnread = fullScreen(status);
     if (status.exp?.confirmed) panel.lastReadAt = status.atMs;
@@ -1406,6 +1442,7 @@ function shell(initial: Settings): void {
   void host.onUpdateStatus(setUpdate);
   void host.updateStatus().then(setUpdate);
   void host.onPriceStatus((status) => pricesTab.setStatus(status));
+  void host.onPricePointed((pointed) => pricesTab.pointed(pointed));
   void host.priceStatus().then((status) => pricesTab.setStatus(status));
   // Keys reach MesoVibe only while its own panel has focus, never from the game.
   document.addEventListener("keydown", (event) => {
