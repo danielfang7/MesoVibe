@@ -46,6 +46,6 @@ pnpm build
 - Keep each pull request to one change, and describe what it changes for players and how you tested it.
 - Add or update tests for behavior you change.
 - Include a screenshot for a visible change to the panel.
-- Never commit screenshots or recordings of real play: chat shows other players' names. Keep captures outside the repository (`captures/` is ignored). The one exception is the website's game picture in `web/img`, which the maintainer chose and checked by eye, with every name and the chat box blurred.
+- Never commit screenshots or recordings of real play: chat shows other players' names. Keep captures outside the repository (`captures/` is ignored). The one exception is the website's game pictures in `web/img`, which the maintainer chose and checked by eye: every name and the chat box are blurred or out of the picture. The panel's screenshots there show a made-up session, not real play.
 
 By contributing, you agree that your contributions are licensed under the [BSD 2-clause license](../LICENSE).
