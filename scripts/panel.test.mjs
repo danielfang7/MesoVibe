@@ -189,6 +189,16 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
+  // A reading no EXP gain has confirmed yet shows in the strip with what confirms it. Fails if
+  // the strip says "Reading game" while the session can't count it yet.
+  await t.test("an unconfirmed first reading shows with what confirms it", async () => {
+    const page = await openPage(devtools, at("checking"));
+    const status = `document.querySelector(".status-text")?.textContent`;
+    await page.until(`${status} === "Reading Lv 42, 64.62%. Your first few EXP gains confirm it. Only the first time."`, "checking");
+    assert.deepEqual(page.errors, []);
+    page.close();
+  });
+
   // About also says how the last check went. Fails if the update line is missing, the click isn't
   // sent, a failure is hidden, or Check now does nothing.
   await t.test("a ready update is offered in the strip and installs only when clicked", async () => {

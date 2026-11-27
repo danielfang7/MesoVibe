@@ -185,9 +185,22 @@ function statusLine(panel: Panel): { text: string; tone: "live" | "idle" | "warn
     case "unsupported_size":
     case "unsupported_scale":
       return { text: "MesoVibe can't read the game at this size yet. Try windowed, up to 1366×768.", tone: "warn" };
-    default:
-      return { text: "Reading game", tone: "live" };
   }
+  // On a new install the digits' shapes read the bar before any EXP gain, but the session counts a
+  // reading only once the bar's own changes confirm it: a few gains, or late in a level a percent
+  // or two. Say so, rather than "Reading game" with no level or rate showing.
+  const bar = status.exp;
+  if (bar !== null && !bar.confirmed) {
+    const pct = formatPercent(bar.pctHundredths);
+    return {
+      text:
+        bar.level === null
+          ? `Reading ${pct}. Grinding a percent or two confirms it. Only the first time.`
+          : `Reading Lv ${bar.level}, ${pct}. Your first few EXP gains confirm it. Only the first time.`,
+      tone: "live",
+    };
+  }
+  return { text: "Reading game", tone: "live" };
 }
 
 function captureState(status: Status | null): CaptureState {
