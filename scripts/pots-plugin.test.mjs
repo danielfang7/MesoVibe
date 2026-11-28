@@ -136,7 +136,7 @@ test("potions cost their shop price, and pot cost/hr is over the time they were 
   assert.deepEqual(table.details, [["+160 HP each · 60/hr"], ["+150 MP each · 30/hr"]]);
   assert.deepEqual(potions(sent).children.at(-1), {
     kind: "text",
-    text: "Counted from your HP and MP numbers going up. Only Meat and Lemon are counted.",
+    text: "Counted from your HP and MP numbers going up. Only Meat, Lemon, Orange Potion, White Potion and Blue Potion are counted.",
     variant: "muted",
   });
   const order = sent.filter((m) => m.type === "render" && m.page === undefined).at(-1).view.map((node) => node.title);
@@ -421,7 +421,7 @@ test("a potion counted from its quick slot too is saved as counted both ways", (
   assert.deepEqual(potTable(sent).rows[0], ["Meat", "×11", "880"]);
   assert.deepEqual(potions(sent).children.at(-1), {
     kind: "text",
-    text: "Counted from your quick slots, as their counts drop. Only Meat and Lemon are counted.",
+    text: "Counted from your quick slots, as their counts drop. Only Meat, Lemon, Orange Potion, White Potion and Blue Potion are counted.",
     variant: "muted",
   });
   send(action("end", now));

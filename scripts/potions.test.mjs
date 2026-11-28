@@ -29,6 +29,19 @@ test("each potion's ID, name and sell price match the game data", () => {
   }
 });
 
+// A quick slot's potion is told apart only by how much it restores (count-source.ts takes a rise
+// up to 10 past an amount as that potion). Fails if two potions of the same kind restore within 10
+// of each other, so a rise would fit both and neither would ever be learned.
+test("no two potions of the same kind restore within 10 of each other", () => {
+  for (const a of POTIONS) {
+    for (const b of POTIONS) {
+      if (a !== b && a.resource === b.resource) {
+        assert.ok(Math.abs(a.amount - b.amount) > 10, `${a.name} (+${a.amount}) and ${b.name} (+${b.amount}) can't be told apart`);
+      }
+    }
+  }
+});
+
 test("each potion is listed once, with a shop price above its sell price", () => {
   assert.equal(new Set(POTIONS.map((p) => p.id)).size, POTIONS.length, "a potion is listed twice");
   for (const potion of POTIONS) {

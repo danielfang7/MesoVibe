@@ -91,9 +91,36 @@ test("a slot's count changing as HP or MP rises is one use of its potion", () =>
   assert.deepEqual(used(game.sent), { Meat: "×2", Lemon: "×1" });
   assert.deepEqual(potions(game.sent).children.at(-1), {
     kind: "text",
-    text: "Counted from your quick slots, as their counts drop. Only Meat and Lemon are counted.",
+    text: "Counted from your quick slots, as their counts drop. Only Meat, Lemon, Orange Potion, White Potion and Blue Potion are counted.",
     variant: "muted",
   });
+});
+
+// Orange, White and Blue Potions are learned from their amounts like Meat and Lemon, and priced at
+// their shop price. Fails if one is named as another potion, a use is lost, or a cost is wrong.
+test("Orange, White and Blue Potions are learned from what they restore", () => {
+  const game = grinding();
+  game.send(slot(2, "c50", "orange-icon", game.state.at));
+  game.send(slot(3, "c50", "white-icon", game.state.at));
+  game.send(slot(4, "c50", "blue-icon", game.state.at));
+  game.use({ hp: 250, slots: [[2, "c49", "orange-icon"]] });
+  game.use({ hp: 250, slots: [[2, "c48", "orange-icon"]] });
+  game.use({ hp: -1000 });
+  game.use({ hp: 500, slots: [[3, "c49", "white-icon"]] });
+  game.use({ hp: 500, slots: [[3, "c48", "white-icon"]] });
+  game.use({ mp: 200, slots: [[4, "c49", "blue-icon"]] });
+  game.use({ mp: 200, slots: [[4, "c48", "blue-icon"]] });
+  game.settle();
+  assert.deepEqual(used(game.sent), { "Orange Potion": "×2", "White Potion": "×2", "Blue Potion": "×2" });
+  const table = potions(game.sent).children.find((n) => n.kind === "table");
+  assert.deepEqual(
+    table.rows.map(([name, , cost]) => [name, cost]),
+    [
+      ["Orange Potion", "300"],
+      ["White Potion", "700"],
+      ["Blue Potion", "440"],
+    ],
+  );
 });
 
 // A count changing with no rise (potions picked up or bought) and a rise with no count changing
@@ -111,13 +138,13 @@ test("a count change without a rise, or a rise without a count change, counts no
 // or a named icon's uses need the exact amount.
 test("an icon is named by two rises of its potion's amount, then counted loosely", () => {
   const game = grinding();
-  game.use({ mp: 208, slots: [[0, "c273", "lemon-icon"]] });
+  game.use({ mp: 230, slots: [[0, "c273", "lemon-icon"]] });
   game.use({ mp: 150, slots: [[0, "c272", "lemon-icon"]] });
   game.settle();
   assert.deepEqual(used(game.sent), {}, "one rise of 150 names nothing");
   game.use({ mp: 150, slots: [[0, "c271", "lemon-icon"]] });
   game.settle();
-  assert.deepEqual(used(game.sent), { Lemon: "×3" }, "named, with the +208 and +150 before");
+  assert.deepEqual(used(game.sent), { Lemon: "×3" }, "named, with the +230 and +150 before");
   game.use({ mp: 90, slots: [[0, "c270", "lemon-icon"]] });
   game.use({ mp: 40, slots: [[0, "c269", "lemon-icon"]] });
   assert.deepEqual(used(game.sent), { Lemon: "×4" }, "+90 counts, +40 doesn't");
