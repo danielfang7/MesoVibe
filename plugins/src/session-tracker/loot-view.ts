@@ -5,12 +5,12 @@
  * Its headline is Mesos/hr: mesos picked up over the play time between two totals, never an
  * estimate. What the loot picked up is worth isn't known until it's sold, so Loot sold shows "—"
  * until a shop pays, and Profit (mesos picked up plus what shops paid) waits for that too. Sales
- * up to 30 minutes after End still count for the session (its close-out, in index.ts).
+ * up to 10 minutes after End still count for the session (its close-out, in index.ts).
  */
 
 import { formatCompact, formatDigits, formatDuration } from "@mesovibe/sdk";
 import type { Cell, Readers, ViewNode } from "@mesovibe/sdk";
-import { STALE_MS, ledgerProfit, mesosRate, profitRate } from "./loot.js";
+import { STALE_MS, ledgerProfit, mesosRate, mesosRateReady, profitRate } from "./loot.js";
 import type { Ledger, LootFields } from "./loot.js";
 
 /** The action that counts a held rise into Profit, by when it was read. */
@@ -25,6 +25,8 @@ export interface LootContext {
   /** The session has gained EXP. */
   started: boolean;
   paused: boolean;
+  /** The session's play time, the clock its meso totals are timed on. */
+  playMs: number;
   /** Pot cost/hr while potions are counted, for the net line; null otherwise. */
   potsPerHour: number | null;
 }
@@ -70,7 +72,9 @@ function stateLine(ledger: Ledger | undefined, rate: number | null, context: Loo
     return muted(stale(ledger, atMs) && asks ? `${read}. Open your inventory to update.` : read);
   }
   if (ledger !== undefined && ledger.b !== null) {
-    return muted(`Mesos read: ${formatDigits(ledger.b)}.${asks ? " Open your inventory again later to see mesos/hr." : ""}`);
+    // After a minute of play the next total makes mesos/hr, and the mini-HUD asks for it too.
+    const when = mesosRateReady(ledger, context.playMs) ? "now" : "in a minute";
+    return muted(`Mesos read: ${formatDigits(ledger.b)}.${asks ? ` Open your inventory again ${when} to see mesos/hr.` : ""}`);
   }
   return asks ? muted("Open your inventory to start counting mesos.") : null;
 }
@@ -110,7 +114,7 @@ export function lootSection(session: LootFields, context: LootContext): ViewNode
   children.push({ kind: "keyValue", items: rows });
 
   if (!sold && context.readers.mesos !== undefined && context.readers.mesos !== "unsupported") {
-    children.push(muted("Sell your loot at a shop to see what it's worth. Sales up to 30 minutes after End count for this session."));
+    children.push(muted("Sell your loot at a shop to see what it's worth. Sales up to 10 minutes after End count for this session."));
   }
   // Net after potions: from Profit/hr once Profit shows, from Mesos/hr until then.
   const base = profit ? profitRate(ledger) : rate;

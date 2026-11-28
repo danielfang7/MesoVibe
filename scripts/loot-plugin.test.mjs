@@ -630,23 +630,27 @@ test("the close-out counts every total until its time runs out", () => {
     return fields;
   };
   const shop = ended();
-  assert.deepEqual(loot.closeOut(shop, 1_150_000, "shop", T0 + 40 * MIN), { kind: "sold", amount: 50_000 });
-  assert.deepEqual(loot.closeOut(shop, 1_149_250, "shop", T0 + 41 * MIN), { kind: "spent", amount: 750 });
-  assert.deepEqual(loot.closeOut(shop, 6_149_250, "shop", T0 + 42 * MIN), { kind: "sold", amount: 5_000_000 }, "a sale is never held");
+  assert.deepEqual(loot.closeOut(shop, 1_150_000, "shop", T0 + 32 * MIN), { kind: "sold", amount: 50_000 });
+  assert.deepEqual(loot.closeOut(shop, 1_149_250, "shop", T0 + 33 * MIN), { kind: "spent", amount: 750 });
+  assert.deepEqual(loot.closeOut(shop, 6_149_250, "shop", T0 + 34 * MIN), { kind: "sold", amount: 5_000_000 }, "a sale is never held");
   const ledger = ledgerOf(shop);
   assert.deepEqual([ledger.so, ledger.sp, ledger.pt], [5_050_000, 750, 30 * MIN]);
-  assert.equal(ledger.co, T0 + 61 * MIN, "still open");
-  assert.equal(loot.closeOut(shop, 7_000_000, "shop", T0 + 61 * MIN + 1), null);
-  assert.equal(ledger.co, undefined, "its time ran out");
-  assert.equal(ledger.so, 5_050_000);
+  assert.equal(ledger.cs, 5_050_000, "what the close-out sold, so the strip stops asking");
+  loot.uncountSale(shop, 5_000_000);
+  assert.deepEqual([ledger.so, ledger.cs], [50_000, 50_000], "an undone sale comes off both");
+  assert.equal(ledger.co, T0 + 41 * MIN, "still open");
+  assert.equal(loot.closeOut(shop, 7_000_000, "shop", T0 + 41 * MIN + 1), null);
+  assert.deepEqual([ledger.co, ledger.cs], [undefined, undefined], "its time ran out");
+  assert.equal(ledger.so, 50_000);
 
   const inventory = ended();
-  assert.deepEqual(loot.closeOut(inventory, 1_140_000, "inventory", T0 + 40 * MIN), { kind: "sold", amount: 40_000 });
-  assert.equal(loot.closeOut(inventory, 9_000_000, "inventory", T0 + 41 * MIN).kind, "held");
+  assert.deepEqual(loot.closeOut(inventory, 1_140_000, "inventory", T0 + 32 * MIN), { kind: "sold", amount: 40_000 });
+  assert.equal(loot.closeOut(inventory, 9_000_000, "inventory", T0 + 33 * MIN).kind, "held");
+  assert.equal(ledgerOf(inventory).cs, 40_000, "a held rise isn't a sale");
 
   const stopped = ended();
   loot.stopCloseOut(stopped);
-  assert.equal(loot.closeOut(stopped, 1_228_400, "inventory", T0 + 40 * MIN), null);
+  assert.equal(loot.closeOut(stopped, 1_228_400, "inventory", T0 + 32 * MIN), null);
 
   // A session that read no total gets a close-out where totals can be read: its first total sets
   // the balance, and a close-out that read none leaves no ledger behind.
@@ -700,7 +704,7 @@ test("a saved ledger is kept when valid and dropped when not", () => {
 });
 
 // The Loot section (loot-view.ts), drawn from a ledger directly.
-const VIEW = { readers: MESOS, atMs: T0 + 34 * MIN, started: true, paused: false, potsPerHour: null };
+const VIEW = { readers: MESOS, atMs: T0 + 34 * MIN, started: true, paused: false, playMs: 34 * MIN, potsPerHour: null };
 /** A session with 1,000,000 then 1,050,000 read 30 minutes of play apart on one map. */
 function measured() {
   const fields = {};
@@ -709,7 +713,7 @@ function measured() {
   return fields;
 }
 const lines = (node) => node.children.filter((n) => n.kind === "text" || n.kind === "partial");
-const SELL = "Sell your loot at a shop to see what it's worth. Sales up to 30 minutes after End count for this session.";
+const SELL = "Sell your loot at a shop to see what it's worth. Sales up to 10 minutes after End count for this session.";
 
 // Before any total, Loot's headline has no figure and the line asks for the inventory, from a host
 // that reads the meso total only. Fails if a rate shows without two totals, the ask is missing, or
@@ -732,9 +736,11 @@ test("Loot asks for the inventory before any total, only from a host that reads 
 test("Loot gives the balance after one total, and Mesos/hr after two", () => {
   const one = {};
   loot.addReading(one, 5_170_316, "inventory", T0, grinding(0));
-  const first = lootView.lootSection(one, { ...VIEW, atMs: T0 + MIN });
+  const first = lootView.lootSection(one, { ...VIEW, atMs: T0 + 30_000, playMs: 30_000 });
   assert.equal(first.children[0].value, null);
-  assert.equal(first.children[1].text, "Mesos read: 5,170,316. Open your inventory again later to see mesos/hr.");
+  assert.equal(first.children[1].text, "Mesos read: 5,170,316. Open your inventory again in a minute to see mesos/hr.");
+  const ready = lootView.lootSection(one, { ...VIEW, atMs: T0 + MIN, playMs: MIN });
+  assert.equal(ready.children[1].text, "Mesos read: 5,170,316. Open your inventory again now to see mesos/hr.");
   assert.deepEqual(figuresOf(first), { "Loot sold": "—" });
   const two = lootView.lootSection(measured(), VIEW);
   assert.deepEqual(two.children.slice(0, 2), [
@@ -850,11 +856,12 @@ test("a total read just before the first kill opens the session", () => {
   assert.equal(opened(5 * MIN + 1), undefined);
 });
 
-// After End the strip asks the player to sell by a fixed time once End's Undo has passed, and
-// every sale in the next 30 minutes adds to the session with its own notice and Undo; an undone
-// sale isn't counted again by the next total, a purchase is spent, and the close-out ends at its
-// time. Fails if the close-out stops at its first total, a sale lands nowhere or twice, or a total
-// after the 30 minutes lands in the old session.
+// After End the strip asks the player to sell by a fixed time once End's Undo has passed, and stops
+// asking once they've sold; every sale in the next 10 minutes adds to the session with its own
+// notice and Undo; an undone sale isn't counted again by the next total, a purchase is spent, and
+// the close-out ends at its time. Fails if the ask outlives the first sale, the close-out stops at
+// its first total, a sale lands nowhere or twice, or a total after the 10 minutes lands in the old
+// session.
 test("sales after End add to the session until the close-out's time runs out", () => {
   const played = play({ seconds: 120 });
   const t = twoReadings(played);
@@ -862,8 +869,9 @@ test("sales after End add to the session until the close-out's time runs out", (
   assert.match(notices(played.sent).at(-1).text, /^Saved: [\d,]+ EXP and 50K mesos so far in 12m \(/);
   assert.equal(summary(played.sent).closeOutBy, null, "not over End's Undo");
   played.send({ type: "tick", atMs: t + 11_000 });
-  assert.equal(summary(played.sent).closeOutBy, t + 30 * MIN);
+  assert.equal(summary(played.sent).closeOutBy, t + 10 * MIN);
   played.send(total(1_262_000, t + 60_000, "shop"));
+  assert.equal(summary(played.sent).closeOutBy, null, "sold: no more asking");
   // 50,000 picked up and 212,000 sold over 10 minutes of play.
   assert.deepEqual(
     [notices(played.sent).at(-1).text, notices(played.sent).at(-1).undo],
@@ -871,7 +879,7 @@ test("sales after End add to the session until the close-out's time runs out", (
   );
   played.send(total(1_380_000, t + 61_000, "shop"));
   assert.equal(notices(played.sent).at(-1).text, "Added +118K sold. Session profit 380K (2.28M/hr).");
-  assert.equal(summary(played.sent).closeOutBy, t + 30 * MIN, "still open after a sale");
+
   assert.deepEqual(lootTable(played.sent).rows[0].slice(1), ["300K", "380K"]);
   assert.ok(lootTable(played.sent).details[0].some((line) => line.startsWith("Sales count until ")));
   // The last rise wasn't a sale: Undo takes it out, and the next total is measured from it.
@@ -883,9 +891,9 @@ test("sales after End add to the session until the close-out's time runs out", (
   const said = notices(played.sent).length;
   played.send(total(1_399_250, t + 80_000, "shop"));
   assert.equal(notices(played.sent).length, said, "a purchase says nothing");
-  played.send({ type: "tick", atMs: t + 30 * MIN + 1 });
+  played.send({ type: "tick", atMs: t + 10 * MIN + 1 });
   assert.equal(summary(played.sent).closeOutBy, null);
-  played.send(total(1_500_000, t + 31 * MIN, "shop"));
+  played.send(total(1_500_000, t + 11 * MIN, "shop"));
   const ledger = last(played.sent, "save").data.history[0].lg;
   assert.deepEqual([ledger.so, ledger.sp, ledger.co], [232_000, 750, undefined]);
   assert.ok(!notices(played.sent).slice(said).some((n) => n.text.startsWith("Added")));
@@ -907,7 +915,7 @@ test("a session with no total read counts its sales after End", () => {
   const played = play({ seconds: 120 });
   played.send(action("end", played.now));
   played.send({ type: "tick", atMs: played.now + 11_000 });
-  assert.equal(summary(played.sent).closeOutBy, played.now + 30 * MIN);
+  assert.equal(summary(played.sent).closeOutBy, played.now + 10 * MIN);
   played.send(total(800_000, played.now + 60_000, "shop"));
   played.send(total(812_000, played.now + 70_000, "shop"));
   assert.equal(notices(played.sent).at(-1).text, "Added +12K sold. Session profit 12K.");
@@ -935,7 +943,7 @@ test("the next session's first kill, or quitting, ends the close-out", () => {
   assert.ok(!notices(played.sent).some((n) => n.text.startsWith("Added")));
   assert.equal(last(played.sent, "save").data.history[0].lg.so, 0);
 
-  assert.equal(saved.history[0].lg.co, t + 30 * MIN);
+  assert.equal(saved.history[0].lg.co, t + 10 * MIN);
   const again = run();
   again.send({ type: "start", saved, atMs: t + 60_000, capture: "capturing", readers: MESOS });
   assert.equal(summary(again.sent).closeOutBy, null);
@@ -1115,18 +1123,28 @@ test("another character after End adds nothing to the ended session", () => {
   assert.deepEqual([ended.so, ended.sp, ended.ho.length], [0, 0, 0]);
 });
 
-// The mini-HUD asks for the inventory while the session has no total read or only one older than
-// 15 minutes, and only from a host that reads the meso total. Fails if the ask is missing, outlives
-// a fresh total, or asks for a reading nothing makes.
-test("the mini-HUD asks for the inventory with no total read, or a stale one", () => {
+// The mini-HUD asks for the inventory while the session has no total read, one a minute of play
+// old with no mesos/hr yet (the next total makes one), or only one older than 15 minutes, and only
+// from a host that reads the meso total. Fails if the ask is missing, outlives a fresh total, or
+// asks for a reading nothing makes.
+test("the mini-HUD asks for the inventory with no total read, one ready for a second, or a stale one", () => {
   const reading = play({ seconds: 120 });
   assert.equal(summary(reading.sent).askForMesos, true);
   assert.deepEqual(lootLines(reading.sent).slice(0, 1), ["Open your inventory to start counting mesos."]);
   reading.send(total(1_000_000, reading.now));
   assert.equal(summary(reading.sent).askForMesos, false);
-  const later = grind(reading, reading.now, 15 * 60 + 1);
+  const soon = grind(reading, reading.now, 30);
+  assert.equal(summary(reading.sent).askForMesos, false, "not before a second total could make mesos/hr");
+  assert.match(lootLines(reading.sent)[0], /Open your inventory again in a minute to see mesos\/hr\.$/);
+  const ready = grind(reading, soon, 31);
+  assert.equal(summary(reading.sent).askForMesos, true, "asks again once the next total makes mesos/hr");
+  assert.match(lootLines(reading.sent)[0], /Open your inventory again now to see mesos\/hr\.$/);
+  reading.send(total(1_010_000, ready));
+  assert.notEqual(summary(reading.sent).lootPerHour, null);
+  assert.equal(summary(reading.sent).askForMesos, false, "not once mesos/hr shows");
+  const later = grind(reading, ready, 15 * 60 + 1);
   assert.equal(summary(reading.sent).askForMesos, true, "asks again once it's over 15 minutes old");
-  reading.send(total(1_030_000, later));
+  reading.send(total(1_040_000, later));
   assert.equal(summary(reading.sent).askForMesos, false);
   reading.send(action("pause", later + 16 * MIN));
   reading.send({ type: "tick", atMs: later + 16 * MIN + 1_000 });
