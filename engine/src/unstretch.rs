@@ -411,6 +411,27 @@ pub fn top_left(frame: &Frame, rows: u32, columns: u32) -> Option<Picture> {
     })
 }
 
+/// The pixels along one direction of a stretched frame, `stretched` long, that the picture's
+/// pixels `from..to` alone make (the picture `source` long): both taps of each fall among them, so
+/// nothing outside those pixels changes them. A reader that keys a small region on its exact
+/// pixels reads these as captured: undoing the stretch spreads its rounding a few pixels, so the
+/// region's recovered pixels move whenever something next to it changes.
+pub fn stretched_within(stretched: u32, source: u32, from: u32, to: u32) -> std::ops::Range<u32> {
+    let scale = f64::from(source) / f64::from(stretched);
+    // The left tap, as `Inverse` places it; the right tap is the next pixel.
+    let left = |j: u32| ((f64::from(j) + 0.5) * scale - 0.5).floor();
+    let inside = |j: u32| left(j) >= f64::from(from) && left(j) + 1.0 < f64::from(to);
+    // Start a little before the estimate: the pixels inside are one unbroken run.
+    let near = ((f64::from(from) + 0.5) / scale) as u32;
+    let start = (near.saturating_sub(2)..stretched)
+        .find(|&j| inside(j))
+        .unwrap_or(stretched);
+    let end = (start..stretched)
+        .find(|&j| !inside(j))
+        .unwrap_or(stretched);
+    start..end
+}
+
 /// Pixel rows at the top of a Mac window's game area that macOS draws itself, under its title
 /// bar, rather than in the game's blocks (seen in recorded runs).
 const WINDOW_EDGE: u32 = 4;
@@ -872,6 +893,51 @@ mod tests {
                 &bgra[width as usize * 4..],
             );
             assert_eq!(top_left(&strip.unwrap(), rows, columns), None);
+        }
+    }
+
+    // Guards keys taken from a stretched frame's own pixels: the pixels picked for a region must
+    // come from that region alone. Fails if a change anywhere outside it moves one of them, or if
+    // the pick leaves out pixels that come from the region alone.
+    #[test]
+    fn the_stretched_pixels_within_a_region_come_from_it_alone() {
+        for (width, height) in [(1920, 1200), (1920, 1080)] {
+            let narrow = picture_width(width, height, NATIVE_HEIGHT);
+            let picture = busy_picture(narrow);
+            let (xs, ys) = (700..728, 640..645);
+            let mut outside = picture.clone();
+            for y in 0..NATIVE_HEIGHT {
+                for x in 0..narrow {
+                    if !xs.contains(&x) || !ys.contains(&y) {
+                        let p = &mut outside[(y * narrow + x) as usize];
+                        *p = [255 - p[0], 255 - p[1], 255 - p[2]];
+                    }
+                }
+            }
+            let a = stretch(&picture, narrow, width, height, 0);
+            let b = stretch(&outside, narrow, width, height, 0);
+            let at = |bgra: &[u8], x: u32, y: u32| {
+                let i = ((y * width + x) * 4) as usize;
+                [bgra[i], bgra[i + 1], bgra[i + 2]]
+            };
+            let cols = stretched_within(width, narrow, xs.start, xs.end);
+            let rows = stretched_within(height, NATIVE_HEIGHT, ys.start, ys.end);
+            // About the region's size stretched, less a pixel or two at each edge.
+            assert!(cols.len() >= 34 && rows.len() >= 4, "{cols:?} {rows:?}");
+            for y in rows.clone() {
+                for x in cols.clone() {
+                    assert_eq!(at(&a, x, y), at(&b, x, y), "{width}x{height} at ({x}, {y})");
+                }
+            }
+            // The columns and rows just past the pick do mix in pixels from outside.
+            for x in [cols.start - 1, cols.end] {
+                let moved = rows.clone().any(|y| at(&a, x, y) != at(&b, x, y));
+                assert!(moved, "{width}x{height} column {x}");
+            }
+            for y in [rows.start - 1, rows.end] {
+                let moved = cols.clone().any(|x| at(&a, x, y) != at(&b, x, y));
+                assert!(moved, "{width}x{height} row {y}");
+            }
         }
     }
 
