@@ -15,6 +15,12 @@ import type { CountSource } from "./count-source.js";
 import type { Catalog, LootFields } from "./loot.js";
 import { costAtLeast, pastPotTotals, potRate, potTotals } from "./pot-cost.js";
 import type { PotTotals } from "./pot-cost.js";
+import { POTIONS } from "./potions.js";
+
+/** The potions counted, as a list in words: "Meat, Lemon and Blue Potion". */
+const COUNTED = ((names: string[]) => (names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`))(
+  POTIONS.map((p) => p.name),
+);
 
 /** "a 7", "an 8", or for several "a digit it hasn't seen yet: 0, 4 or 5", as What MesoVibe sees says it. */
 function digitsWanted(digits: string): string {
@@ -146,8 +152,8 @@ export function potionsSection(
   children.push({
     kind: "text",
     text: fromSlots
-      ? "Counted from your quick slots, as their counts drop. Only Meat and Lemon are counted."
-      : "Counted from your HP and MP numbers going up. Only Meat and Lemon are counted.",
+      ? `Counted from your quick slots, as their counts drop. Only ${COUNTED} are counted.`
+      : `Counted from your HP and MP numbers going up. Only ${COUNTED} are counted.`,
     variant: "muted",
   });
   return { kind: "section", title: "Potions", children };

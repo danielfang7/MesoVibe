@@ -60,7 +60,7 @@ The game pictures in [web/img](web/img/), the game window, an item tooltip and t
 
 ### Game data
 
-Item and map names, inventory tabs and NPC sell prices come from [OSMS Data Explorer](https://osmsdataexplorer.com), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). MesoVibe ships a trimmed copy in [engine/data](engine/data/), so it never downloads game data while you play. The HP Meat restores and the MP Lemon restores come from the same data; their shop prices were checked in the game. MapleStory names and other game content are © Nexon.
+Item and map names, inventory tabs and NPC sell prices come from [OSMS Data Explorer](https://osmsdataexplorer.com), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). MesoVibe ships a trimmed copy in [engine/data](engine/data/), so it never downloads game data while you play. The HP Meat restores and the MP Lemon restores come from the same data; what Orange, White and Blue Potions restore, and every counted potion's shop price, were checked in the game. MapleStory names and other game content are © Nexon.
 
 ## Contribute and develop
 
