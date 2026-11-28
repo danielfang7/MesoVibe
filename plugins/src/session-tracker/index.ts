@@ -255,14 +255,17 @@ function canEnd(session: Session, atMs: number): boolean {
 }
 
 /**
- * What the strip needs beside the session: until when the session just ended counts sales (null
- * when its close-out isn't open), and whether to ask for a meso reading.
+ * What the strip and the mini-HUD need beside the session: until when the session just ended
+ * counts sales (null when its close-out isn't open), whether to ask for a meso reading, and pot
+ * cost/hr or the ask for the pet's potions in a quick slot.
  */
 interface StripExtras {
   closeOutBy: number | null;
   askForMesos: boolean;
   /** Pausing and ending on their own is on. */
   autoPause: boolean;
+  potCostPerHour: number | null;
+  potsUncounted: boolean;
 }
 
 function summary(session: Session, atMs: number, extras: StripExtras): SessionSummary {
@@ -287,6 +290,8 @@ function summary(session: Session, atMs: number, extras: StripExtras): SessionSu
     canPause: session.expGained > 0 || session.paused === true,
     closeOutBy: extras.closeOutBy,
     askForMesos: extras.askForMesos,
+    potCostPerHour: extras.potCostPerHour,
+    potsUncounted: extras.potsUncounted,
   };
 }
 
@@ -765,9 +770,21 @@ definePlugin({
       return ledger === undefined || ledger.b === null || ledgerStale(ledger, atMs);
     };
     const show = (atMs: number) => {
-      context.setSummary(summary(session, atMs, { closeOutBy: closeOutBy(atMs), askForMesos: askForMesos(atMs), autoPause: auto }));
-      const potions = source === null || !potsShown() ? null : potionsSection(session, catalog, source, readers, atMs);
-      const potsPerHour = source === null || !potsShown() ? null : potRate(potTotals(session, catalog));
+      const pots = source === null || !potsShown() ? null : potTotals(session, catalog);
+      const potsPerHour = pots === null ? null : potRate(pots);
+      // None counted where they could be: the pet's potions may not be in a quick slot, the only
+      // place their count is read.
+      const potsUncounted = pots !== null && session.expGained > 0 && pots.lines.length === 0 && readers.slots !== "unsupported";
+      context.setSummary(
+        summary(session, atMs, {
+          closeOutBy: closeOutBy(atMs),
+          askForMesos: askForMesos(atMs),
+          autoPause: auto,
+          potCostPerHour: pots !== null && pots.lines.length > 0 ? potsPerHour : null,
+          potsUncounted,
+        }),
+      );
+      const potions = source === null || pots === null ? null : potionsSection(session, catalog, source, readers, atMs);
       context.render(view(session, history, capture, map, readers, atMs, showMore, potions, potsPerHour));
       // Saved potions show in the Loot tab whenever a source is wired in, reading or not.
       context.render(lootView(session, history, allTime, catalog, lootMore, source !== null, atMs), "loot");

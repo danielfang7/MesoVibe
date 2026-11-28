@@ -174,6 +174,23 @@ test("the headline is pot cost/hr in every state, with or without loot/hr", () =
   assert.equal(potTable(none.sent), undefined);
 });
 
+// The mini-HUD gets pot cost/hr once potions are counted, and with none counted it asks for the
+// pet's potions in a quick slot; nothing either way before the first gain or where potions can't
+// be counted. Fails if the box shows 0 for potions it can't see, or asks where it can't help.
+test("the summary carries pot cost/hr, or asks for the pet's potions in a quick slot", () => {
+  const summary = (sent) => last(sent, "summary").summary;
+  const counted = grind();
+  assert.equal(summary(counted.sent).potCostPerHour, 9_300);
+  assert.equal(summary(counted.sent).potsUncounted, false);
+  const none = play({ seconds: 120 });
+  assert.equal(summary(none.sent).potCostPerHour, null);
+  assert.equal(summary(none.sent).potsUncounted, true);
+  const early = play({ seconds: 40, meat: [20] });
+  assert.deepEqual([summary(early.sent).potCostPerHour, summary(early.sent).potsUncounted], [null, false], "no rate before a minute");
+  const shipped_ = play({ bundle: shipped, seconds: 120 });
+  assert.deepEqual([summary(shipped_.sent).potCostPerHour, summary(shipped_.sent).potsUncounted], [null, false], "no quick slots read");
+});
+
 // Maybe uses cost nothing, so the cost is a lower bound; heals from others say potions may be
 // undercounted. Fails if a maybe use is priced, or the cost claims to be exact when it can't be.
 test("maybe uses make pot cost a lower bound, and heals from others say so", () => {

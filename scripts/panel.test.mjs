@@ -618,73 +618,93 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     page.close();
   });
 
-  await t.test("the mini-HUD shows the rate, time to level and progress, or what's wrong", async () => {
+  await t.test("the mini-HUD shows its band, the level and four figures, or what's wrong", async () => {
+    const band = `document.querySelector(".hud-band")?.textContent`;
+    const boxes = `[...document.querySelectorAll(".hud-box")].map((b) => b.children[0].textContent + "=" + b.children[1].textContent).join("|")`;
     const page = await openPage(devtools, at("grind", "hud.html"));
-    assert.equal(await page.until(`document.querySelector(".hud-rate")?.textContent`, "the rate"), "48.2K");
-    // Mesos/hr on its own row under EXP/hr, then time to level.
-    const hudLines = `[...document.querySelectorAll(".hud-line")].map((l) => l.textContent)`;
-    await page.until(`${hudLines}.join("|") === "21.5K mesos/hr|Lv 42 → 43 in 51 min"`, "mesos/hr and time to level");
-    assert.equal(await page.evaluate(`document.querySelector(".hud-progress .number").textContent`), "64.62%");
+    // Fails if a figure goes missing, moves box, or the time to level isn't at the 5-minute rate.
+    await page.until(
+      `${boxes} === "EXP/hr=48.2K|EXP/hr · 5m=43.4K|This session=+96.4K|To Lv 43=2h 55m|Mesos/hr=21.5K|Pot cost/hr=3.12K"`,
+      "the six figures",
+    );
+    assert.equal(await page.evaluate(band), "MesoVibe");
+    assert.equal(await page.evaluate(`document.querySelector(".hud-lv").textContent`), "Lv 42");
+    assert.equal(await page.evaluate(`document.querySelector(".hud-pct").textContent`), "64.62%");
     assert.deepEqual(page.errors, []);
     page.close();
 
-    // The bar is read but nothing is gained yet: the card asks for the gain that starts the rate.
+    // The bar is read but nothing is gained yet: the band asks for the gain, and every box keeps its
+    // place with a dash, while the level comes from the engine's own reading.
     const idle = await openPage(devtools, at("idle", "hud.html"));
-    await idle.until(`document.querySelector(".hud-note")?.textContent === "Earn more EXP to start"`, "waiting for a gain");
+    // The band says the same before the first status arrives, so wait for the reading's level.
+    await idle.until(`${boxes} === "EXP/hr=—|EXP/hr · 5m=—|This session=—|To Lv 43=—|Mesos/hr=—|Pot cost/hr=—"`, "dashes under the read level");
+    assert.equal(await idle.evaluate(band), "Earn more EXP to start");
+    assert.equal(await idle.evaluate(`document.querySelector(".hud-lv").textContent`), "Lv 42");
     assert.deepEqual(idle.errors, []);
     idle.close();
+    // Paused on its own, with no potion counted: fails if the card looks live, shows an unknown
+    // where the 5-minute rate is truly 0, or doesn't ask for the pet's potions in a quick slot.
+    const paused = await openPage(devtools, at("paused", "hud.html"));
+    await paused.until(`${band} === "Paused: no EXP"`, "the pause");
+    assert.ok(await paused.evaluate(`document.querySelector(".hud.dim") !== null && document.querySelector(".dot.idle") !== null`));
+    assert.equal(
+      await paused.evaluate(boxes),
+      "EXP/hr=48.2K|EXP/hr · 5m=0|This session=+96.4K|To Lv 43=—|Mesos/hr=21.5K|Pot cost/hr=Add pet pots to quick slots",
+    );
+    paused.close();
     const learning = await openPage(devtools, at("learning", "hud.html"));
-    await learning.until(`document.querySelector(".hud-note")?.textContent === "Learning your EXP bar…"`, "learning");
+    await learning.until(`${band} === "Learning your EXP bar…"`, "learning");
     learning.close();
     const blocked = await openPage(devtools, at("blocked", "hud.html"));
-    await blocked.until(`document.querySelector(".hud-note")?.textContent === "Can't capture the game"`, "blocked");
+    await blocked.until(`${band} === "Can't capture the game"`, "blocked");
     assert.ok(await blocked.evaluate(`document.querySelector(".dot.danger") !== null`));
     blocked.close();
     // A screen that stays black isn't a map change: fails if the mini-HUD stays green and waits
     // for EXP that will never be read.
     const dark = await openPage(devtools, at("dark", "hud.html"));
-    await dark.until(`document.querySelector(".hud-note")?.textContent === "Can't see the EXP bar"`, "a long dark spell");
+    await dark.until(`${band} === "Can't see the EXP bar"`, "a long dark spell");
     assert.ok(await dark.evaluate(`document.querySelector(".dot.warn") !== null`));
     assert.deepEqual(dark.errors, []);
     dark.close();
-    // Full Screen at a size MesoVibe can't read: fails if the mini-HUD doesn't say what to change,
-    // or the hint is cut off or spills out of the card under a session's rate.
+    // Full Screen at a size MesoVibe can't read: fails if the mini-HUD doesn't say what to change.
+    // The problem takes the band and its fix the level row, so the figures stay.
     const full = await openPage(devtools, at("fullscreen", "hud.html"));
-    await full.until(`document.querySelector(".hud-note")?.textContent === "Can't read Full Screen"`, "the Full Screen note");
-    assert.equal(await full.evaluate(`document.querySelector(".hud-line")?.textContent`), "Try windowed or 1366×768");
+    await full.until(`${band} === "Can't read Full Screen"`, "the Full Screen note");
+    assert.equal(await full.evaluate(`document.querySelector(".hud-tip")?.textContent`), "Try windowed or 1366×768");
+    assert.equal(await full.evaluate(`document.querySelector(".hud-level")`), null, "the tip takes the level row");
     assert.deepEqual(full.errors, []);
     full.close();
-    const mid = await openPage(devtools, at("fullscreen-grind", "hud.html"));
-    await mid.resize(216, 100);
-    await mid.until(`document.querySelector(".hud-issue")?.textContent === "Can't read Full Screen"`, "the note under the rate");
-    const fits = `(() => {
-      const card = document.querySelector(".hud").getBoundingClientRect();
-      const rows = [...document.querySelectorAll(".hud > *")].map((row) => row.getBoundingClientRect());
-      const hint = [...document.querySelectorAll(".hud-line")].at(-1);
-      return rows.every((r) => r.top >= card.top && r.bottom <= card.bottom) && hint.scrollWidth <= hint.clientWidth && hint.textContent;
-    })()`;
-    assert.equal(await mid.until(fits, "the hint inside the card"), "Try windowed or 1366×768");
-    assert.equal(await mid.evaluate(`document.querySelector(".hud-progress")`), null, "the hint takes the progress row");
-    assert.deepEqual(mid.errors, []);
-    mid.close();
-    // At the mini-HUD window's own size (app/src/dock.rs) the mesos/hr line still leaves every row
-    // readable. Fails if a row is pushed out of the card, or a line is squeezed shorter than its text.
+
+    // At the mini-HUD window's own size (app/src/dock.rs), every part sits inside the card and the
+    // widest figures and the potion hint fit their box. Fails if the window is too short for the
+    // card at its tallest, or a box is too narrow for "+808.8K", "99h 59m" or the hint's lines.
     const dock = readFileSync(join(REPO, "app", "src", "dock.rs"), "utf8");
     const [hudWidth, hudHeight] = ["HUD_WIDTH", "HUD_HEIGHT"].map((name) => Number(new RegExp(`const ${name}: f64 = ([\\d.]+);`).exec(dock)[1]));
-    const small = await openPage(devtools, at("grind", "hud.html"));
-    await small.resize(hudWidth, hudHeight);
-    await small.until(`document.querySelector(".hud-loot") && window.innerHeight === ${hudHeight}`, "mesos/hr at the mini-HUD's size");
-    const cut = `(() => {
-      const card = document.querySelector(".hud").getBoundingClientRect();
-      return [...document.querySelectorAll(".hud > *")]
-        .filter((row) => {
-          const r = row.getBoundingClientRect();
-          return r.top < card.top || r.bottom > card.bottom || r.height < parseFloat(getComputedStyle(row).fontSize);
-        })
-        .map((row) => row.className);
-    })()`;
-    assert.deepEqual(await small.evaluate(cut), []);
-    small.close();
+    for (const scenario of ["grind", "fullscreen-grind", "paused"]) {
+      const small = await openPage(devtools, at(scenario, "hud.html"));
+      await small.resize(hudWidth, hudHeight);
+      await small.until(`document.querySelector(".hud-grid") && window.innerHeight === ${hudHeight}`, `the card at the mini-HUD's size (${scenario})`);
+      if (scenario === "fullscreen-grind") await small.until(`${band} === "Can't read Full Screen"`, "the Full Screen note under a rate");
+      const cut = `(() => {
+        const card = document.querySelector(".hud").getBoundingClientRect();
+        const parts = [...document.querySelectorAll(".hud > *, .hud-box")];
+        const out = parts.filter((part) => {
+          const r = part.getBoundingClientRect();
+          return r.top < card.top || r.bottom > card.bottom - 10 || r.left < card.left || r.right > card.right;
+        });
+        // The card, shadow room included, fits the window.
+        if (card.bottom + 8 > window.innerHeight) out.push(document.querySelector(".hud"));
+        const figures = [...document.querySelectorAll(".hud-figure")];
+        figures[2].textContent = "+808.8K";
+        figures[3].textContent = "99h 59m";
+        const squeezed = [...document.querySelectorAll(".hud-label, .hud-figure, .hud-note, .hud-tip, .hud-hint > span")].filter(
+          (e) => e.scrollWidth > e.clientWidth,
+        );
+        return [...out, ...squeezed].map((e) => e.className + ": " + e.textContent);
+      })()`;
+      assert.deepEqual(await small.evaluate(cut), []);
+      small.close();
+    }
   });
 
   // A chat line as the host hands it over (app/src/chat.rs), with a one-pixel picture: these tests
