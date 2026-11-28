@@ -13,13 +13,17 @@
 //! every pixel and exactly as tall as the count's row, so a key label (grey outlined), a skill's
 //! text, an icon's light pixels or a translucent tooltip never count as a digit.
 //!
-//! Only the game sizes the panel's place was checked at are read. Nothing is learned or saved.
+//! Only the game's picture sizes the panel's place was checked at are read: at that size, or
+//! stretched by the game to fill a larger game area (its 1366x768 picture fills 1920x1080), whose
+//! bottom rows are undone first. A Mac in Full Screen scales the picture its own way, which wasn't
+//! checked, so it isn't read. Nothing is learned or saved.
 
 use serde::Serialize;
 
 use super::pixels::Pixels;
 use crate::frame::Frame;
 use crate::glyph::Glyph;
+use crate::unstretch;
 
 /// The quick slots, left to right along the top row, then the bottom row.
 pub const SLOTS: usize = 8;
@@ -48,7 +52,8 @@ const MAX_DIGIT_WIDTH: u32 = 8;
 /// slot to slot, and the same item should give the same key in any slot.
 const ICON_X: (u32, u32) = (7, 28);
 const ICON_Y: (u32, u32) = (20, 5);
-/// The game sizes the panel's place was checked at.
+/// The game's picture sizes the panel's place was checked at, as drawn or stretched to fill a larger
+/// game area.
 const SIZES: [(u32, u32); 2] = [(1280, 720), (1366, 768)];
 /// Game rows the reader needs, counted up from the game area's bottom: the panel's top border,
 /// with room for the HUD to sit a row higher.
@@ -87,7 +92,7 @@ pub enum QuickSlotState {
     Reading,
     /// The panel isn't where the HUD puts it: hidden, covered, or another screen.
     NotFound,
-    /// A game size the panel's place wasn't checked at.
+    /// A game size (or a stretch of one) the panel's place wasn't checked at.
     Unsupported,
 }
 
@@ -122,10 +127,34 @@ impl QuickSlotReader {
     pub fn observe(&mut self, frame: &Frame, blocks: Option<(u32, u32)>) -> QuickSlotsReading {
         let scale = frame.scale();
         let area = (frame.width() / scale, frame.height() / scale);
-        self.unsupported = !SIZES.contains(&area) || area.1 > frame.source();
-        let slots = Pixels::of(*frame, blocks, ROWS)
-            .filter(|_| !self.unsupported)
-            .and_then(|px| panel(&px).map(|corner| read_slots(&px, corner)));
+        let source = frame.source();
+        let stretched = area.1 > source;
+        let picture = match stretched {
+            true => (unstretch::picture_width(area.0, area.1, source), source),
+            false => area,
+        };
+        self.unsupported = !SIZES.contains(&picture) || (stretched && scale > 1);
+        let slots = if self.unsupported {
+            None
+        } else if stretched {
+            // Only the columns from the panel's left edge (and the row or column it may be off) to
+            // the picture's right edge are undone.
+            let columns = picture.0 - (picture.0 - HUD_WIDTH) / 2 - PANEL_DX + 2;
+            unstretch::with_bottom_right_1x(frame, ROWS, columns, |pic| {
+                let px = Pixels::of(*pic, None, ROWS)?;
+                let corner = panel(&px)?;
+                Some(read_slots(&px, corner, |x, y| {
+                    stretched_icon(frame, picture, x, y)
+                }))
+            })
+            .ok()
+            .flatten()
+        } else {
+            Pixels::of(*frame, blocks, ROWS).and_then(|px| {
+                let corner = panel(&px)?;
+                Some(read_slots(&px, corner, |x, y| icon(&px, x, y)))
+            })
+        };
         self.found = slots.is_some();
         let Some(slots) = slots else {
             self.candidate = Default::default();
@@ -218,14 +247,19 @@ fn mostly_white(px: &Pixels, points: impl Iterator<Item = (i64, i64)>) -> bool {
     lit as f32 >= all as f32 * BORDER_WHITE
 }
 
-/// Every slot's reading, from the panel's corner.
-fn read_slots(px: &Pixels, (x0, y0): (u32, u32)) -> [Slot; SLOTS] {
+/// Every slot's reading, from the panel's corner, with `icon` giving the key for the icon whose
+/// top-left corner is at (x, y).
+fn read_slots(
+    px: &Pixels,
+    (x0, y0): (u32, u32),
+    icon: impl Fn(u32, u32) -> String,
+) -> [Slot; SLOTS] {
     std::array::from_fn(|i| {
         let (col, row) = ((i % 4) as u32, (i / 4) as u32);
         let (x, y) = (x0 + col * STEP.0, y0 + row * STEP.1);
         Slot {
             count: count(px, x + COUNT_X.0, y + COUNT_Y.0),
-            icon: icon(px, x + ICON_X.0, y + ICON_Y.0),
+            icon: icon(x + ICON_X.0, y + ICON_Y.0),
         }
     })
 }
@@ -256,6 +290,20 @@ fn fnv(bytes: impl IntoIterator<Item = u8>) -> String {
 fn icon(px: &Pixels, x: u32, y: u32) -> String {
     let (cols, rows) = (ICON_X.1, ICON_Y.1);
     fnv((y..y + rows).flat_map(|yy| (x..x + cols).flat_map(move |xx| px.rgb(xx, yy))))
+}
+
+/// The key for the icon at (`x`, `y`) of the picture (`picture`: its size) that a frame stretches,
+/// from the captured pixels that the icon's pixels alone make. Its recovered pixels won't do:
+/// undoing the stretch spreads its rounding a few pixels, so whenever the count just under the
+/// icon changed, the icon's lowest rows would come back a step off and the same item would get a
+/// new key. Each slot sits at another point of the stretch, so here the same item gets another key
+/// in each slot.
+///
+/// The rows read are inside the band the panel was recovered from, so the frame holds them.
+fn stretched_icon(frame: &Frame, picture: (u32, u32), x: u32, y: u32) -> String {
+    let cols = unstretch::stretched_within(frame.width(), picture.0, x, x + ICON_X.1);
+    let rows = unstretch::stretched_within(frame.height(), picture.1, y, y + ICON_Y.1);
+    fnv(rows.flat_map(|yy| cols.clone().flat_map(move |xx| frame.rgb(xx, yy))))
 }
 
 /// The key for the count whose digits may start at column `x` and fill rows from `top`, or `None`
@@ -653,6 +701,62 @@ mod tests {
         let canvas = game(1024, 768, &slots(item(LEMON, 274), None));
         look(&mut reader, &canvas);
         assert!(look(&mut reader, &canvas).changed.is_empty());
+        assert_eq!(reader.state(), QuickSlotState::Unsupported);
+    }
+
+    /// `canvas` (the game's own picture) as the game stretches it to fill a `width` x `height` game
+    /// area, as a frame holding only the bottom rows the engine reads back.
+    fn stretched(canvas: &Canvas, width: u32, height: u32) -> (Vec<u8>, u32) {
+        let rgb: Vec<[u8; 3]> = (0..canvas.height)
+            .flat_map(|y| (0..canvas.width).map(move |x| canvas.get(x, y)))
+            .collect();
+        let first = height - unstretch::rows_for(height, unstretch::NATIVE_HEIGHT, ROWS);
+        let bgra = unstretch::stretch(&rgb, canvas.width, width, height, first);
+        (bgra[(first * width * 4) as usize..].to_vec(), first)
+    }
+
+    fn settled_stretched(canvas: &Canvas, width: u32, height: u32) -> Vec<(u8, Slot)> {
+        let (strip, first) = stretched(canvas, width, height);
+        let frame = Frame::bottom(width, height, first, width as usize * 4, &strip).unwrap();
+        let mut reader = QuickSlotReader::new();
+        assert!(reader.observe(&frame, None).changed.is_empty());
+        let sent = reader.observe(&frame, None).changed;
+        assert_eq!(reader.state(), QuickSlotState::Reading, "{width}x{height}");
+        sent
+    }
+
+    // At 1920x1080 the game stretches its 1366x768 picture; the slots read from that picture, with
+    // the same counts, and an icon keeps its key when its count changes. Fails if the stretch is
+    // refused, a count reads another way, or a count change gives the icon a new key (undoing the
+    // stretch nudges the pixels just above the count, so the potion would never pair with its use).
+    #[test]
+    fn a_stretched_game_area_reads_the_slots_of_its_own_picture() {
+        let before = game(1366, 768, &slots(item(LEMON, 274), item(MEAT, 377)));
+        let (at_1x, sent) = (settled(&before), settled_stretched(&before, 1920, 1080));
+        assert_eq!(sent.len(), SLOTS);
+        for i in 0..SLOTS {
+            assert_eq!(sent[i].1.count, at_1x[i].1.count, "slot {i}'s count");
+        }
+        assert_ne!(sent[0].1.icon, sent[6].1.icon, "another item, another key");
+        // Whether a count nudges the icon depends on its digits, so try a few.
+        for n in [273, 9, 88, 1000] {
+            let after = game(1366, 768, &slots(item(LEMON, n), item(MEAT, 377)));
+            let next = settled_stretched(&after, 1920, 1080);
+            assert_ne!(next[0].1.count, sent[0].1.count, "the count changed to {n}");
+            assert_eq!(next[0].1.icon, sent[0].1.icon, "the same item at {n}");
+        }
+    }
+
+    // A Mac in Full Screen scales the game its own way, which the slots weren't checked at. Fails
+    // if such a frame is read rather than reported unsupported.
+    #[test]
+    fn a_stretched_retina_frame_is_unsupported() {
+        let row = vec![0u8; 3840 * 4];
+        let frame = Frame::bottom(3840, 2160, 2159, 3840 * 4, &row)
+            .and_then(|f| f.with_scale(2))
+            .unwrap();
+        let mut reader = QuickSlotReader::new();
+        assert!(!reader.observe(&frame, None).found);
         assert_eq!(reader.state(), QuickSlotState::Unsupported);
     }
 
