@@ -61,6 +61,7 @@ fn main() {
             ));
             app.manage(store);
             app.manage(dock::Latest::default());
+            app.manage(dock::OverGame::default());
             app.manage(chat::ChatLog::default());
             app.manage(Engine::start(app.handle().clone(), reading));
             presence::start(app.handle(), background);
@@ -115,6 +116,10 @@ fn main() {
         Ok(app) => app.run(|app, event| {
             if let RunEvent::ExitRequested { code, api, .. } = &event {
                 presence::exit_requested(app, *code, api);
+            }
+            // Every way out, the Dock's Quit and Cmd-Q included, which no handler can stop.
+            if let RunEvent::Exit = event {
+                presence::exiting(app);
             }
             // The Dock icon, or opening MesoVibe again from Finder while it waits in the tray.
             #[cfg(target_os = "macos")]

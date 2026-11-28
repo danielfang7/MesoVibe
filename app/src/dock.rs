@@ -9,6 +9,11 @@
 //! in the corner of the game area the player chose, above the game, while the game or MesoVibe
 //! is in front. With the mini-HUD switched off there's no window over the game at all.
 //!
+//! With no room beside the game, the panel opens over it when the player asks for it (the Dock
+//! icon, the tray, opening MesoVibe again): at the game's right edge, as tall as the game, above
+//! it, with the mini-HUD hidden meanwhile since the panel shows all it does ([`over_game`]).
+//! Going back to the game puts it away again (presence.rs).
+//!
 //! The chat overlay, when the player turns it on in the Chat view, is the same kind of
 //! click-through window, just above the game's chat box, with the latest whisper, party and
 //! friend lines (Chat Hub) at the chat's own size. It's off until then.
@@ -105,6 +110,33 @@ impl Latest {
 
     pub fn get(&self) -> Option<Summary> {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+}
+
+/// Where the panel goes when the player opens it while the game has no room beside it, set by
+/// the docker each tick: `None` while the panel docks beside the game, stands free, or there's no
+/// game. Read when the panel opens, so it shows there at once.
+#[derive(Default)]
+pub struct OverGame(Mutex<Option<Rect>>);
+
+impl OverGame {
+    fn set(&self, frame: Option<Rect>) {
+        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = frame;
+    }
+
+    pub fn get(&self) -> Option<Rect> {
+        *self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+/// Where the panel opens over the game, if the game has no room beside it now.
+pub fn over_game_frame(app: &AppHandle) -> Option<Rect> {
+    app.try_state::<OverGame>().and_then(|over| over.get())
+}
+
+fn set_over_game(app: &AppHandle, frame: Option<Rect>) {
+    if let Some(over) = app.try_state::<OverGame>() {
+        over.set(frame);
     }
 }
 
@@ -260,6 +292,28 @@ pub fn layout(game: &Placement, displays: &[Display], panel_width: f64, choice: 
     })
 }
 
+/// The panel's frame over the game window at `game`, for when there's no room beside it: flush
+/// with the game's right edge, as tall as the game within its display's work area (below the menu
+/// bar, which shows while MesoVibe is in front), and `panel_width` wide, or the game's width if
+/// that's narrower. `None` when the game isn't on a display.
+pub fn over_game(game: &Placement, displays: &[Display], panel_width: f64) -> Option<Rect> {
+    let frame = Rect::from(game.frame);
+    let (cx, cy) = (frame.x + frame.width / 2.0, frame.y + frame.height / 2.0);
+    let work = displays
+        .iter()
+        .find(|d| d.work_area.contains(cx, cy))?
+        .work_area;
+    let (left, right) = (frame.x.max(work.x), frame.right().min(work.right()));
+    let (top, bottom) = (frame.y.max(work.y), frame.bottom().min(work.bottom()));
+    let width = panel_width.min(right - left);
+    (width > 0.0 && bottom > top).then_some(Rect {
+        x: right - width,
+        y: top,
+        width,
+        height: bottom - top,
+    })
+}
+
 /// Where the chat overlay goes for the game window at `game` with its chat box at `place`: on the
 /// box's top edge, as wide as the box up to its scrollbar, with room for [`CHAT_LINES`] lines at
 /// the game's own size. `None` when there's no room above the box for a line.
@@ -389,6 +443,9 @@ pub struct Docker {
     /// Where the panel was last docked. It's moved again only when that changes, so a panel the
     /// player drags away stays put until the game window moves.
     docked: Option<Rect>,
+    /// Where the panel was last put over the game, with no room beside it; moved again only when
+    /// that changes, as `docked`.
+    over_placed: Option<Rect>,
     /// The panel is kept above other windows (docked, with the game or MesoVibe in front).
     panel_on_top: bool,
     hud_shown: bool,
@@ -439,6 +496,7 @@ impl Docker {
             self.close_chat(app);
         }
         let Some(panel) = app.get_webview_window(PANEL) else {
+            set_over_game(app, None);
             return;
         };
         let Some(placement) = window.and_then(|w| w.placement) else {
@@ -446,6 +504,7 @@ impl Docker {
             return;
         };
         let Some(panel_width) = frame_width(&panel) else {
+            set_over_game(app, None);
             return;
         };
         let in_front = placement.front || panel.is_focused().unwrap_or(false);
@@ -467,7 +526,16 @@ impl Docker {
             Some(target) => self.show_chat(app, &target),
             None => self.hide_chat(app),
         }
-        match layout(&placement, &displays, panel_width, &choice) {
+        let layout = layout(&placement, &displays, panel_width, &choice);
+        let over = match layout {
+            Layout::MiniHud(_) => over_game(&placement, &displays, panel_width),
+            _ => None,
+        };
+        set_over_game(app, over);
+        if over.is_none() {
+            self.over_placed = None;
+        }
+        match layout {
             Layout::Beside(target) => {
                 self.hide_hud(app);
                 let minimized = panel.is_minimized().unwrap_or(false);
@@ -480,11 +548,29 @@ impl Docker {
             }
             Layout::MiniHud(target) => {
                 self.docked = None;
-                self.keep_on_top(&panel, false);
-                if in_front {
-                    self.show_hud(app, &target);
-                } else {
-                    self.hide_hud(app);
+                let up =
+                    panel.is_visible().unwrap_or(false) && !panel.is_minimized().unwrap_or(false);
+                match over.filter(|_| up) {
+                    // The player opened the panel: it's over the game, above it while the game or
+                    // MesoVibe is in front, as docked; and the mini-HUD, which would sit above it,
+                    // stands down until the panel is put away.
+                    Some(frame) => {
+                        if self.over_placed.is_none_or(|placed| placed.differs(&frame)) {
+                            place_panel(&panel, &frame);
+                            self.over_placed = Some(frame);
+                        }
+                        self.keep_on_top(&panel, in_front);
+                        self.hide_hud(app);
+                    }
+                    None => {
+                        self.over_placed = None;
+                        self.keep_on_top(&panel, false);
+                        if in_front {
+                            self.show_hud(app, &target);
+                        } else {
+                            self.hide_hud(app);
+                        }
+                    }
                 }
             }
             Layout::Free => self.free(app, &panel),
@@ -505,6 +591,8 @@ impl Docker {
     /// hidden.
     fn free(&mut self, app: &AppHandle, panel: &WebviewWindow) {
         self.docked = None;
+        self.over_placed = None;
+        set_over_game(app, None);
         self.keep_on_top(panel, false);
         self.hide_hud(app);
         self.hide_chat(app);
@@ -1119,6 +1207,51 @@ mod tests {
             (bottom_left.x, bottom_left.y),
             (80.0, 68.0 + 768.0 - 80.0 - HUD_HEIGHT)
         );
+    }
+
+    // With no room beside the game, the panel the player opens sits over the game's right edge, as
+    // tall as the game but below the menu bar, which shows while MesoVibe is in front. Fails if it
+    // spills off the game or the display, or hides under the menu bar in Full Screen.
+    #[test]
+    fn without_room_the_panel_opens_over_the_games_right_edge() {
+        let windowed = game(76, 40, 1361, 768);
+        assert_eq!(
+            over_game(&windowed, &[MAC], 360.0),
+            Some(Rect {
+                x: 76.0 + 1361.0 - 360.0,
+                y: 40.0,
+                width: 360.0,
+                height: 796.0
+            })
+        );
+        let whole = ScreenRect {
+            x: 0,
+            y: 0,
+            width: 1512,
+            height: 982,
+        };
+        let full_screen = Placement {
+            frame: whole,
+            area: whole,
+            front: true,
+        };
+        assert_eq!(
+            over_game(&full_screen, &[MAC], 360.0),
+            Some(Rect {
+                x: 1152.0,
+                y: 33.0,
+                width: 360.0,
+                height: 949.0
+            })
+        );
+        // Never wider than the game.
+        let narrow = game(0, 40, 300, 768);
+        assert_eq!(
+            over_game(&narrow, &[MAC], 360.0).map(|r| (r.x, r.width)),
+            Some((0.0, 300.0))
+        );
+        // Off every display: nowhere to put it.
+        assert_eq!(over_game(&game(5000, 40, 1024, 768), &[MAC], 360.0), None);
     }
 
     // With docking off nothing moves, and with the mini-HUD off there's no window over the game.

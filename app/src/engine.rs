@@ -319,6 +319,7 @@ fn tick(
     let game = match &tick.window {
         Some(window) => presence::Game::Present {
             placed: window.placement.is_some(),
+            front: window.placement.as_ref().is_some_and(|p| p.front),
         },
         None => presence::Game::Absent,
     };

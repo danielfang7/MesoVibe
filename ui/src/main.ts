@@ -93,15 +93,17 @@ function hinted(control: HTMLElement, hint: string, key?: string): HTMLElement {
   return h("div", { class: "hinted" }, control, h("p", { class: "hint", attrs: { id, role: "tooltip", "data-key": key } }, hint));
 }
 
-/** Where MesoVibe waits while its panel is closed, in the OS's own words. */
-function trayName(os: string | undefined): string {
-  return os === "macos" ? "menu bar" : "system tray";
+/** Where the player opens MesoVibe while its panel is closed: on a Mac it stays in the Dock like
+ * any app (app/src/presence.rs). */
+function openFrom(os: string | undefined): string {
+  return os === "macos" ? "Dock icon" : "system tray icon";
 }
 
 /** What "Open with MapleStory Classic" does (app/src/presence.rs). */
 function startupNote(os: string | undefined): string {
-  const tray = trayName(os);
-  return `MesoVibe starts when you log in and waits in the ${tray}. When MapleStory Classic starts, MesoVibe opens with it. Closing the panel keeps MesoVibe waiting; quit from its ${tray} icon.`;
+  return os === "macos"
+    ? "MesoVibe starts when you log in and waits in the Dock. When MapleStory Classic starts, MesoVibe opens with it. Closing the panel keeps MesoVibe waiting; click its Dock icon to open it again, or Quit from the Dock."
+    : "MesoVibe starts when you log in and waits in the system tray. When MapleStory Classic starts, MesoVibe opens with it. Closing the panel keeps MesoVibe waiting; quit from its system tray icon.";
 }
 
 /** What the update check sends, in Settings > About. */
@@ -1188,7 +1190,7 @@ function shell(initial: Settings): void {
         ? h(
             "p",
             { class: "text muted", attrs: { "data-key": "settings-startup-safe" } },
-            `In Safe mode MesoVibe can't see the game start, so open it from its ${trayName(os)} icon.`,
+            `In Safe mode MesoVibe can't see the game start, so open it from its ${openFrom(os)}.`,
           )
         : null,
       panel.startupError !== null

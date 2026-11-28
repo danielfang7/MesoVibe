@@ -181,7 +181,7 @@ test("the panel", { skip: CHROME ? false : "no Chrome found (set MESOVIBE_CHROME
     assert.equal(await page.until(checked("settings-startup"), "the startup switch"), "true", "on from the first start");
     assert.match(
       await page.evaluate(textOf("settings-startup-note")),
-      /waits in the menu bar.+quit from its menu bar icon\. Off, closing the panel quits MesoVibe\.$/,
+      /waits in the Dock\..+click its Dock icon to open it again, or Quit from the Dock\. Off, closing the panel quits MesoVibe\.$/,
     );
     // About credits the game data, including what Meat and Lemon restore.
     assert.match(await page.evaluate("document.body.innerText"), /OSMS Data Explorer.+what Meat and Lemon restore\./);
