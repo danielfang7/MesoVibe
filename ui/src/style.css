@@ -1158,13 +1158,13 @@ html.hud-page body {
   filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
 }
 
+/* As tall as what it shows: the window is sized for the tallest state, and the rest of it is
+   see-through and click-through. */
 .hud {
-  height: 100%;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: var(--space-xs);
-  padding: 10px var(--space-md);
+  gap: var(--space-sm);
+  padding: 0 10px 10px;
   background: var(--surface);
   border: 1px solid var(--line);
   clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
@@ -1172,59 +1172,148 @@ html.hud-page body {
   user-select: none;
 }
 
-.hud-top {
+/* The status band across the card's top, a step up from the card: MesoVibe's name while all is
+   well, or what's wrong in its place, always beside the dot. */
+.hud-band {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: 6px;
   min-width: 0;
+  margin: 0 -10px;
+  padding: 5px 10px;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 16px;
 }
 
-.hud-rate-box {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-xs);
-}
-
-.hud-rate {
-  font-size: 20px;
+.hud-brand {
+  font-family: var(--font-pixel);
   font-weight: 600;
-  line-height: 1.1;
-}
-
-.hud-unit {
-  color: var(--text-muted);
-  font-size: 12px;
+  letter-spacing: 0.01em;
 }
 
 .hud-note {
-  font-size: 13px;
-}
-
-.hud-line {
-  font-size: 13px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.hud-issue {
+.hud-note.warn {
   color: var(--warn);
 }
 
-.hud-progress {
+.hud-note.danger {
+  color: var(--danger);
+}
+
+.hud-note.idle {
+  color: var(--text-muted);
+}
+
+/* The level row, or a tip in its place: one 18px line either way, so the figures never move. */
+.hud-level,
+.hud-tip {
+  height: 18px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.hud-level {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  font-size: 12px;
 }
 
-.hud-progress .progress {
+.hud-level .progress {
   flex: 1;
+  min-width: 0;
 }
 
-.hud.dim .hud-rate,
-.hud.dim .hud-line,
-.hud.dim .hud-progress {
+.hud-lv {
+  padding: 0 4px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+}
+
+.hud-tip {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Six figures, two to a row, with hairlines between them. Each box is about 82px wide: Mono
+   18px holds seven characters ("+808.8K", "15h 13m"). */
+.hud-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hud-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.hud-box:nth-child(odd) {
+  padding-right: 6px;
+  border-right: 1px solid var(--line);
+}
+
+.hud-box:nth-child(even) {
+  padding-left: 6px;
+}
+
+.hud-box:nth-child(-n + 4) {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.hud-box:nth-child(n + 3) {
+  padding-top: 6px;
+}
+
+.hud-label,
+.hud-figure {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-label {
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.hud-figure {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+/* What to do in a figure's place, two short lines ("Add pet pots", "to quick slots"). */
+.hud-hint {
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.hud-hint > span {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Not known yet, stale or paused: muted, never re-colored. */
+.hud-figure.none,
+.hud-level .none,
+.hud.dim .hud-figure,
+.hud.dim .hud-level,
+.hud.dim .hud-tip {
   color: var(--text-muted);
 }
 

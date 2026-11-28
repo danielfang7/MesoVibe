@@ -10,7 +10,7 @@
 // map: level 41, mesos every few kills, a Meat or a Lemon from the quick slots when HP or MP runs
 // low, loot sold at a shop once, no deaths; it reaches 39%, the game picture's EXP, about 47
 // minutes in).
-// The mini-HUD page (hud.html) takes `grind`, `learning` and `blocked`; the chat overlay page
+// The mini-HUD page (hud.html) takes `grind`, `paused`, `learning` and `blocked`; the chat overlay page
 // (chat.html) takes `grind`; the price label page (label.html) takes `label`, `labelold`,
 // `labelnpc`, `labelwide`, `labelnew`, `labeluntradable`, `labellearn` and `labelpick`. During play, whisper, party and friend lines arrive every few
 // seconds, drawn here as pictures the way the host hands them over.
@@ -518,13 +518,29 @@ function namePicture(name: string): GamePicture {
 }
 
 /**
- * The mini-HUD's stand-in: a steady grind, still learning, blocked, a screen that stays dark, or
- * Full Screen at a size MesoVibe can't read (`fullscreen-grind`: after a session's rate came in).
- * Any other scenario, like `idle`, reads the bar before the first gain.
+ * The mini-HUD's stand-in: a steady grind, a session that paused itself after a while without EXP,
+ * still learning, blocked, a screen that stays dark, or Full Screen at a size MesoVibe can't read
+ * (`fullscreen-grind`: after a session's rate came in). Any other scenario, like `idle`, reads the
+ * bar before the first gain.
  */
 export function mockHudHost(scenario: string): HudHost {
+  // 126,276 EXP to go at 43,412/hr: 2h 55m.
+  const grind: HudSummary = {
+    expPerHour: 48_210,
+    recentExpPerHour: 43_412,
+    expGained: 96_420,
+    level: 42,
+    pctHundredths: 6462,
+    minutesToLevel: ((NEEDED - 230_640) / 43_412) * 60,
+    lootPerHour: 21_480,
+    potCostPerHour: 3_120,
+  };
   const summary: HudSummary | null =
-    scenario === "grind" || scenario === "fullscreen-grind" ? { expPerHour: 48_210, level: 42, pctHundredths: 6462, minutesToLevel: 51, lootPerHour: 21_480 } : null;
+    scenario === "grind" || scenario === "fullscreen-grind"
+      ? grind
+      : scenario === "paused"
+        ? { ...grind, recentExpPerHour: null, minutesToLevel: null, potCostPerHour: null, potsUncounted: true, paused: true, autoPaused: true }
+        : null;
   const started = Date.now();
   const status = (): Status => {
     const base = {

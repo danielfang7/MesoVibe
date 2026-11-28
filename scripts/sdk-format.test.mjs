@@ -50,6 +50,9 @@ test("durations and minutes read the way players say them", () => {
   assert.equal(formatMinutes(23.4), "23 min");
   assert.equal(formatMinutes(120), "2h");
   assert.equal(formatMinutes(125), "2h 5m");
+  // Rounding carries into the hour: never "1h 60m" or "60 min".
+  assert.equal(formatMinutes(119.7), "2h");
+  assert.equal(formatMinutes(59.6), "1h");
 });
 
 test("percent hundredths print with two decimals", () => {

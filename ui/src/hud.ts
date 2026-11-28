@@ -1,12 +1,16 @@
-// The mini-HUD: a small card over a corner of the game, for when the panel has no
-// room beside the game window. It shows the session's EXP/hr, time to level and level progress
-// from the panel's Session Tracker, and a word when the engine can't read. The host places it,
-// keeps it click-through and never lets it take the keyboard (app/src/dock.rs). Every word is a
-// text node, never parsed HTML.
-import { formatCompact, formatDigits, formatMinutes, formatPercent } from "@mesovibe/sdk";
+// The mini-HUD: a small card over a corner of the game, for when the panel has no room beside the
+// game window. A status band on top, the level and its progress under it, then six figures from
+// the panel's Session Tracker, two to a row: EXP/hr over the session and over the last 5 minutes,
+// the session's EXP and the time to level at the 5-minute rate (in the 5-minute rate's column),
+// mesos/hr and pot cost/hr. What each part says is worked out in hudview.ts. The host
+// places it, keeps it click-through and never lets it take the keyboard (app/src/dock.rs). Every
+// word is a text node, never parsed HTML.
+import { formatCompact, formatPercent } from "@mesovibe/sdk";
 
 import { darkWatch, fullScreenWatch } from "./dark.js";
 import { h, replace } from "./dom.js";
+import { boxMinutes, hudView } from "./hudview.js";
+import type { HudView } from "./hudview.js";
 import { connectHud } from "./ipc.js";
 import type { HudSummary, Status } from "./ipc.js";
 import { fill } from "./plugins.js";
@@ -26,131 +30,62 @@ interface Hud {
   fullScreenUnread: boolean;
 }
 
-/** A word for the card, and what the player can do about it. */
-interface Issue {
-  text: string;
-  tone: "live" | "idle" | "warn" | "danger";
-  hint?: string;
+/** One of the four boxes: a muted label over its figure, or a muted dash while it isn't known. */
+function box(label: string, figure: string | null): HTMLElement {
+  return h(
+    "div",
+    { class: "hud-box" },
+    h("span", { class: "hud-label" }, label),
+    h("span", { class: figure === null ? "number hud-figure none" : "number hud-figure" }, figure ?? "—"),
+  );
 }
 
-/** A word for when the numbers can't be trusted right now, in the strip's terms. */
-function problem(status: Status | null, longDark: boolean, fullScreenUnread: boolean): Issue | null {
-  // No status yet: the engine's first tick is on its way, and nothing is wrong.
-  if (status === null) return null;
-  if (!status.reading) return { text: "Not reading", tone: "idle" };
-  switch (status.state) {
-    case "blocked":
-      return { text: "Can't capture the game", tone: "danger" };
-    case "paused":
-    case "off":
-    case "no_game":
-      return { text: "Paused", tone: "idle" };
-    case "capturing":
-      break;
-  }
-  // Kept through ticks that brought no new frame, which say nothing either way (dark.ts).
-  if (fullScreenUnread) return { text: "Can't read Full Screen", tone: "warn", hint: "Try windowed or 1366×768" };
-  if (longDark) return { text: "Can't see the EXP bar", tone: "warn" };
-  switch (status.unreadable) {
-    case "learning":
-    case "not_calibrated":
-      return { text: "Learning your EXP bar…", tone: "live" };
-    case "hud_not_found":
-    case "no_text":
-    case "unknown_glyph":
-    case "garbled":
-      return { text: "Can't see the EXP bar", tone: "warn" };
-    case "unsupported_size":
-    case "unsupported_scale":
-      return { text: "Can't read this game size", tone: "warn" };
-    default:
-      return null;
-  }
+/** The pot cost box while no potion is counted: what to do instead of a figure, on two lines. */
+function potsHintBox(): HTMLElement {
+  return h(
+    "div",
+    { class: "hud-box" },
+    h("span", { class: "hud-label" }, "Pot cost/hr"),
+    h("span", { class: "hud-hint" }, h("span", {}, "Add pet pots"), " ", h("span", {}, "to quick slots")),
+  );
+}
+
+function levelRow(view: HudView): HTMLElement {
+  const pct = view.pctHundredths;
+  const progress: Record<string, string> = { role: "progressbar", "aria-label": "Level progress", "aria-valuemin": "0", "aria-valuemax": "100" };
+  if (pct !== null) progress["aria-valuenow"] = String(Math.round(pct / 100));
+  return h(
+    "div",
+    { class: "hud-level" },
+    h("span", { class: view.level === null ? "number hud-lv none" : "number hud-lv" }, view.level === null ? "Lv —" : `Lv ${view.level}`),
+    h("div", { class: "progress", attrs: progress }, fill((pct ?? 0) / 10_000)),
+    h("span", { class: pct === null ? "number hud-pct none" : "number hud-pct" }, pct === null ? "—" : formatPercent(pct)),
+  );
 }
 
 function paint(hud: Hud): void {
-  const { status, summary } = hud;
-  const issue = problem(status, hud.longDark, hud.fullScreenUnread);
+  const { status } = hud;
   const stale = hud.lastReadAt !== null && (status?.atMs ?? Date.now()) - hud.lastReadAt > STALE_MS;
-  const rate = summary?.expPerHour ?? null;
-  const rows: Node[] = [];
-  rows.push(
-    h(
-      "div",
-      { class: "hud-top" },
-      h("span", { class: `dot ${issue?.tone ?? "live"}`, attrs: { "aria-hidden": "true" } }),
-      rate === null
-        ? h("span", { class: "hud-note" }, issue?.text ?? "Earn more EXP to start")
-        : h(
-            "span",
-            { class: "hud-rate-box", attrs: { title: `${formatDigits(rate)} EXP per hour` } },
-            h("span", { class: "number hud-rate" }, formatCompact(rate)),
-            h("span", { class: "hud-unit" }, "EXP/hr"),
-          ),
-    ),
+  const view = hudView({ status, summary: hud.summary, longDark: hud.longDark, fullScreenUnread: hud.fullScreenUnread, stale });
+  const band = h(
+    "div",
+    { class: "hud-band" },
+    h("span", { class: `dot ${view.band.tone}`, attrs: { "aria-hidden": "true" } }),
+    view.band.text === null ? h("span", { class: "hud-brand" }, "MesoVibe") : h("span", { class: `hud-note ${view.band.tone}` }, view.band.text),
   );
-  const loot = summary?.lootPerHour ?? null;
-  if (loot !== null && (issue === null || issue.tone === "live")) {
-    // Mesos/hr, the same figure as the Session view's Loot headline: mesos picked up over the play
-    // time between two meso totals read in the inventory or a shop.
-    rows.push(
-      h(
-        "p",
-        { class: "hud-line hud-loot", attrs: { title: `${formatDigits(loot)} mesos picked up per hour` } },
-        h("span", { class: "number" }, formatCompact(loot)),
-        " mesos/hr",
-      ),
-    );
-  }
-  if (rate !== null && issue !== null && issue.tone !== "live") {
-    rows.push(h("p", { class: "hud-line hud-issue" }, issue.text));
-  } else if (summary?.level != null) {
-    const minutes = summary.minutesToLevel;
-    rows.push(
-      h(
-        "p",
-        { class: "hud-line" },
-        minutes === null ? `Lv ${summary.level}` : `Lv ${summary.level} → ${summary.level + 1} in ${formatMinutes(minutes)}`,
-      ),
-    );
-  }
-  // A hint takes the progress row: the card has room for four rows, mesos/hr's included. What's
-  // wrong comes first; then, for players who never see the panel, selling after End, and a meso
-  // total when the session has none or only an old one.
-  const closeOutBy = summary?.closeOutBy ?? null;
-  const hint =
-    issue?.hint ??
-    (closeOutBy !== null
-      ? `Sell at a shop by ${new Date(closeOutBy).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
-      : summary?.askForMesos
-        ? "Open inventory for mesos/hr"
-        : undefined);
-  if (hint !== undefined) {
-    rows.push(h("p", { class: "hud-line" }, hint));
-  } else if (summary?.pctHundredths != null) {
-    rows.push(
-      h(
-        "div",
-        { class: "hud-progress" },
-        h(
-          "div",
-          {
-            class: "progress",
-            attrs: {
-              role: "progressbar",
-              "aria-label": "Level progress",
-              "aria-valuemin": "0",
-              "aria-valuemax": "100",
-              "aria-valuenow": String(Math.round(summary.pctHundredths / 100)),
-            },
-          },
-          fill(summary.pctHundredths / 10_000),
-        ),
-        h("span", { class: "number" }, formatPercent(summary.pctHundredths)),
-      ),
-    );
-  }
-  const card = h("div", { class: stale ? "hud dim" : "hud", attrs: { role: "status", "aria-label": "MesoVibe" } }, ...rows);
+  const compact = (n: number | null) => (n === null ? null : formatCompact(n));
+  const grid = h(
+    "div",
+    { class: "hud-grid" },
+    box("EXP/hr", compact(view.session)),
+    box("EXP/hr · 5m", compact(view.recent)),
+    box("This session", view.gained === null ? null : `+${formatCompact(view.gained)}`),
+    box(view.level === null ? "To level up" : `To Lv ${view.level + 1}`, view.minutesToLevel === null ? null : boxMinutes(view.minutesToLevel)),
+    box("Mesos/hr", compact(view.loot)),
+    view.potsHint ? potsHintBox() : box("Pot cost/hr", compact(view.pots)),
+  );
+  const middle = view.tip === null ? levelRow(view) : h("p", { class: "hud-tip" }, view.tip);
+  const card = h("div", { class: view.dim ? "hud dim" : "hud", attrs: { role: "status", "aria-label": "MesoVibe" } }, band, middle, grid);
   replace(root, h("div", { class: "hud-frame" }, card));
 }
 
