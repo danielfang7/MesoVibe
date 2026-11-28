@@ -376,6 +376,11 @@ export interface Ledger {
   /** Until when an ended session counts what's sold at a shop (wall clock): its close-out. */
   co?: number;
   /**
+   * Mesos shops paid during the close-out. Once there are any the player has sold, so the strip
+   * stops asking; later sales in the same visit still count until `co`.
+   */
+  cs?: number;
+  /**
    * Where the last total was read, so a storage visit's later totals move the balance without
    * counting: mesos put into or taken out of storage are neither loot nor spending.
    */
@@ -410,8 +415,8 @@ export type LedgerChange =
 export const HOLD_MIN = 50_000;
 /** ...and more than this many mesos an hour since the last reading: faster than any farming. */
 export const HOLD_PER_HOUR = 3_000_000;
-/** How long after End what's sold at a shop still counts for the session. */
-export const CLOSE_OUT_MS = 30 * 60_000;
+/** How long after End what's sold at a shop still counts for the session: one trip to town. */
+export const CLOSE_OUT_MS = 10 * 60_000;
 /** A balance read longer ago than this shows as stale. */
 export const STALE_MS = 15 * 60_000;
 
@@ -541,6 +546,7 @@ export function stopCloseOut(loot: LootFields): void {
   const ledger = loot.lg;
   if (ledger === undefined) return;
   delete ledger.co;
+  delete ledger.cs;
   if (ledger.n === 0 && ledger.ho.length === 0) delete loot.lg;
 }
 
@@ -579,6 +585,7 @@ export function closeOut(loot: LootFields, total: number, source: MesoSource, at
     change = { kind: "held", amount: delta };
   } else {
     ledger.so += delta;
+    ledger.cs = (ledger.cs ?? 0) + delta;
     change = { kind: "sold", amount: delta };
   }
   rebase(ledger, total, atMs, ledger.bp, source);
@@ -590,7 +597,10 @@ export function closeOut(loot: LootFields, total: number, source: MesoSource, at
  * balance stays as read, so the next total is measured from it and the rise isn't counted again.
  */
 export function uncountSale(loot: LootFields, amount: number): void {
-  if (loot.lg !== undefined) loot.lg.so = Math.max(0, loot.lg.so - amount);
+  const ledger = loot.lg;
+  if (ledger === undefined) return;
+  ledger.so = Math.max(0, ledger.so - amount);
+  if (ledger.cs !== undefined) ledger.cs = Math.max(0, ledger.cs - amount);
 }
 
 /** Counts the held rise at `index` into profit; its amount and when it was read, for Undo. */
@@ -634,6 +644,14 @@ export function profitRate(ledger: Ledger): number | null {
 export function fieldRate(entry: MapEntry): number | null {
   const time = entry.ft ?? 0;
   return time >= MESOS_RATE_MS ? ((entry.fm ?? 0) * 3_600_000) / time : null;
+}
+
+/**
+ * Whether a total read now would give mesos/hr: a balance is read, there's no rate yet, and a
+ * minute of play (`playMs`, the session's clock) has passed since it.
+ */
+export function mesosRateReady(ledger: Ledger, playMs: number): boolean {
+  return ledger.b !== null && mesosRate(ledger) === null && playMs - ledger.bp >= MESOS_RATE_MS;
 }
 
 /** Whether the last balance is older than [`STALE_MS`]. */
@@ -756,6 +774,7 @@ export function validLedger(value: unknown): Ledger | undefined {
     pt: l.pt as number,
   };
   if (count(l.co)) ledger.co = l.co;
+  if (count(l.cs) && l.cs > 0) ledger.cs = l.cs;
   if (l.ls === "inventory" || l.ls === "shop" || l.ls === "storage") ledger.ls = l.ls;
   return ledger;
 }

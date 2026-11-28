@@ -4,7 +4,7 @@
  * shop windows), and a history of past sessions kept on this computer. It feeds the session strip
  * and draws the Session view and the Loot tab. Pause stops the session counting until Resume. End
  * saves the session to Past sessions, Reset throws it away and a past session's delete button
- * removes it, each one click with Undo; deleting all history asks first. For 30 minutes after End,
+ * removes it, each one click with Undo; deleting all history asks first. For 10 minutes after End,
  * what's sold at a shop still counts for the session just ended. Unless the player turns it off in
  * Settings, a session pauses on its own after a minute with no EXP on its map, from the last kill,
  * and the next kill resumes it; a minute off that map with no EXP ends it, from when they left.
@@ -33,6 +33,7 @@ import {
   MESOS_RATE_MS,
   mergeLoot,
   mesosRate,
+  mesosRateReady,
   noticeMesosRate,
   openWith,
   profitRate,
@@ -657,7 +658,7 @@ function view(
           },
         ];
 
-  const loot = lootSection(session, { readers, atMs, started: session.expGained > 0, paused: session.paused === true, potsPerHour });
+  const loot = lootSection(session, { readers, atMs, started: session.expGained > 0, paused: session.paused === true, playMs: session.activeMs, potsPerHour });
   return [
     ...(current.length === 0 ? [] : [{ kind: "section", title: "This session", children: current } as const]),
     ...(loot === null ? [] : [loot]),
@@ -749,20 +750,25 @@ definePlugin({
       savedAt = atMs;
       unsaved = false;
     };
-    /** Until when the session just ended counts sales, once End's Undo has passed. */
+    /**
+     * Until when the session just ended counts sales, once End's Undo has passed; null once the
+     * player has sold something (later sales still count) or the next session has begun.
+     */
     const closeOutBy = (atMs: number): number | null => {
-      const due = history[0]?.lg?.co;
-      if (session.expGained > 0 || due === undefined || due < atMs) return null;
+      const ledger = history[0]?.lg;
+      const due = ledger?.co;
+      if (session.expGained > 0 || due === undefined || due < atMs || (ledger?.cs ?? 0) > 0) return null;
       return undo?.kind === "end" && atMs <= undo.until ? null : due;
     };
     /**
      * Whether to ask for the inventory: the host reads the meso total, and the running session has
-     * none read yet, or only one older than 15 minutes.
+     * none read yet, one a minute of play old with no mesos/hr yet (the next makes one), or only
+     * one older than 15 minutes.
      */
     const askForMesos = (atMs: number): boolean => {
       if (readers.mesos !== "reading" || session.expGained <= 0 || session.paused) return false;
       const ledger = session.lg;
-      return ledger === undefined || ledger.b === null || ledgerStale(ledger, atMs);
+      return ledger === undefined || ledger.b === null || mesosRateReady(ledger, session.activeMs) || ledgerStale(ledger, atMs);
     };
     const show = (atMs: number) => {
       context.setSummary(summary(session, atMs, { closeOutBy: closeOutBy(atMs), askForMesos: askForMesos(atMs), autoPause: auto }));
@@ -1084,7 +1090,7 @@ definePlugin({
           closeLater = false;
           if (pre !== null && session.expGained <= 0) closeOutWith(pre.total, pre.source, atMs);
         }
-        // The session just ended stops counting sales 30 minutes after End.
+        // The session just ended stops counting sales 10 minutes after End.
         const ended = history[0];
         if (ended?.lg?.co !== undefined && atMs > ended.lg.co) {
           stopCloseOut(ended);
