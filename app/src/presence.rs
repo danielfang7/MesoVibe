@@ -16,11 +16,13 @@
 //!               └── destroyed ◄── game closed for 5 min and the panel hidden (hidden first if
 //!                                 it's still up and not in use)
 //!   tray "Open MesoVibe", opening MesoVibe again, the Dock icon: the panel shows, focused
+//!     (no room beside the game: over it, until the player goes back to the game)
 //!   restart into an update the player chose (updater.rs): the panel opens, whatever the launch
 //! ```
 //!
 //! While reading is off (Safe mode) the engine looks at nothing, not even the window list, so
-//! nothing here acts on its own. On a Mac the Dock icon shows only while the panel does.
+//! nothing here acts on its own. On a Mac MesoVibe stays in the Dock like any app, so a click
+//! there always brings the panel back, and the Dock's Quit always quits.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -38,6 +40,10 @@ use tauri_plugin_autostart::ManagerExt;
 use crate::chat::ChatLog;
 use crate::dock::{self, Choice, Layout, Rect};
 use crate::store::{PanelFrame, Settings, Store};
+
+/// How long a panel just opened over the game stays though the game is in front: MesoVibe
+/// takes a moment to come to the front, and the game may still be the app in front meanwhile.
+pub const OVER_GRACE: Duration = Duration::from_secs(1);
 
 /// How long the game may stay closed before the panel goes and the session ends:
 /// long enough for a crash or a relog through the launcher, and well past the Session Tracker's
@@ -59,9 +65,11 @@ pub enum Game {
     /// Reading is off (Safe mode): the engine looks at nothing, not even the window list.
     Unknown,
     Absent,
-    /// The game window, and whether it has settled on screen (a placement to dock to).
+    /// The game window, whether it has settled on screen (a placement to dock to), and whether
+    /// it's the app in front.
     Present {
         placed: bool,
+        front: bool,
     },
 }
 
@@ -71,6 +79,8 @@ pub struct Panel {
     pub exists: bool,
     pub visible: bool,
     pub focused: bool,
+    /// The game has no room beside it, so the panel shows over it (dock.rs).
+    pub over: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +88,8 @@ pub enum Action {
     Nothing,
     /// The game just settled on screen and there's no panel: build one for it.
     Create,
-    /// The game has been closed for [`GRACE`] and the panel is up but not in use: hide it.
+    /// Hide the panel: the game has been closed for [`GRACE`] and the panel is up but not in
+    /// use, or the player went back to the game from the panel over it.
     Hide,
     /// The panel is hidden and no game needs it: destroy it, which ends the session.
     Destroy,
@@ -96,6 +107,8 @@ pub struct Presence {
     left_at: Option<Instant>,
     /// The panel was hidden once already since the game went.
     hid: bool,
+    /// Since when the panel has been up over the game.
+    over_since: Option<Instant>,
 }
 
 impl Presence {
@@ -103,21 +116,32 @@ impl Presence {
     pub fn step(&mut self, game: Game, panel: Panel, resident: bool, now: Instant) -> Action {
         match game {
             Game::Unknown => Action::Nothing,
-            Game::Present { placed } => {
+            Game::Present { placed, front } => {
                 self.here = true;
                 self.left_at = None;
                 self.hid = false;
-                if self.arrived || !placed {
+                if !self.arrived && placed {
+                    self.arrived = true;
+                    if !panel.exists {
+                        return Action::Create;
+                    }
+                }
+                // Over the game, the panel goes once the player is back in the game, and the
+                // mini-HUD stands in again.
+                if !(panel.over && panel.visible) {
+                    self.over_since = None;
                     return Action::Nothing;
                 }
-                self.arrived = true;
-                if panel.exists {
-                    Action::Nothing
+                let since = *self.over_since.get_or_insert(now);
+                if front && !panel.focused && now.duration_since(since) >= OVER_GRACE {
+                    self.over_since = None;
+                    Action::Hide
                 } else {
-                    Action::Create
+                    Action::Nothing
                 }
             }
             Game::Absent => {
+                self.over_since = None;
                 if self.here {
                     self.here = false;
                     self.arrived = false;
@@ -159,6 +183,7 @@ impl Presence {
             focused: window
                 .as_ref()
                 .is_some_and(|w| w.is_focused().unwrap_or(false)),
+            over: dock::over_game_frame(app).is_some(),
         };
         match self.step(game, panel, resident(app), Instant::now()) {
             Action::Nothing => {}
@@ -178,8 +203,8 @@ impl Presence {
 
 /// The panel, built for the game that just appeared. Beside the game it's built showing but not
 /// focused: a window shown later would take the keyboard from the game on Windows.
-/// With no room beside it, it's built hidden, never over the game, so the plugins still
-/// run for the mini-HUD, and the tray opens it.
+/// With no room beside it, it's built hidden, so the plugins still run for the mini-HUD; the Dock
+/// icon or the tray opens it over the game.
 fn open_for_game(app: &AppHandle, game: &Placement) -> tauri::Result<()> {
     let settings = settings(app);
     let displays = dock::displays(app);
@@ -199,7 +224,6 @@ fn open_for_game(app: &AppHandle, game: &Placement) -> tauri::Result<()> {
     match dock::layout(game, &displays, width, &choice) {
         Layout::Beside(target) => {
             build(app, Some(target), true, false)?;
-            set_dock_icon(app, true);
         }
         Layout::MiniHud(_) | Layout::Free => {
             build(app, saved_frame(&settings, &displays), false, false)?;
@@ -209,19 +233,24 @@ fn open_for_game(app: &AppHandle, game: &Placement) -> tauri::Result<()> {
 }
 
 /// Shows the panel and gives it focus, building it if needed: the player asked for it (the tray,
-/// opening MesoVibe again, the Dock icon, a normal launch).
+/// opening MesoVibe again, the Dock icon, a normal launch). With no room beside the game it shows
+/// over the game, placed before it shows so it doesn't appear elsewhere first.
 pub fn open(app: &AppHandle) {
+    let over = dock::over_game_frame(app);
     let panel = match app.get_webview_window(dock::PANEL) {
         Some(panel) => panel,
         None => {
-            let frame = saved_frame(&settings(app), &dock::displays(app));
+            let frame = over.or_else(|| saved_frame(&settings(app), &dock::displays(app)));
             match build(app, frame, true, true) {
                 Ok(panel) => panel,
                 Err(_) => return,
             }
         }
     };
-    set_dock_icon(app, true);
+    if let Some(frame) = over {
+        dock::place_panel(&panel, &frame);
+        let _ = panel.set_always_on_top(true);
+    }
     let _ = panel.unminimize();
     let _ = panel.show();
     let _ = panel.set_focus();
@@ -244,7 +273,6 @@ pub fn hide(app: &AppHandle) {
         remember(app, &panel);
         let _ = panel.hide();
     }
-    set_dock_icon(app, false);
 }
 
 /// The play session is over: the panel and the overlays go, which frees their web views, and the
@@ -266,7 +294,6 @@ fn end(app: &AppHandle) {
     if let Some(latest) = app.try_state::<dock::Latest>() {
         latest.set(None);
     }
-    set_dock_icon(app, false);
 }
 
 /// Quits MesoVibe, keeping where the panel was.
@@ -277,11 +304,20 @@ pub fn quit(app: &AppHandle) {
     app.exit(0);
 }
 
-/// The panel's close button. Resident, it hides the panel; otherwise it quits, even with a
-/// hidden mini-HUD or chat overlay still open, which alone would keep MesoVibe running.
+/// MesoVibe is ending, however it was asked to (the tray, the Dock's Quit, Cmd-Q): keep where the
+/// panel was.
+pub fn exiting(app: &AppHandle) {
+    if let Some(panel) = app.get_webview_window(dock::PANEL) {
+        remember(app, &panel);
+    }
+}
+
+/// The panel's close button. Resident, or over the game, it hides the panel, and the mini-HUD
+/// stands in again; otherwise it quits, even with a hidden mini-HUD or chat overlay still open,
+/// which alone would keep MesoVibe running.
 pub fn close_requested(app: &AppHandle, api: &CloseRequestApi) {
     api.prevent_close();
-    if resident(app) {
+    if resident(app) || dock::over_game_frame(app).is_some() {
         hide(app);
     } else {
         quit(app);
@@ -370,21 +406,6 @@ fn settings(app: &AppHandle) -> Settings {
         .unwrap_or_default()
 }
 
-/// On a Mac, the Dock icon (and Cmd-Tab) shows only while the panel does.
-fn set_dock_icon(app: &AppHandle, visible: bool) {
-    #[cfg(target_os = "macos")]
-    {
-        let policy = if visible {
-            tauri::ActivationPolicy::Regular
-        } else {
-            tauri::ActivationPolicy::Accessory
-        };
-        let _ = app.set_activation_policy(policy);
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = (app, visible);
-}
-
 // MARK: staying resident: the login item and the tray
 
 /// Whether MesoVibe stays running with no window: the login item is on, and the tray icon
@@ -428,8 +449,6 @@ pub fn start(app: &AppHandle, background: bool) {
         .is_some_and(|store| store.take_open_after_update());
     if opens_at_start(background, resident(app), after_update) {
         open(app);
-    } else {
-        set_dock_icon(app, false);
     }
 }
 
@@ -603,23 +622,30 @@ mod tests {
         exists: false,
         visible: false,
         focused: false,
+        over: false,
     };
     const UP: Panel = Panel {
         exists: true,
         visible: true,
         focused: false,
+        over: false,
     };
     const IN_USE: Panel = Panel {
         exists: true,
         visible: true,
         focused: true,
+        over: false,
     };
     const HIDDEN: Panel = Panel {
         exists: true,
         visible: false,
         focused: false,
+        over: false,
     };
-    const PLACED: Game = Game::Present { placed: true };
+    const PLACED: Game = Game::Present {
+        placed: true,
+        front: false,
+    };
 
     fn after(start: Instant, secs: u64) -> Instant {
         start + Duration::from_secs(secs)
@@ -633,7 +659,10 @@ mod tests {
         let mut p = Presence::default();
         assert_eq!(p.step(Game::Absent, NONE, true, t), Action::Nothing);
         // The login window animating in: no placement yet.
-        let unsettled = Game::Present { placed: false };
+        let unsettled = Game::Present {
+            placed: false,
+            front: false,
+        };
         assert_eq!(p.step(unsettled, NONE, true, t), Action::Nothing);
         assert_eq!(p.step(PLACED, NONE, true, t), Action::Create);
         // Built, or failed to build: either way not again for this arrival.
@@ -718,7 +747,15 @@ mod tests {
         );
         // A game that showed up but never settled counts as a game: its session gets the grace.
         let mut q = Presence::default();
-        q.step(Game::Present { placed: false }, HIDDEN, true, t);
+        q.step(
+            Game::Present {
+                placed: false,
+                front: false,
+            },
+            HIDDEN,
+            true,
+            t,
+        );
         assert_eq!(
             q.step(Game::Absent, HIDDEN, true, after(t, 1)),
             Action::Nothing
@@ -726,6 +763,75 @@ mod tests {
         assert_eq!(
             q.step(Game::Absent, HIDDEN, true, after(t, 301)),
             Action::Destroy
+        );
+    }
+
+    // With no room beside the game, the panel opened over it goes once the player is back in the
+    // game, so the mini-HUD stands in again; not in its first second, while MesoVibe comes to the
+    // front, and never while the player is in it. Fails if the panel vanishes as it opens, stays
+    // hidden behind the game, or is put away while in use or once the game has room.
+    #[test]
+    fn the_panel_over_the_game_goes_when_the_player_is_back_in_the_game() {
+        let t = Instant::now();
+        let game_in_front = Game::Present {
+            placed: true,
+            front: true,
+        };
+        let over = |focused| Panel {
+            exists: true,
+            visible: true,
+            focused,
+            over: true,
+        };
+        let mut p = Presence::default();
+        p.step(PLACED, HIDDEN, true, t);
+        // Opened from the Dock: the game was still in front on the tick before MesoVibe was.
+        assert_eq!(p.step(game_in_front, over(false), true, t), Action::Nothing);
+        assert_eq!(
+            p.step(PLACED, over(true), true, after(t, 1)),
+            Action::Nothing
+        );
+        // In use, with the game behind it: it stays.
+        assert_eq!(
+            p.step(PLACED, over(true), true, after(t, 30)),
+            Action::Nothing
+        );
+        // Back in the game: it goes, and after the next open the grace starts again.
+        assert_eq!(
+            p.step(game_in_front, over(false), true, after(t, 31)),
+            Action::Hide
+        );
+        assert_eq!(
+            p.step(game_in_front, over(false), true, after(t, 40)),
+            Action::Nothing
+        );
+        assert_eq!(
+            p.step(game_in_front, over(false), true, after(t, 41)),
+            Action::Hide
+        );
+        // Opened and never focused (MesoVibe didn't come to the front): gone after the grace,
+        // rather than left hidden behind the game with the mini-HUD stood down.
+        let mut q = Presence::default();
+        q.step(PLACED, HIDDEN, true, t);
+        assert_eq!(q.step(game_in_front, over(false), true, t), Action::Nothing);
+        assert_eq!(
+            q.step(game_in_front, over(false), true, after(t, 1)),
+            Action::Hide
+        );
+        // Docked beside the game, a panel the player isn't using stays.
+        let mut r = Presence::default();
+        r.step(PLACED, UP, true, t);
+        assert_eq!(
+            r.step(game_in_front, UP, true, after(t, 60)),
+            Action::Nothing
+        );
+        // Not resident it goes too: the mini-HUD is still there to stand in.
+        let mut n = Presence::default();
+        n.step(PLACED, HIDDEN, false, t);
+        n.step(PLACED, over(false), false, t);
+        assert_eq!(
+            n.step(game_in_front, over(false), false, after(t, 2)),
+            Action::Hide
         );
     }
 
