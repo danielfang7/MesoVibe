@@ -1129,7 +1129,7 @@ function shell(initial: Settings): void {
       ),
       hinted(
         toggle("Mini-HUD when there's no room", s.miniHud, (on) => void setDisplay({ miniHud: on }), "settings-hud"),
-        "A small card in a corner of the game with your EXP/hr and time to level. Clicks go through it to the game. Off, MesoVibe never draws over the game.",
+        "A small card in a corner of the game with your EXP/hr, mesos/hr and time to level. Clicks go through it to the game. Off, MesoVibe never draws over the game.",
         "settings-hud-hint",
       ),
       s.dock && s.miniHud

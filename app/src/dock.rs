@@ -40,10 +40,11 @@ use crate::store::Store;
 pub const PANEL: &str = "panel";
 /// The mini-HUD window's label (capabilities/hud.json).
 pub const HUD: &str = "hud";
-/// The mini-HUD window, in logical pixels: the 200px card with room for its shadow, and four
-/// rows (EXP/hr, loot/hr, time to level, progress).
+/// The mini-HUD window, in logical pixels: the 200px card at its tallest (229px, with the two-line
+/// potion hint) and 8px around it for its shadow. The card holds a status band, the level row and
+/// six figures two to a row (ui/src/hud.ts); the window around it is see-through.
 pub const HUD_WIDTH: f64 = 216.0;
-pub const HUD_HEIGHT: f64 = 124.0;
+pub const HUD_HEIGHT: f64 = 245.0;
 /// The chat overlay window's label (capabilities/chat.json).
 pub const CHAT: &str = "chat";
 /// The price label window's label (capabilities/label.json).
@@ -66,9 +67,10 @@ const SIDE_LINES: u32 = 8;
 const SIDE_PADDING: u32 = 4;
 const SIDE_FROM_TOP: f64 = 0.3;
 /// How far the mini-HUD window sits inside the game area, in game pixels. The top keeps clear of
-/// the buttons along the game's top edge, the bottom of its status bar and quick slots.
+/// the buff icons (Haste and the like) in a row along the game's top right, the bottom of its
+/// status bar and quick slots.
 const INSET_SIDE: f64 = 4.0;
-const INSET_TOP: f64 = 24.0;
+const INSET_TOP: f64 = 56.0;
 const INSET_BOTTOM: f64 = 80.0;
 
 /// What the mini-HUD shows of the session: the panel's Session Tracker summary, passed on by the
@@ -77,8 +79,16 @@ const INSET_BOTTOM: f64 = 80.0;
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub exp_per_hour: Option<f64>,
+    /// EXP per hour over the last five minutes of play, the rate the mini-HUD shows; absent from an
+    /// older panel.
+    #[serde(default)]
+    pub recent_exp_per_hour: Option<f64>,
+    /// EXP gained this session; absent from an older panel.
+    #[serde(default)]
+    pub exp_gained: f64,
     pub level: Option<u32>,
     pub pct_hundredths: Option<u32>,
+    /// Minutes to the next level at the five-minute rate.
     pub minutes_to_level: Option<f64>,
     /// The Loot section's headline, mesos picked up per hour, once two meso totals were read;
     /// absent from an older panel.
@@ -92,6 +102,19 @@ pub struct Summary {
     /// mini-HUD asks for the inventory.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ask_for_mesos: bool,
+    /// The session is paused, by the player or on its own: the mini-HUD says so and dims.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
+    /// It paused on its own, after a minute with no EXP.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_paused: bool,
+    /// Mesos spent on potions per hour, once some were counted; absent from an older panel.
+    #[serde(default)]
+    pub pot_cost_per_hour: Option<f64>,
+    /// Potions can be counted but none has been: the mini-HUD asks for the pet's potions in a
+    /// quick slot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pots_uncounted: bool,
 }
 
 /// The latest [`Summary`], for a mini-HUD that has just opened.
@@ -1111,7 +1134,7 @@ mod tests {
         let top_right = hud(Corner::TopRight);
         assert_eq!(
             (top_right.x, top_right.y),
-            (76.0 + 1361.0 - 4.0 - HUD_WIDTH, 68.0 + 24.0)
+            (76.0 + 1361.0 - 4.0 - HUD_WIDTH, 68.0 + INSET_TOP)
         );
         assert_eq!((top_right.width, top_right.height), (HUD_WIDTH, HUD_HEIGHT));
         let bottom_left = hud(Corner::BottomLeft);
@@ -1246,20 +1269,26 @@ mod tests {
         );
     }
 
-    // The panel's mesos/hr reaches the mini-HUD under the same `lootPerHour` key, along with the
-    // close-out time and the ask for a meso reading, and an older panel's summary without them
-    // still reads. Fails if the host drops or renames any.
+    // The panel's mesos/hr, 5-minute rate and session EXP reach the mini-HUD under the same keys,
+    // along with the close-out time, the ask for a meso reading and the pause, and an older panel's
+    // summary without them still reads. Fails if the host drops or renames any.
     #[test]
     fn the_summary_carries_loot_per_hour_to_the_mini_hud() {
         let from_panel = serde_json::json!({
             "expPerHour": 48210.0,
+            "recentExpPerHour": 43412.0,
+            "expGained": 96420.0,
             "level": 42,
             "pctHundredths": 6462,
-            "minutesToLevel": 51.0,
+            "minutesToLevel": 174.5,
             "lootPerHour": 21480.0,
+            "potCostPerHour": 3120.0,
         });
         let summary: Summary = serde_json::from_value(from_panel.clone()).unwrap();
         assert_eq!(summary.loot_per_hour, Some(21480.0));
+        assert_eq!(summary.recent_exp_per_hour, Some(43412.0));
+        assert_eq!(summary.exp_gained, 96420.0);
+        assert_eq!(summary.pot_cost_per_hour, Some(3120.0));
         let latest = Latest::default();
         latest.set(Some(summary));
         let to_hud = serde_json::to_value(latest.get()).unwrap();
@@ -1273,21 +1302,32 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(older.loot_per_hour, None);
+        assert_eq!(older.recent_exp_per_hour, None);
+        assert_eq!(older.exp_gained, 0.0);
         assert!(!older.ask_for_mesos);
+        assert!(!older.paused);
+        assert_eq!(older.pot_cost_per_hour, None);
         assert_eq!(older.level, Some(42));
 
         let asking = serde_json::json!({
             "expPerHour": 48210.0,
+            "recentExpPerHour": null,
+            "expGained": 96420.0,
             "level": 42,
             "pctHundredths": 6462,
-            "minutesToLevel": 51.0,
+            "minutesToLevel": null,
             "lootPerHour": 21480.0,
             "closeOutBy": 1800000000000.0,
             "askForMesos": true,
+            "potCostPerHour": null,
+            "paused": true,
+            "autoPaused": true,
+            "potsUncounted": true,
         });
         let summary: Summary = serde_json::from_value(asking.clone()).unwrap();
         assert_eq!(summary.close_out_by, Some(1_800_000_000_000.0));
         assert!(summary.ask_for_mesos);
+        assert!(summary.paused && summary.auto_paused && summary.pots_uncounted);
         latest.set(Some(summary));
         assert_eq!(serde_json::to_value(latest.get()).unwrap(), asking);
     }

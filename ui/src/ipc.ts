@@ -198,9 +198,17 @@ export interface GamePicture {
 
 /** What the mini-HUD shows of the session: part of the panel's SessionSummary. */
 export interface HudSummary {
+  /** Session EXP per hour: the card shows the 5-minute rate, but this says the session has one. */
   expPerHour: number | null;
+  /** EXP per hour over the last 5 minutes of play; null before a rate means anything, or with no
+   * gain in those 5 minutes. Absent from an older panel. */
+  recentExpPerHour?: number | null;
+  /** EXP gained this session; absent from an older panel. */
+  expGained?: number;
   level: number | null;
   pctHundredths: number | null;
+  /** Minutes to the next level at the 5-minute rate, the rate the card shows; null when unknown or
+   * when that rate is 0. */
   minutesToLevel: number | null;
   /** Mesos picked up per hour, from the meso totals read. */
   lootPerHour: number | null;
@@ -208,6 +216,14 @@ export interface HudSummary {
   closeOutBy?: number | null;
   /** Ask for the inventory: no meso total read this session, or only an old one; absent from an older panel. */
   askForMesos?: boolean;
+  /** The session is paused, by the player or on its own; absent from an older panel. */
+  paused?: boolean;
+  /** It paused on its own, after a minute with no EXP. */
+  autoPaused?: boolean;
+  /** Mesos spent on potions per hour, once some were counted; absent from an older panel. */
+  potCostPerHour?: number | null;
+  /** Potions can be counted but none has been: ask for the pet's potions in a quick slot. */
+  potsUncounted?: boolean;
 }
 
 export interface AppInfo {
@@ -365,14 +381,23 @@ const tauri: Host = {
 /** Only what the mini-HUD shows, in the shape the host checks. */
 export function hudSummary(summary: SessionSummary): HudSummary {
   const whole = (n: number | null) => (n === null ? null : Math.round(n));
+  const recent = summary.recentExpPerHour;
   return {
     expPerHour: summary.expPerHour,
+    recentExpPerHour: recent,
+    expGained: summary.expGained,
     level: whole(summary.level),
     pctHundredths: whole(summary.pctHundredths),
-    minutesToLevel: summary.minutesToLevel,
+    // The panel's time to level is at the session rate it shows; the card shows the 5-minute rate,
+    // so its time is at that one, and the two numbers on the card always agree.
+    minutesToLevel: summary.expToGo === null || recent === null || recent <= 0 ? null : (summary.expToGo / recent) * 60,
     lootPerHour: summary.lootPerHour,
     closeOutBy: summary.closeOutBy,
     askForMesos: summary.askForMesos,
+    paused: summary.paused,
+    autoPaused: summary.autoPaused,
+    potCostPerHour: summary.potCostPerHour ?? null,
+    potsUncounted: summary.potsUncounted ?? false,
   };
 }
 

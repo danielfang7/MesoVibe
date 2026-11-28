@@ -55,9 +55,11 @@ export function formatDuration(ms: number): string {
 /** Minutes to a level-up as players say it: "23 min", "2h 5m", "under a minute". */
 export function formatMinutes(minutes: number): string {
   if (minutes < 1) return "under a minute";
-  if (minutes < 60) return `${Math.round(minutes)} min`;
-  const hours = Math.floor(minutes / 60);
-  const rest = Math.round(minutes % 60);
+  // Rounded once, first, so 119.7 is "2h", not "1h 60m".
+  const whole = Math.round(minutes);
+  if (whole < 60) return `${whole} min`;
+  const hours = Math.floor(whole / 60);
+  const rest = whole % 60;
   return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }
 

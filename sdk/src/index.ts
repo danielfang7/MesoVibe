@@ -188,6 +188,20 @@ export interface SessionSummary {
    * @experimental May change before the meso total is read.
    */
   askForMesos: boolean;
+  /**
+   * Mesos spent on potions per hour, while potions are counted and some were; null before a
+   * minute of counting, with none counted, or where they can't be.
+   *
+   * @experimental May change as more potions are counted.
+   */
+  potCostPerHour?: number | null;
+  /**
+   * Potions can be counted but none has been this session: the mini-HUD asks for the pet's
+   * potions in a quick slot, where their count can be read.
+   *
+   * @experimental May change as more potions are counted.
+   */
+  potsUncounted?: boolean;
 }
 
 /**
